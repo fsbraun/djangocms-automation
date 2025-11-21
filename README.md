@@ -1,0 +1,1 @@
+# djangocms-automation
