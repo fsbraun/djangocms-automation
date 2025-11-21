@@ -5,7 +5,7 @@ import pytest
 
 def normalize_html(html_string):
     """Normalize HTML by removing extra whitespace"""
-    # Remove all 'aria-labeledby' attributes
+    # Remove all 'aria-describedby' attributes
     html_string = re.sub(r'\s*aria-describedby="[^"]*"', "", html_string)
     # Remove whitespace between tags
     html_string = re.sub(r">\s+<", "><", html_string.strip())
