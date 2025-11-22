@@ -1,0 +1,6 @@
+{% load cms_tags %}
+<div class="automation-branch-else">
+    {% for plugin in instance.child_plugin_instances %}
+        {% with parentloop=forloop parent=instance %}{% render_plugin plugin %}{% endwith %}
+    {% endfor %}
+</div>

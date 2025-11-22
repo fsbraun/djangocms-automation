@@ -1,0 +1,160 @@
+.automation-container {
+    margin: 20px;
+    padding: 0;
+    text-align: center;
+    position: relative;
+
+    &::before {
+        content: '';
+        position: absolute;
+        height: calc(100% - 20px);
+        width: 0px;
+        border-left: var(--dca-black) 1px solid;
+        top: 0;
+        left: 50%;
+    }
+
+    .automation-step {
+        margin-bottom: 20px;
+    }
+
+    .automation-group {
+        z-index: 1;
+    }
+    .automation-item {
+        position: relative;
+        width: fit-content;
+        background: var(--dca-white);
+        border: var(--dca-black) 1px solid;
+        border-radius: var(--dca-border-radius);
+        width: 180px;
+        min-height: 100px;
+        display: inline-block;
+        z-index: 1;
+        > svg {
+            zoom: 150%;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 10;
+        }
+        .automation-title {
+            position: absolute;
+            width: max-content;
+            inset-inline-end: calc(100% + 20px);
+            top: 50%;
+            transform: translateY(-50%);
+            font-weight: bold;
+        }
+        .card-title {
+            border-bottom: var(--dca-black) 1px solid;
+            padding: 0.5em 10px;
+            font-weight: bold;
+            svg {
+                float: inline-start;
+                margin: 5px 0px;
+            }
+        }
+        .modifier{
+            &:not(:last-child) {
+                border-bottom: var(--dca-black) 1px solid;
+            }
+            padding-block: 0.5em;
+            position: relative;
+        }
+        .trigger-arrow {
+            &::before {
+                content: '';
+                position: absolute;
+                top: 50%;
+                inset-inline-end: calc(100%);
+                width: 25px;
+                border-top: var(--dca-black) 1px solid;
+            }
+            position: absolute;
+            top: 50%;
+            inset-inline-start: calc(100% + 30px);
+            width: 30px;
+            height: 30px;
+            transform: translate(-50%, -50%);
+            border-radius: 50%;
+            border: var(--dca-black) 1px solid;
+        }
+
+    }
+    .automation-trigger {
+        border-radius: 50%;
+        width: 100px;
+        height: 100px;
+    }
+
+    .automation-if {
+        border-radius: 0;
+        border: none;
+        width: 100px;
+        height: 43.5px;
+        &.empty {
+            height: 100px;
+        }
+        min-height: unset;
+        z-index: 2;
+        &::after {
+            content: ' ';
+            position: absolute;
+            top: 14.5px;
+            inset-inline-start: 14.5px;
+            border-radius: 0;
+            border: var(--dca-black) 1px solid;
+            width: 71px;
+            height: 71px;
+            transform: rotate(45deg);
+            background: var(--dca-white);
+            z-index: 1;
+        }
+        > svg {
+            top: 33px;
+        }
+        .then-branch, .else-branch {
+            position: absolute;
+            inset-inline-end: 100%;
+            font-size: 80%;
+            bottom: -30px;
+        }
+        .else-branch {
+            inset-inline-start: 100%;
+        }
+   }
+    .automation-branches {
+        display: flex;
+        gap: 20px;
+        margin-bottom: 20px;
+        position: relative;
+        z-index: 1;
+        &::before, &::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            height: 100%;
+            width: calc(50% + 10px);
+            left: 50%;
+            transform: translateX(-50%);
+            border: 1px solid var(--dca-black, #000);
+            background: var(--dca-white);
+        }
+        .automation-branch-then, .automation-branch-else {
+            position: relative;
+            margin-top: 20px;
+            width: 100%;
+            display: block;
+        }
+    }
+}
+
+.cms-structure-mode-structure .automation-container {
+    margin-inline-end: 436px;
+}
+
+.automation-icons {
+    display: none;
+}
