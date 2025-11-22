@@ -124,7 +124,7 @@ body {
             position: absolute;
             inset-inline-end: 100%;
             font-size: 80%;
-            bottom: -30px;
+            bottom: -25px;
         }
         .else-branch {
             inset-inline-start: 100%;

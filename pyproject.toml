@@ -31,6 +31,7 @@ dynamic = [ "version" ]
 dependencies = [
   "django>=4.2",
   "django-cms>=4.1",
+  "django-admin-sortable2",
 ]
 
 optional-dependencies.test = [
@@ -67,12 +68,13 @@ lint.mccabe.max-complexity = 5
 
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "tests.settings"
-addopts = [
-  "--nomigrations",
+python_files = ["tests.py", "test_*.py", "*_tests.py"]
+addopts = ["--tb=short", "--strict-markers", "--nomigrations"]
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = [
+  "django_db: mark test as requiring database access",
 ]
-python_files = [ "tests.py", "test_*.py" ]
-testpaths = [ "tests" ]
-pythonpath = [ "." ]
 
 [tool.coverage.run]
 source = [

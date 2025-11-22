@@ -20,6 +20,7 @@ INSTALLED_APPS = [
     "treebeard",
     "sekizai",
     "djangocms_automation",
+    "djangocms_versioning",
 ]
 
 MIDDLEWARE = [
