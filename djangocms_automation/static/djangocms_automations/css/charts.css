@@ -1,3 +1,8 @@
+body {
+    color: var(--dca-black);
+    background: var(--dca-white);
+}
+
 .automation-container {
     margin: 20px;
     padding: 0;
@@ -63,7 +68,7 @@
             padding-block: 0.5em;
             position: relative;
         }
-        .trigger-arrow {
+        .modifier-arrow {
             &::before {
                 content: '';
                 position: absolute;
@@ -127,7 +132,6 @@
    }
     .automation-branches {
         display: flex;
-        gap: 20px;
         margin-bottom: 20px;
         position: relative;
         z-index: 1;
@@ -147,6 +151,10 @@
             margin-top: 20px;
             width: 100%;
             display: block;
+            z-index: 1;
+            &.ending {
+                background: var(--dca-white);
+            }
         }
     }
 }

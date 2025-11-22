@@ -65,12 +65,20 @@ class AutomationAction(AutomationPlugin):
     render_template = "djangocms_automation/plugins/action.html"
 
     allow_children = True
-    child_classes = ["NextModifier"]
+    child_classes = ["NextModifier", "EndModifier"]
 
 
 @plugin_pool.register_plugin
 class NextModifier(AutomationPlugin):
     name = _("Trigger Automation")
     render_template = "djangocms_automation/modifiers/trigger.html"
+
+    parent_classes = ["AutomationAction"]
+
+
+@plugin_pool.register_plugin
+class EndModifier(AutomationPlugin):
+    name = _("End")
+    render_template = "djangocms_automation/modifiers/end.html"
 
     parent_classes = ["AutomationAction"]
