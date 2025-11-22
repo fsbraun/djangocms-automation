@@ -6,10 +6,9 @@ from django import forms
 
 from cms.admin.utils import GrouperModelAdmin
 
-from .models import Automation, AutomationContent, APIKey
+from .models import Automation, AutomationContent, APIKey, AutomationTrigger
 from .instances import AutomationInstance, AutomationAction
-
-
+from .forms import AutomationTriggerAdminForm
 
 
 @admin.register(Automation)
@@ -111,3 +110,16 @@ class APIKeyAdmin(admin.ModelAdmin):
         return "-"
 
     masked_key.short_description = "Masked Key"
+
+
+@admin.register(AutomationTrigger)
+class AutomationTriggerAdmin(admin.ModelAdmin):
+    """Admin for AutomationTrigger: add/change views available, hidden from index."""
+
+    form = AutomationTriggerAdminForm
+    readonly_fields = ("position",)
+    fields = ("automation_content", "type", "slug", "position")
+    ordering = ("automation_content", "position")
+
+    def get_model_perms(self, request):  # Hides from admin index/app list
+        return {}

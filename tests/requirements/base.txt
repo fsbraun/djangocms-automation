@@ -2,4 +2,5 @@ pytest-django
 pytest-cov
 coverage[toml]
 djangocms-versioning
+jsonschema>=4.22
 

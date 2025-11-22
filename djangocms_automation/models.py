@@ -29,18 +29,28 @@ class AutomationContent(models.Model):
     def __str__(self):
         return self.title
 
-    @cache
     def get_placeholder_slots(self):
         return list(self.placeholders.values_list("slot", flat=True))
 
 
 class AutomationTrigger(models.Model):
     automation_content = models.ForeignKey(AutomationContent, related_name="triggers", on_delete=models.CASCADE)
-    slug = models.SlugField(max_length=255)
+    slug = models.SlugField(
+        verbose_name=_("Slug"),
+        help_text=_("Unique identifier for this trigger within the automation content. Used, e.g., if it needs to be triggered by other automation."),
+        max_length=255,
+    )
+    type = models.CharField(max_length=100)
+    config = models.JSONField(default=dict, editable=False)
     position = models.PositiveIntegerField(default=0)
 
     class Meta:
         ordering = ["position"]
+
+    def get_definition(self):
+        from .triggers import trigger_registry
+
+        return trigger_registry.get(self.type)
 
     def __str__(self):
         return f"{self.automation_content.automation.name} - {self.slug}"

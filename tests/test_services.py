@@ -1,6 +1,5 @@
 """Tests for the service registry system."""
 
-
 from djangocms_automation.services import ServiceRegistry, service_registry
 
 

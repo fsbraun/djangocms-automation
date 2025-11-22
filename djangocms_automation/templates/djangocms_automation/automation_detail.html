@@ -1,12 +1,27 @@
 {% extends "base.html" %}
-{% load cms_tags sekizai_tags static %}
+{% load cms_tags sekizai_tags static i18n %}
 {% block content %}
 <h1>{{ automation_content.automation.name }}</h1>
 <h2>{{ automation_content.title }}</h2>
 <p>{{ automation_content.body }}</p>
-<div class="automation-container">
-    {% placeholder "hi" %}
-</div>
+{% for trigger in triggers %}
+    <div class="automation-placeholder">
+        <h3>{{ trigger.slot }}</h3>
+        <div class="automation-container">
+            {% include "djangocms_automation/plugins/trigger.html" with trigger=trigger %}
+            {% render_placeholder trigger.placeholder %}
+        </div>
+    </div>
+{% empty %}
+    {% if request.toolbar.object_is_editable %}
+        <a href="{% url 'admin:djangocms_automation_automationtrigger_add' %}?automation_content={{ automation_content.pk }}" class="btn js-modal">
+            {% translate "Add Trigger to create placeholders" %}
+        </a>
+    {% else %}
+        <p>{% translate "No placeholders available." %}</p>
+    {% endif %}
+{% endfor %}
+
 <svg xmlns="http://www.w3.org/2000/svg" class="automation-icons">
     <symbol xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" id="bi-envelope-at" viewBox="0 0 16 16">
     <path d="M2 2a2 2 0 0 0-2 2v8.01A2 2 0 0 0 2 14h5.5a.5.5 0 0 0 0-1H2a1 1 0 0 1-.966-.741l5.64-3.471L8 9.583l7-4.2V8.5a.5.5 0 0 0 1 0V4a2 2 0 0 0-2-2zm3.708 6.208L1 11.105V5.383zM1 4.217V4a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v.217l-7 4.2z"/>
@@ -50,6 +65,9 @@
     <symbol xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" id="bi-input-cursor" viewBox="0 0 16 16">
     <path d="M10 5h4a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1h-4v1h4a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-4zM6 5V4H2a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h4v-1H2a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z"/>
     <path fill-rule="evenodd" d="M8 1a.5.5 0 0 1 .5.5v13a.5.5 0 0 1-1 0v-13A.5.5 0 0 1 8 1"/>
+    </symbol>
+    <symbol xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" id="bi-mouse" viewBox="0 0 16 16">
+    <path d="M8 3a.5.5 0 0 1 .5.5v2a.5.5 0 0 1-1 0v-2A.5.5 0 0 1 8 3m4 8a4 4 0 0 1-8 0V5a4 4 0 1 1 8 0zM8 0a5 5 0 0 0-5 5v6a5 5 0 0 0 10 0V5a5 5 0 0 0-5-5"/>
     </symbol>
 </svg>
 {% addtoblock "css" %}<link rel="stylesheet" type="text/css" href="{% static 'djangocms_automations/css/charts.css' %}">{% endaddtoblock %}
