@@ -22,24 +22,24 @@ class AutomationView(DetailView):
 
         obj = self.get_object()
         triggers = list(obj.triggers.all())
-        slugs = [trigger.slug for trigger in triggers]
+        slots = [trigger.slot for trigger in triggers]
 
-        if slugs:
+        if slots:
             ct = ContentType.objects.get_for_model(obj)
             # Fetch existing placeholders for these slots
             placeholders = {placeholder.slot: placeholder for placeholder in Placeholder.objects.filter(
                     content_type=ct,
                     object_id=obj.pk,
-                    slot__in=slugs,
+                    slot__in=slots,
                 )}
             existing_slots = set(placeholders.keys())
 
             # Create missing placeholders in bulk
-            missing = [slug for slug in slugs if slug not in existing_slots]
+            missing = [slot for slot in slots if slot not in existing_slots]
             if missing:
                 to_create = [
-                    Placeholder(slot=slug, content_type=ct, object_id=obj.pk)
-                    for slug in missing
+                    Placeholder(slot=slot, content_type=ct, object_id=obj.pk)
+                    for slot in missing
                 ]
                 try:
                     # Prefer ignoring conflicts if DB has a uniqueness constraint
@@ -52,13 +52,13 @@ class AutomationView(DetailView):
                 placeholders = {placeholder.slot: placeholder for placeholder in Placeholder.objects.filter(
                     content_type=ct,
                     object_id=obj.pk,
-                    slot__in=slugs,
+                    slot__in=slots,
                 )}
         else:
             placeholders = {}
 
         for trigger in triggers:
-            trigger.placeholder = placeholders.get(trigger.slug)
+            trigger.placeholder = placeholders.get(trigger.slot)
 
         triggers = list(triggers)
         context["triggers"] = triggers

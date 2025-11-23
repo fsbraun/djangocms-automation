@@ -32,11 +32,7 @@ class AutomationTriggerToolbar(CMSToolbar):
         if triggers:
             menu.add_break(_("All Triggers"))
             for trigger in triggers:
-                label = (
-                    f"{trigger.slug} | {trigger.automation_content.automation.name}"
-                    if hasattr(trigger.automation_content, "automation")
-                    else trigger.slug
-                )
+                label = str(trigger)
                 if can_change:
                     url = reverse("admin:djangocms_automation_automationtrigger_change", args=[trigger.pk])
                     menu.add_modal_item(label, url)

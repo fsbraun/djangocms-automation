@@ -127,7 +127,7 @@ class AutomationTriggerAdminForm(forms.ModelForm):
     class Meta:
         from .models import AutomationTrigger
         model = AutomationTrigger
-        fields = ("automation_content", "type", "slug", "position")
+        fields = ("automation_content", "type", "slot", "position")
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

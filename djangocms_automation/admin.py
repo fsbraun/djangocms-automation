@@ -118,7 +118,7 @@ class AutomationTriggerAdmin(admin.ModelAdmin):
 
     form = AutomationTriggerAdminForm
     readonly_fields = ("position",)
-    fields = ("automation_content", "type", "slug", "position")
+    fields = ("automation_content", "type", "slot", "position")
     ordering = ("automation_content", "position")
 
     def get_model_perms(self, request):  # Hides from admin index/app list
