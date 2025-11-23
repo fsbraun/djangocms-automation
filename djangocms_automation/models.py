@@ -41,7 +41,7 @@ class AutomationTrigger(models.Model):
         max_length=255,
     )
     type = models.CharField(max_length=100)
-    config = models.JSONField(default=dict, editable=False)
+    # config = models.JSONField(default=dict, editable=False)
     position = models.PositiveIntegerField(default=0)
 
     class Meta:

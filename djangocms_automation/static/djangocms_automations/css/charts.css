@@ -8,16 +8,7 @@ body {
     padding: 0;
     text-align: center;
     position: relative;
-
-    &::before {
-        content: '';
-        position: absolute;
-        height: calc(100% - 20px);
-        width: 0px;
-        border-left: var(--dca-black) 1px solid;
-        top: 0;
-        left: 50%;
-    }
+    min-height: 400px;
 
     .automation-step {
         margin-bottom: 20px;
@@ -36,6 +27,7 @@ body {
         min-height: 100px;
         display: inline-block;
         z-index: 1;
+        box-shadow: 0 0 5px color-mix(in srgb,var(--dca-black) 20%,transparent);
         > svg {
             zoom: 150%;
             position: absolute;
@@ -61,7 +53,7 @@ body {
                 margin: 5px 0px;
             }
         }
-        .modifier{
+        .modifier {
             &:not(:last-child) {
                 border-bottom: var(--dca-black) 1px solid;
             }
@@ -90,21 +82,24 @@ body {
     }
     .automation-trigger {
         border-radius: 50%;
-        width: 100px;
-        height: 100px;
+        width: 75px;
+        height: 75px;
+        min-height: 75px;
     }
 
     .automation-if {
         border-radius: 0;
         border: none;
+        background: none;
+        box-shadow: none;
         width: 100px;
-        height: 43.5px;
+        height: 100px;
         &.empty {
             height: 100px;
         }
         min-height: unset;
         z-index: 2;
-        &::after {
+        &::before {
             content: ' ';
             position: absolute;
             top: 14.5px;
@@ -116,6 +111,12 @@ body {
             transform: rotate(45deg);
             background: var(--dca-white);
             z-index: 1;
+            box-shadow: 0 0 5px color-mix(in srgb,var(--dca-black) 20%,transparent);
+        }
+        .automation-title {
+            top: unset;
+            bottom: 50%;
+            inset-inline-end: calc(100% + 5px);
         }
         > svg {
             top: 33px;
@@ -124,7 +125,7 @@ body {
             position: absolute;
             inset-inline-end: 100%;
             font-size: 80%;
-            bottom: -25px;
+            bottom: 25px;
         }
         .else-branch {
             inset-inline-start: 100%;
@@ -135,18 +136,7 @@ body {
         margin-bottom: 20px;
         position: relative;
         z-index: 1;
-        &::before, &::after {
-            content: '';
-            position: absolute;
-            top: 0;
-            height: 100%;
-            width: 50%;
-            left: 50%;
-            transform: translateX(-50%);
-            border: 1px solid var(--dca-black, #000);
-            background: var(--dca-white);
-        }
-        .automation-branch-then, .automation-branch-else {
+        .automation-branch.then, .automation-branch.else {
             position: relative;
             margin-top: 20px;
             width: 100%;
@@ -156,7 +146,46 @@ body {
                 background: var(--dca-white);
             }
         }
+        .automation-branch-empty {
+            width: 10%;
+        }
     }
+}
+
+/* SVG Connectors */
+.automation-connectors {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 0;
+}
+
+.automation-connectors path {
+    stroke: var(--dca-black);
+    stroke-dasharray: 6, 4;
+    stroke-width: 1px;
+    fill: none;
+    stroke-linecap: round;
+}
+
+.automation-connectors #arrowhead polygon {
+    fill: var(--dca-black);
+}
+
+.automation-connectors path.connector-then {
+    stroke: #28a745;
+}
+
+.automation-connectors path.connector-else {
+    stroke: #dc3545;
+}
+
+.automation-connectors path.connector-merge {
+    stroke-dasharray: 4, 4;
+    opacity: 0.7;
 }
 
 .cms-structure-mode-structure .automation-container {

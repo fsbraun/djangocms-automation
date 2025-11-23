@@ -1,6 +1,12 @@
 {% load cms_tags %}
-<div class="automation-branch-then">
-    {% for plugin in instance.child_plugin_instances %}
-        {% with parentloop=forloop parent=instance %}{% render_plugin plugin %}{% endwith %}
-    {% endfor %}
-</div>
+{% if instance.child_plugin_instances %}
+    <div class="automation-branch then">
+        {% for plugin in instance.child_plugin_instances %}
+            {% with parentloop=forloop parent=instance %}{% render_plugin plugin %}{% endwith %}
+        {% endfor %}
+    </div>
+   {% else %}
+    <div class="automation-branch empty">
+        <!-- No plugins in the 'then' branch -->
+    </div>
+{% endif %}

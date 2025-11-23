@@ -8,18 +8,14 @@
             <div class="else-branch">{% translate "No" %}</div>
         {% endif %}
     </div>
+    {% if not empty %}
+    <div class="automation-branches">
+        {% for plugin in instance.child_plugin_instances|then_branch %}
+            {% with parentloop=forloop parent=instance %}{% render_plugin plugin %}{% endwith %}
+         {% endfor %}
+        {% for plugin in instance.child_plugin_instances|else_branch %}
+            {% with parentloop=forloop parent=instance %}{% render_plugin plugin %}{% endwith %}
+        {% endfor %}
+    </div>
+    {% endif %}
 </div>
-{% if not empty %}
-<div class="automation-branches">
-    {% for plugin in instance.child_plugin_instances|then_branch %}
-        {% with parentloop=forloop parent=instance %}{% render_plugin plugin %}{% endwith %}
-    {% empty %}
-        <div class="automation-branch-then"></div>
-    {% endfor %}
-    {% for plugin in instance.child_plugin_instances|else_branch %}
-        {% with parentloop=forloop parent=instance %}{% render_plugin plugin %}{% endwith %}
-    {% empty %}
-        <div class="automation-branch-else"></div>
-    {% endfor %}
-</div>
-{% endif %}
