@@ -30,14 +30,17 @@
         }
 
         createSVGLayer() {
+            if (this.svg) {
+                this.svg.parentNode.removeChild(this.svg);
+            }
             // Create SVG overlay that covers the entire container
             this.svg = document.createElementNS(SVG_NS, 'svg');
             this.svg.classList.add('automation-connectors');
             this.svg.style.position = 'absolute';
             this.svg.style.top = '0';
             this.svg.style.left = '0';
-            this.svg.style.width = '100%';
-            this.svg.style.height = '100%';
+            this.svg.style.width = this.container.scrollWidth + 'px';
+            this.svg.style.height = this.container.scrollHeight + 'px';
             this.svg.style.pointerEvents = 'none';
             this.svg.style.zIndex = '0';
 
@@ -122,6 +125,8 @@
         }
 
         drawBranchConnector(fromElement, toElement, options = {}) {
+            if (!fromElement || !toElement) return;
+
             const from = this.getConnectionPoint(fromElement, 'middle');
             const to = this.getConnectionPoint(toElement, 'top');
 
@@ -260,7 +265,7 @@
             let sum = 0;
             branches.forEach(br => {
                 const width = recurseBranches(br);
-                br.style.setProperty('--branch-width', width);
+                if (width) br.style.setProperty('--branch-width', width);
                 sum += width;
             });
             return sum;
@@ -276,18 +281,16 @@
         initWidthStyles(containers);
         setTimeout(() => {
             containers.forEach(container => {
-                const connector = new AutomationConnectors(container);
-                connector.init();
-
-                // Store instance on element for later access
-                container._automationConnector = connector;
+                if (!container._automationConnector) {
+                    container._automationConnector = new AutomationConnectors(container);
+                }
+                container._automationConnector.init();
             });
         }, 0);
     }
 
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', initAutomationConnectors);
-        document.addEventListener('cms-content-refresh', () => {console.log("CMS content updated - reinitializing connectors"); initAutomationConnectors();}    );
     } else {
         initAutomationConnectors();
     }
