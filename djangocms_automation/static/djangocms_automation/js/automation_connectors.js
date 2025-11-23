@@ -84,7 +84,6 @@
         processFlow(container, reconnect = undefined) {
             // Get all automation items in DOM order
             const nodeList = Array.from(container.querySelectorAll('& > .automation-step, & > .automation-group'));
-            console.log(container, nodeList);
             // For each node, find its immediate successor (no other nodes in between)
             let currentItem = null;
             let currentNode = null;
@@ -101,7 +100,6 @@
                 const nextItem = nextNode ? nextNode.querySelector('.automation-item') : undefined;
                 if (currentNode.classList.contains('automation-group')) {
                     const branches = currentNode.querySelectorAll('& > .automation-branches > .automation-branch');
-                    console.log('Branches:', branches);
                     for (let branch of branches) {
                         this.drawBranchConnector(currentItem, branch.querySelector('.automation-item'), branch.dataset.branchType, {branch: true});
                         this.processFlow(branch, nextItem || reconnect);
@@ -252,24 +250,45 @@
         }
     }
 
+    function initWidthStyles(containers) {
+
+        const recurseBranches = (branch) => {
+            const branches = branch.querySelectorAll('& > .automation-group > .automation-branches > .automation-branch');
+            if (!branches.length) {
+                return branch.querySelector('& > .automation-step') ? 1 : 0;
+            }
+            let sum = 0;
+            branches.forEach(br => {
+                const width = recurseBranches(br);
+                br.style.setProperty('--branch-width', width);
+                sum += width;
+            });
+            return sum;
+        };
+
+        containers.forEach(recurseBranches);
+    }
+
+
     // Auto-initialize on DOM ready
     function initAutomationConnectors() {
         const containers = document.querySelectorAll('.automation-container');
-        containers.forEach(container => {
-            const connector = new AutomationConnectors(container);
-            connector.init();
+        initWidthStyles(containers);
+        setTimeout(() => {
+            containers.forEach(container => {
+                const connector = new AutomationConnectors(container);
+                connector.init();
 
-            // Store instance on element for later access
-            container._automationConnector = connector;
-        });
+                // Store instance on element for later access
+                container._automationConnector = connector;
+            });
+        }, 0);
     }
 
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', initAutomationConnectors);
+        document.addEventListener('cms-content-refresh', () => {console.log("CMS content updated - reinitializing connectors"); initAutomationConnectors();}    );
     } else {
         initAutomationConnectors();
     }
-
-    // Export for manual initialization if needed
-    window.AutomationConnectors = AutomationConnectors;
 })();

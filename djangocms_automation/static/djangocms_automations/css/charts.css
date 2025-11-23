@@ -9,6 +9,7 @@ body {
     text-align: center;
     position: relative;
     min-height: 400px;
+    overflow: auto;
 
     .automation-step {
         margin-bottom: 20px;
@@ -136,10 +137,10 @@ body {
         margin-bottom: 20px;
         position: relative;
         z-index: 1;
-        .automation-branch.then, .automation-branch.else {
+        .automation-branch {
             position: relative;
             margin-top: 20px;
-            width: 100%;
+            flex: var(--branch-width, 1);
             display: block;
             z-index: 1;
             &.ending {
@@ -147,7 +148,7 @@ body {
             }
         }
         .automation-branch-empty {
-            width: 10%;
+            flex: 0.1;
         }
     }
 }
