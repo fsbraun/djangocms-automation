@@ -7,9 +7,11 @@
 {% for trigger in triggers %}
     <div class="automation-placeholder">
         <h3>{{ trigger.slot }}</h3>
-        <div class="automation-container">
-            {% include "djangocms_automation/plugins/trigger.html" with trigger=trigger %}
-            {% render_placeholder trigger.placeholder %}
+        <div class="automation-scrollable-container">
+            <div class="automation-container">
+                {% include "djangocms_automation/plugins/trigger.html" with trigger=trigger %}
+                {% render_placeholder trigger.placeholder %}
+            </div>
         </div>
     </div>
 {% empty %}

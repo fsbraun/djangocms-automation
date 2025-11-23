@@ -3,14 +3,23 @@ body {
     background: var(--dca-white);
 }
 
+.automation-scrollable-container {
+    width: 100%;
+    overflow: auto;
+}
+
+.cms-structure-mode-structure .automation-scrollable-container {
+    width: calc(100% - 416px);
+}
+
+
 .automation-container {
     margin: 20px;
     padding: 0;
     text-align: center;
     position: relative;
     min-height: 400px;
-    overflow: auto;
-
+    width: 100%;
     .automation-step {
         margin-bottom: 20px;
     }
@@ -162,6 +171,7 @@ body {
     height: 100%;
     pointer-events: none;
     z-index: 0;
+    overflow: visible;
 }
 
 .automation-connectors path {
@@ -187,10 +197,6 @@ body {
 .automation-connectors path.connector-merge {
     stroke-dasharray: 4, 4;
     opacity: 0.7;
-}
-
-.cms-structure-mode-structure .automation-container {
-    margin-inline-end: 436px;
 }
 
 .automation-icons {

@@ -36,13 +36,6 @@
             // Create SVG overlay that covers the entire container
             this.svg = document.createElementNS(SVG_NS, 'svg');
             this.svg.classList.add('automation-connectors');
-            this.svg.style.position = 'absolute';
-            this.svg.style.top = '0';
-            this.svg.style.left = '0';
-            this.svg.style.width = this.container.scrollWidth + 'px';
-            this.svg.style.height = this.container.scrollHeight + 'px';
-            this.svg.style.pointerEvents = 'none';
-            this.svg.style.zIndex = '0';
 
             // Ensure container is positioned
             if (getComputedStyle(this.container).position === 'static') {
@@ -73,11 +66,21 @@
             this.svg.appendChild(defs);
         }
 
+        updateViewBox() {
+            // Update viewBox to show the scrollable area
+            const viewBox = `${this.container.scrollLeft} ${this.container.scrollTop} ${this.container.clientWidth} ${this.container.clientHeight}`;
+            this.svg.setAttribute('viewBox', viewBox);
+            this.svg.setAttribute('preserveAspectRatio', 'xMinYMin meet');
+        }
+
         drawConnectors() {
             // Clear existing connectors
             while (this.svg.firstChild) {
                 this.svg.removeChild(this.svg.firstChild);
             }
+
+            // Update viewBox for current scroll position
+            this.updateViewBox();
 
             // Re-create arrow marker definition after clearing
             this.createArrowMarker();
