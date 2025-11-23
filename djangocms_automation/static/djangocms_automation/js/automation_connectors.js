@@ -280,7 +280,7 @@
 
     // Auto-initialize on DOM ready
     function initAutomationConnectors() {
-        const containers = document.querySelectorAll('.automation-container');
+        const containers = document.querySelectorAll('.automation-graph');
         initWidthStyles(containers);
         setTimeout(() => {
             containers.forEach(container => {

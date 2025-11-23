@@ -3,18 +3,31 @@ body {
     background: var(--dca-white);
 }
 
+.automation-container {
+    padding-inline: 20px;
+    .title {
+        padding-block: 10px;
+        font-weight: bold;
+        font-size: 1.5em;
+    }
+    .description {
+        font-size: 90%;
+        color: var(--dca-gray);
+        border-bottom: var(--dca-black) 1px solid;
+        margin-bottom: 20px;
+    }
+}
+
+.cms-structure-mode-structure .automation-container {
+    margin-inline-end: 416px;
+}
+
 .automation-scrollable-container {
-    width: 100%;
     overflow: auto;
 }
 
-.cms-structure-mode-structure .automation-scrollable-container {
-    width: calc(100% - 416px);
-}
-
-
-.automation-container {
-    margin: 20px;
+.automation-graph {
+    margin: 0;
     padding: 0;
     text-align: center;
     position: relative;
@@ -184,14 +197,6 @@ body {
 
 .automation-connectors #arrowhead polygon {
     fill: var(--dca-black);
-}
-
-.automation-connectors path.connector-then {
-    stroke: #28a745;
-}
-
-.automation-connectors path.connector-else {
-    stroke: #dc3545;
 }
 
 .automation-connectors path.connector-merge {

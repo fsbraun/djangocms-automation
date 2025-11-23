@@ -13,8 +13,10 @@ Concrete example triggers are provided for "Click" and "Mail" events.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from typing import Any, Dict, List, Callable, Optional
+
+from django import forms
+from django.utils.translation import gettext_lazy as _
 
 try:  # Optional dependency, added to pyproject but keep graceful fallback
     from jsonschema import Draft202012Validator, ValidationError
@@ -23,8 +25,7 @@ except ImportError:  # pragma: no cover - fallback if not installed
     ValidationError = Exception  # type: ignore
 
 
-@dataclass(frozen=True)
-class Trigger:
+class Trigger(forms.Form):
     """Abstract trigger definition.
 
     Instances of subclasses are *definitions* (metadata), not runtime events.
@@ -37,7 +38,7 @@ class Trigger:
     name: str
     description: str
     icon: str
-    data_schema: Dict[str, Any] = field(default_factory=dict)
+    data_schema: Dict[str, Any] = {}
 
     def validate_payload(
         self,
@@ -122,12 +123,12 @@ trigger_registry = TriggerRegistry()
 # ---------------------------------------------------------------------------
 
 # Click Trigger schema: expects element metadata and optional context
-ClickTrigger = Trigger(
-    id="click",
-    name="Click",
-    description="Starts when a staff user selects the automation to be started",
-    icon="bi-mouse",
-    data_schema={
+class ClickTrigger(Trigger):
+    id = "click"
+    name = _("Click")
+    description = _("Starts when a staff user selects the automation to be started")
+    icon = "bi-mouse"
+    data_schema = {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "required": ["element_id", "timestamp"],
@@ -138,16 +139,16 @@ ClickTrigger = Trigger(
             "metadata": {"type": "object"},
         },
         "additionalProperties": True,
-    },
-)
+    }
+
 
 # Mail Trigger schema: expects recipient, subject and status data
-MailTrigger = Trigger(
-    id="mail",
-    name="Mail",
-    description="Starts when an email is sent or its status updates.",
-    icon="bi-envelope-at",
-    data_schema={
+class MailTrigger(Trigger):
+    id = "mail"
+    name = _("Mail")
+    description = _("Starts when an email is sent or its status updates.")
+    icon = "bi-envelope-at"
+    data_schema = {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "required": ["message_id", "recipient", "timestamp"],
@@ -160,16 +161,16 @@ MailTrigger = Trigger(
             "provider": {"type": "string"},
         },
         "additionalProperties": True,
-    },
-)
+    }
+
 
 # Timer Trigger schema: expects scheduled time and optional recurrence config
-TimerTrigger = Trigger(
-    id="timer",
-    name="Timer",
-    description="Starts at a scheduled time or recurring interval (e.g., daily, weekly).",
-    icon="bi-alarm",
-    data_schema={
+class TimerTrigger(Trigger):
+    id = "timer"
+    name = _("Timer")
+    description = _("Starts at a scheduled time or recurring interval (e.g., daily, weekly).")
+    icon = "bi-alarm"
+    data_schema = {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "required": ["scheduled_at"],
@@ -218,13 +219,22 @@ TimerTrigger = Trigger(
             },
         },
         "additionalProperties": True,
-    },
-)
+    }
+
+
+class CodeTrigger(Trigger):
+    id = "code"
+    name = _("Automation")
+    description = _("Starts when triggered by another automation.")
+    icon = "bi-code-slash"
+    data_schema = {}
+
 
 # Register example triggers
 trigger_registry.register(ClickTrigger)
 trigger_registry.register(MailTrigger)
 trigger_registry.register(TimerTrigger)
+trigger_registry.register(CodeTrigger)
 
 __all__ = [
     "Trigger",

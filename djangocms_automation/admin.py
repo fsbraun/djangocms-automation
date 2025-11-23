@@ -1,21 +1,56 @@
 import json
 
+from django import forms
 from django.contrib import admin
 from django.utils.html import format_html
-from django import forms
+from django.utils.translation import gettext_lazy as _
 
 from cms.admin.utils import GrouperModelAdmin
 
+from .forms import AutomationTriggerAdminForm, TriggerChoiceField
 from .models import Automation, AutomationContent, APIKey, AutomationTrigger
 from .instances import AutomationInstance, AutomationAction
-from .forms import AutomationTriggerAdminForm
+
+
+
+class AutomationTriggerAdminForm(forms.ModelForm):
+    """Custom form for AutomationTrigger with trigger type selector and filtered automation content."""
+
+    type = TriggerChoiceField(
+        label=_("Trigger type"),
+    )
+
+    class Meta:
+        model = AutomationTrigger
+        fields = ("automation_content", "type", "slot", "position")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Custom queryset: nur Inhalte aktiver Automationen
+        from .models import AutomationContent
+        self.fields["automation_content"].queryset = (
+            AutomationContent.admin_manager.select_related("automation").current_content()
+        )
+        self.fields["automation_content"].widget = forms.HiddenInput()  # Hidden, set via URL or context
 
 
 @admin.register(Automation)
 class AutomationAdmin(GrouperModelAdmin):
-    ordering = ("name",)
     content_model = AutomationContent
     grouper_field_name = "automation"
+
+    def save_related(self, request, form, formsets, change):
+        """After saving automation content, ensure it has a default trigger."""
+        super().save_related(request, form, formsets, change)
+        triggerless_automation_contents = AutomationContent.admin_manager.current_content().filter(
+            automation=form.instance,
+            triggers__isnull=True,
+        )
+        for automation_content in triggerless_automation_contents:
+            AutomationTrigger.objects.create(
+                automation_content=automation_content,
+                slot="start",
+            )
 
 
 @admin.register(AutomationContent)
@@ -46,13 +81,13 @@ class AutomationActionInline(admin.TabularInline):
 
 @admin.register(AutomationInstance)
 class AutomationInstanceAdmin(admin.ModelAdmin):
-    list_display = ("id", "automation_class", "finished", "created", "updated", "paused_until")
-    list_filter = ("finished", "automation_class", "created")
-    search_fields = ("key", "automation_class__name")
+    list_display = ("id", "automation", "created", "updated")
+    list_filter = ("automation", "created")
+    search_fields = ("key", "automation__name")
     readonly_fields = ("key", "created", "updated", "data_display")
     inlines = [AutomationActionInline]
     fieldsets = (
-        (None, {"fields": ("automation_class", "finished", "key")}),
+        (None, {"fields": ("automation", "finished", "key")}),
         ("Timing", {"fields": ("paused_until", "created", "updated")}),
         ("Data", {"fields": ("data_display",), "classes": ("collapse",)}),
     )

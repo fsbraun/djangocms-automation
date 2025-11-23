@@ -1,0 +1,57 @@
+.condition-builder-widget {
+    padding: 10px 15px;
+    background: var(--hairline-color);
+    .btn {
+        min-height: 2.25rem;
+    }
+}
+
+.condition-logic {
+    margin-bottom: 20px;
+    select {
+        max-width: 200px;
+    }
+}
+
+.condition-logic label {
+    font-weight: bold;
+    margin-right: 8px;
+}
+
+
+.condition-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 8px;
+    align-items: center;
+}
+
+.condition-row input,
+.condition-row select {
+    flex: 1;
+}
+
+
+.condition-remove-btn {
+    background: var(--delete-button-bg);
+    color: white;
+    cursor: pointer;
+}
+
+.condition-remove-btn:hover {
+    background: #c82333;
+}
+
+.condition-add-btn {
+    margin-top: 8px;
+    padding: 6px 12px;
+    background: #28a745;
+    color: white;
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+}
+
+.condition-add-btn:hover {
+    background: #218838;
+}

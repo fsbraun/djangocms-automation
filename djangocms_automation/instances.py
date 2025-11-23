@@ -14,15 +14,18 @@ MAX_FIELD_LENGTH = 256
 
 
 class AutomationInstance(models.Model):
-    automation_class = models.ForeignKey(
+    automation = models.ForeignKey(
         "djangocms_automation.Automation",
         blank=False,
         on_delete=models.CASCADE,
         verbose_name=_("Automation"),
     )
-    finished = models.BooleanField(
-        default=False,
-        verbose_name=_("Finished"),
+    testing = models.ForeignKey(
+        "djangocms_automation.AutomationContent",
+        blank=True,
+        null=True,
+        on_delete=models.SET_NULL,
+        verbose_name=_("Testing Content"),
     )
     data = models.JSONField(
         verbose_name=_("Data"),
@@ -32,11 +35,6 @@ class AutomationInstance(models.Model):
         verbose_name=_("Unique hash"),
         default="",
         max_length=64,
-    )
-    paused_until = models.DateTimeField(
-        null=True,
-        blank=True,
-        verbose_name=_("Paused until"),
     )
     created = models.DateTimeField(
         auto_now_add=True,
@@ -49,27 +47,8 @@ class AutomationInstance(models.Model):
         self.key = self.get_key()
         return super().save(*args, **kwargs)
 
-    @classmethod
-    def run(cls, timestamp=None):
-        if timestamp is None:
-            timestamp = now()
-        automations = cls.objects.filter(
-            finished=False,
-        ).filter(Q(paused_until__lte=timestamp) | Q(paused_until=None))
-
-        for automation in automations:
-            klass = import_string(automation.automation_class)
-            instance = klass(automation_id=automation.id, autorun=False)
-            logger.info(f"Running automation {automation.automation_class}")
-            try:
-                instance.run()
-            except Exception as e:  # pragma: no cover
-                automation.finished = True
-                automation.save()
-                logger.error(f"Error: {repr(e)}", exc_info=sys.exc_info())
-
     def get_key(self):
-        return hashlib.sha1(f"{self.automation_class}-{self.id}".encode("utf-8")).hexdigest()
+        return hashlib.sha1(f"{self.automation_id}-{self.id}".encode("utf-8")).hexdigest()
 
     @classmethod
     def delete_history(cls, days=30):
@@ -77,11 +56,11 @@ class AutomationInstance(models.Model):
         return automations.delete()
 
     def __str__(self):
-        return f"<AutomationInstance for {self.automation_class}>"
+        return f"<AutomationInstance for {self.automation}>"
 
 
 class AutomationAction(models.Model):
-    automation = models.ForeignKey(
+    automation_instance = models.ForeignKey(
         AutomationInstance,
         on_delete=models.CASCADE,
     )
@@ -91,10 +70,14 @@ class AutomationAction(models.Model):
         null=True,
         verbose_name=_("Previous action"),
     )
-    status = models.CharField(
-        max_length=MAX_FIELD_LENGTH,
+    status = models.UUIDField(
         blank=True,
         verbose_name=_("Status"),
+    )
+    paused_until = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name=_("Paused until"),
     )
     locked = models.IntegerField(
         default=0,
@@ -140,23 +123,16 @@ class AutomationAction(models.Model):
     def data(self):
         return self.automation.data
 
-    def hours_since_created(self):
+    def hours_since_created(self) -> float:
         """returns the number of hours since creation of node, 0 if finished"""
         if self.finished:
             return 0
         return (now() - self.created).total_seconds() / 3600
 
-    def get_node(self):
-        instance = self.automation.instance
-        return getattr(instance, self.status)
-
-    def get_previous_tasks(self):
+    def get_previous_tasks(self) -> list["AutomationAction"]:
         if self.message == "Joined" and self.result:
             return self.__class__.objects.filter(id__in=self.result)
         return [self.previous] if self.previous else []
-
-    def get_next_tasks(self):
-        return self.automationtaskmodel_set.all()
 
     @classmethod
     def get_open_tasks(cls, user):

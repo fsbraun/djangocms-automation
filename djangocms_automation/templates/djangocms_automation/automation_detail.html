@@ -1,29 +1,33 @@
 {% extends "base.html" %}
-{% load cms_tags sekizai_tags static i18n %}
+{% load cms_tags sekizai_tags static i18n automation_tags %}
 {% block content %}
-<h1>{{ automation_content.automation.name }}</h1>
-<h2>{{ automation_content.title }}</h2>
-<p>{{ automation_content.body }}</p>
-{% for trigger in triggers %}
-    <div class="automation-placeholder">
-        <h3>{{ trigger.slot }}</h3>
-        <div class="automation-scrollable-container">
-            <div class="automation-container">
-                {% include "djangocms_automation/plugins/trigger.html" with trigger=trigger %}
-                {% render_placeholder trigger.placeholder %}
+<div class="automation-container">
+    {% render_model_block automation_content.automation %}
+        <details>
+            <summary class="title">{{ automation_content.get_title }}{% if not automation_content.automation.is_active %} (Inactive){% endif %}</summary>
+            <div class="description">{{ automation_content.get_description|format_paragraphs }}</div>
+        </details>
+
+    {% endrender_model_block %}
+    {% for trigger in triggers %}
+        <div class="automation-placeholder">
+            <div class="automation-scrollable-container">
+                <div class="automation-graph">
+                    {% include "djangocms_automation/plugins/trigger.html" with trigger=trigger %}
+                    {% render_placeholder trigger.placeholder %}
+                </div>
             </div>
         </div>
-    </div>
-{% empty %}
-    {% if request.toolbar.object_is_editable %}
-        <a href="{% url 'admin:djangocms_automation_automationtrigger_add' %}?automation_content={{ automation_content.pk }}" class="btn js-modal">
-            {% translate "Add Trigger to create placeholders" %}
-        </a>
-    {% else %}
-        <p>{% translate "No placeholders available." %}</p>
-    {% endif %}
-{% endfor %}
-
+    {% empty %}
+        {% if request.toolbar.object_is_editable %}
+            <a href="{% url 'admin:djangocms_automation_automationtrigger_add' %}?automation_content={{ automation_content.pk }}" class="btn js-modal">
+                {% translate "Add Trigger to create placeholders" %}
+            </a>
+        {% else %}
+            <p>{% translate "No placeholders available." %}</p>
+        {% endif %}
+    {% endfor %}
+</div>
 <svg xmlns="http://www.w3.org/2000/svg" class="automation-icons">
     <symbol xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" id="bi-envelope-at" viewBox="0 0 16 16">
     <path d="M2 2a2 2 0 0 0-2 2v8.01A2 2 0 0 0 2 14h5.5a.5.5 0 0 0 0-1H2a1 1 0 0 1-.966-.741l5.64-3.471L8 9.583l7-4.2V8.5a.5.5 0 0 0 1 0V4a2 2 0 0 0-2-2zm3.708 6.208L1 11.105V5.383zM1 4.217V4a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v.217l-7 4.2z"/>
@@ -71,7 +75,10 @@
     <symbol xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" id="bi-mouse" viewBox="0 0 16 16">
     <path d="M8 3a.5.5 0 0 1 .5.5v2a.5.5 0 0 1-1 0v-2A.5.5 0 0 1 8 3m4 8a4 4 0 0 1-8 0V5a4 4 0 1 1 8 0zM8 0a5 5 0 0 0-5 5v6a5 5 0 0 0 10 0V5a5 5 0 0 0-5-5"/>
     </symbol>
+    <symbol xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" id="bi-code-slash" viewBox="0 0 16 16">
+    <path d="M10.478 1.647a.5.5 0 1 0-.956-.294l-4 13a.5.5 0 0 0 .956.294zM4.854 4.146a.5.5 0 0 1 0 .708L1.707 8l3.147 3.146a.5.5 0 0 1-.708.708l-3.5-3.5a.5.5 0 0 1 0-.708l3.5-3.5a.5.5 0 0 1 .708 0m6.292 0a.5.5 0 0 0 0 .708L14.293 8l-3.147 3.146a.5.5 0 0 0 .708.708l3.5-3.5a.5.5 0 0 0 0-.708l-3.5-3.5a.5.5 0 0 0-.708 0"/>
+    </symbol>
 </svg>
-{% addtoblock "css" %}<link rel="stylesheet" type="text/css" href="{% static 'djangocms_automations/css/charts.css' %}">{% endaddtoblock %}
+{% addtoblock "css" %}<link rel="stylesheet" type="text/css" href="{% static 'djangocms_automation/css/charts.css' %}">{% endaddtoblock %}
 {% addtoblock "js" %}<script src="{% static 'djangocms_automation/js/automation_connectors.js' %}"></script>{% endaddtoblock %}
 {% endblock %}
