@@ -141,8 +141,8 @@ class AutomationPluginModel(CMSPlugin):
         raise NotImplementedError("Subclasses must implement the execute method.")
 
 
-class IfPluginModel(AutomationPluginModel):
-    """Model for 'If' automation plugin."""
+class ConditionalPluginModel(AutomationPluginModel):
+    """Model for 'Conditional' automation plugin."""
     question = models.CharField(
         max_length=255,
         verbose_name=_("Question"),
@@ -155,10 +155,10 @@ class IfPluginModel(AutomationPluginModel):
         default=dict,
     )
 
-    no_yes_channel = _("No yes channel defined. The yes channel determines which actions will be executed if the condition is met. "
-                       "Please add a \"Yes\" branch to this conditional in the editor.")
-    no_no_channel = _("No no channel defined. The no channel determines which actions will be executed if the condition is not met. "
-                       "Please add a \"No\" branch to this conditional in the editor.")
+    no_yes_channel = _("No \"Yes\" channel defined. The yes channel determines which actions will be executed if the condition is met. "
+                       "Please add a \"Yes\" branch to this conditional in the structure board.")
+    no_no_channel = _("No \"No\" channel defined. The no channel determines which actions will be executed if the condition is not met. "
+                       "Please add a \"No\" branch to this conditional in the structure board.")
     multiple_channels = _("Both the \"Yes\" and \"No\" cannot be defined more than once. Please make sure only one branch is present "
                           "for both of them for this conditional.")
 
@@ -173,3 +173,19 @@ class IfPluginModel(AutomationPluginModel):
         if len(yes_channels) > 1 or len(no_channels) > 1:
             messages.append(self.multiple_channels)
         return messages
+
+
+class SplitPluginModel(CMSPlugin):
+    class Meta:
+        verbose_name = _("Split Plugin")
+        verbose_name_plural = _("Split Plugins")
+
+    no_paths = _(
+        "No paths have been added to this split. Each split needs at least one path to continue the automation flow. "
+        "Please add at least one path plugin to this split plugin in the structure board."
+    )
+
+    def messages(self):
+        if not self.child_plugin_instances or len(self.child_plugin_instances) == 0:
+            return [self.no_paths]
+        return []

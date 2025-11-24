@@ -51,8 +51,8 @@ class AutomationIf(AutomationPlugin):
     allow_children = True
     child_classes = ["ThenPlugin", "ElsePlugin"]
 
-    model = models.IfPluginModel
-    form = forms.IfPluginForm
+    model = models.ConditionalPluginModel
+    form = forms.ConditionalPluginForm
     fieldsets = (
         (None, {"fields": ("question", "condition",)}),
         (_("Comment"), {
@@ -96,6 +96,7 @@ class ElsePlugin(AutomationPlugin):
 class AutomationSplit(AutomationPlugin):
     name = _("Split")
     module = Module.FLOW
+    model = models.SplitPluginModel
     render_template = "djangocms_automation/plugins/split.html"
 
     show_add_form = False

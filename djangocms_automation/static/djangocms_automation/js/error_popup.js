@@ -74,6 +74,13 @@
                 }
             }, true);
 
+            // Hide on dom change
+            window.addEventListener('DOMContentLoaded', () => {
+                if (this.tooltip.style.display === 'block') {
+                    this.hide();
+                }
+            }, true);
+
             // Update position on resize
             window.addEventListener('resize', () => {
                 if (this.currentErrorDiv && this.tooltip.style.display === 'block') {

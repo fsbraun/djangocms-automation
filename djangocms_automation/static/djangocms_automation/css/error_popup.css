@@ -29,6 +29,9 @@
     .error-tooltip-content ul {
         margin: 0;
         padding-left: 20px;
+        &:has(> li:only-child) {
+            padding-left: 0;
+        }
         color: var(--dca-black);
     }
 

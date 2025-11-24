@@ -53,8 +53,8 @@ class AutomationTriggerAdminForm(forms.ModelForm):
         self.fields["automation_content"].widget = forms.HiddenInput()  # Hidden, set via URL or context
 
 
-class IfPluginForm(forms.ModelForm):
-    """Custom form for IfPlugin with ConditionBuilderWidget for condition field."""
+class ConditionalPluginForm(forms.ModelForm):
+    """Custom form for ConditionalPlugin with ConditionBuilderWidget for condition field."""
 
     class Meta:
         model = AutomationTrigger
@@ -62,3 +62,4 @@ class IfPluginForm(forms.ModelForm):
         widgets = {
             "condition": widgets.ConditionBuilderWidget,
         }
+
