@@ -2,6 +2,9 @@
 <div class="automation-step">
     {% render_model_block trigger %}
         <div class="automation-trigger automation-item" title="{{ trigger.get_definition.name }}">
+            {% if not trigger.automation_content.automation.is_active %}
+                {% include "djangocms_automation/includes/pause.html" %}
+            {% endif %}
             <svg width="16" height="16"><use xlink:href="#{{ trigger.get_definition.icon }}"></use></svg>
             <div class="automation-title">{{ trigger.slot.capitalize }}</div>
         </div>

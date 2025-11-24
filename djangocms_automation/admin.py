@@ -177,7 +177,17 @@ class AutomationTriggerAdmin(admin.ModelAdmin):
             self.form = type("FormWithTriggerConfig", (AutomationTriggerAdminForm, trigger_class), {})
         else:
             self.form = AutomationTriggerAdminForm
-        return super().get_form(request, obj, **kwargs)
+
+        form = super().get_form(request, obj, **kwargs)
+
+        # Add localized confirmation message as data attribute
+        if 'type' in form.base_fields:
+            form.base_fields['type'].widget.attrs['data-confirm-message'] = str(_(
+                "Changing the trigger type will reload the form with different configuration fields. "
+                "Current configuration will not be saved. Continue?"
+            ))
+
+        return form
 
     def save_model(self, request, obj, form, change):
         """Handle type changes during save."""

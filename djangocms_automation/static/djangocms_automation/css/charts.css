@@ -102,11 +102,17 @@ body {
             border-radius: 50%;
             border: var(--dca-black) 1px solid;
         }
-        .errors {
-            color: red;
+        .errors, .paused {
             position: absolute;
             top: -10px;
             inset-inline-end: -10px;
+        }
+        .errors {
+            color: red;
+        }
+
+        .paused {
+            color: orange;
         }
     }
     .automation-trigger {

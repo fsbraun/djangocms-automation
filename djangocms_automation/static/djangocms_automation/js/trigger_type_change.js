@@ -65,7 +65,7 @@
 
                     const currentValue = (el.type === 'checkbox' || el.type === 'radio') ? el.checked : el.value;
                     const initialValue = initialValues.get(el);
-                    
+
                     if (currentValue !== initialValue) {
                         hasChanges = true;
                         break;
@@ -74,8 +74,10 @@
             }
 
             if (hasChanges) {
-                const confirmMessage = `Changing the trigger type will reload the form with different configuration fields. ` +
-                                     `Current configuration will not be saved. Continue?`;
+                // Get localized message from data attribute or use fallback
+                const confirmMessage = typeSelect.dataset.confirmMessage ||
+                    'Changing the trigger type will reload the form with different configuration fields. ' +
+                    'Current configuration will not be saved. Continue?';
                 if (!confirm(confirmMessage)) {
                     // Revert to original type
                     typeSelect.value = initialType;
