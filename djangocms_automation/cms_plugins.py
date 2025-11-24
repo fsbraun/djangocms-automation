@@ -49,7 +49,7 @@ class AutomationIf(AutomationPlugin):
     model = models.IfPluginModel
     form = forms.IfPluginForm
     fieldsets = (
-        (None, {"fields": ("condition",)}),
+        (None, {"fields": ("question", "condition",)}),
         (_("Comment"), {
             "classes": ("collapse",),
             "fields": ("comment",)

@@ -115,7 +115,7 @@
                 }
             }
             if (reconnect && currentNode?.classList.contains('automation-step')) {
-                this.drawElbowConnector(currentItem, reconnect);
+                if (!currentNode?.classList.contains('end')) this.drawElbowConnector(currentItem, reconnect);
             }
         }
 

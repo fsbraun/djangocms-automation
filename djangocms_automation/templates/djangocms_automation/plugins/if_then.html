@@ -6,7 +6,7 @@
         {% endfor %}
     </div>
    {% else %}
-    <div class="automation-branch empty">
-        <!-- No plugins in the 'then' branch -->
+    <div class="automation-branch then">
+        {% include "djangocms_automation/plugins/end.html" %}
     </div>
 {% endif %}

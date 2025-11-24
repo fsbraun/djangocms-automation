@@ -148,7 +148,12 @@ class AutomationPluginModel(CMSPlugin):
 
 class IfPluginModel(AutomationPluginModel):
     """Model for 'If' automation plugin."""
-
+    question = models.CharField(
+        max_length=255,
+        verbose_name=_("Question"),
+        blank=True,
+        help_text=_("The question this conditional answers, e.g., 'Is the user active?' It will be shown in the editor."),
+    )
     condition = models.JSONField(
         verbose_name=_("Condition"),
         help_text=_("Condition to evaluate for this conditional to evaluate. Use double curly braces {{ }} for data attribute resolution, e.g. {{ first_name }}."),

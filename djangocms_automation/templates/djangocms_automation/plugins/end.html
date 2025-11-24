@@ -1,6 +1,9 @@
-<div class="automation-end">
-    <div class="automation-trigger automation-item">
-        <svg width="16" height="16"><use xlink:href="#bi-check2-square"></use></svg>
-        {% if title %}<div class="automation-title">{{ title }} </div>{% endif %}
-    </div>
+{% load cms_tags %}
+<div class="automation-step end">
+    {% render_model_block trigger %}
+        <div class="automation-trigger automation-item">
+            <svg width="16" height="16"><use xlink:href="#bi-check2-square"></use></svg>
+            <div class="automation-title">{{ _("End") }}</div>
+        </div>
+    {% endrender_model_block %}
 </div>
