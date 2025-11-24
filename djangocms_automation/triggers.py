@@ -32,6 +32,10 @@ class Trigger(forms.Form):
     The ``data_schema`` should be a minimal JSON schema dict that downstream
     code can use for validation (e.g. with ``jsonschema``) when data for a
     trigger is supplied.
+
+    Configuration fields can be defined as regular Django form fields on the
+    trigger class. These will be automatically injected into the admin form
+    and their values stored in the config JSON field.
     """
 
     id: str
@@ -125,7 +129,7 @@ trigger_registry = TriggerRegistry()
 # Click Trigger schema: expects element metadata and optional context
 class ClickTrigger(Trigger):
     id = "click"
-    name = _("Click")
+    name = _("Manual")
     description = _("Starts when a staff user selects the automation to be started")
     icon = "bi-mouse"
     data_schema = {
@@ -148,6 +152,31 @@ class MailTrigger(Trigger):
     name = _("Mail")
     description = _("Starts when an email is sent or its status updates.")
     icon = "bi-envelope-at"
+
+    # Configuration form fields
+    recipient_filter = forms.EmailField(
+        label=_("Recipient filter"),
+        required=False,
+        help_text=_("Only trigger for emails to this recipient (optional)"),
+    )
+    subject_contains = forms.CharField(
+        label=_("Subject contains"),
+        required=False,
+        help_text=_("Only trigger if subject contains this text (optional)"),
+    )
+    status_filter = forms.ChoiceField(
+        label=_("Status filter"),
+        choices=[
+            ('', _("Any")),
+            ('queued', _("Queued")),
+            ('sent', _("Sent")),
+            ('bounced', _("Bounced")),
+            ('opened', _("Opened")),
+        ],
+        required=False,
+        help_text=_("Only trigger for this email status"),
+    )
+
     data_schema = {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
@@ -170,6 +199,50 @@ class TimerTrigger(Trigger):
     name = _("Timer")
     description = _("Starts at a scheduled time or recurring interval (e.g., daily, weekly).")
     icon = "bi-alarm"
+
+    # Configuration form fields
+    scheduled_at = forms.DateTimeField(
+        label=_("Scheduled at"),
+        help_text=_("When should this trigger fire?"),
+        required=True,
+    )
+    timezone = forms.CharField(
+        label=_("Timezone"),
+        initial="UTC",
+        help_text=_("IANA timezone identifier (e.g., 'Europe/Berlin')"),
+        required=False,
+    )
+    recurrence_frequency = forms.ChoiceField(
+        label=_("Recurrence frequency"),
+        choices=[
+            ('', '---'),
+            ('hourly', _("Hourly")),
+            ('daily', _("Daily")),
+            ('weekly', _("Weekly")),
+            ('monthly', _("Monthly")),
+        ],
+        required=False,
+        help_text=_("How often should this trigger repeat?"),
+    )
+    recurrence_interval = forms.IntegerField(
+        label=_("Recurrence interval"),
+        initial=1,
+        min_value=1,
+        required=False,
+        help_text=_("Repeat every N frequency units (e.g., every 2 days)"),
+    )
+    recurrence_end_date = forms.DateTimeField(
+        label=_("Recurrence end date"),
+        required=False,
+        help_text=_("When should the recurrence stop? (optional)"),
+    )
+    recurrence_count = forms.IntegerField(
+        label=_("Recurrence count"),
+        min_value=1,
+        required=False,
+        help_text=_("Maximum number of occurrences (alternative to end date)"),
+    )
+
     data_schema = {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",

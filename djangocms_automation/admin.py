@@ -7,31 +7,10 @@ from django.utils.translation import gettext_lazy as _
 
 from cms.admin.utils import GrouperModelAdmin
 
-from .forms import AutomationTriggerAdminForm, TriggerChoiceField
+from .forms import AutomationTriggerAdminForm
 from .models import Automation, AutomationContent, APIKey, AutomationTrigger
 from .instances import AutomationInstance, AutomationAction
-
-
-
-class AutomationTriggerAdminForm(forms.ModelForm):
-    """Custom form for AutomationTrigger with trigger type selector and filtered automation content."""
-
-    type = TriggerChoiceField(
-        label=_("Trigger type"),
-    )
-
-    class Meta:
-        model = AutomationTrigger
-        fields = ("automation_content", "type", "slot", "position")
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # Custom queryset: nur Inhalte aktiver Automationen
-        from .models import AutomationContent
-        self.fields["automation_content"].queryset = (
-            AutomationContent.admin_manager.select_related("automation").current_content()
-        )
-        self.fields["automation_content"].widget = forms.HiddenInput()  # Hidden, set via URL or context
+from .triggers import trigger_registry
 
 
 @admin.register(Automation)
@@ -151,10 +130,84 @@ class APIKeyAdmin(admin.ModelAdmin):
 class AutomationTriggerAdmin(admin.ModelAdmin):
     """Admin for AutomationTrigger: add/change views available, hidden from index."""
 
+    name = _("Trigger")
     form = AutomationTriggerAdminForm
     readonly_fields = ("position",)
-    fields = ("automation_content", "type", "slot", "position")
     ordering = ("automation_content", "position")
+
+    change_form_template = "djangocms_frontend/admin/base.html"
+
+    class Media:
+        js = ('djangocms_automation/js/trigger_type_change.js',)
+        css = {
+            'all': ('djangocms_automation/css/trigger_admin.css',)
+        }
+
+    @staticmethod
+    def get_trigger(request, obj) -> tuple[forms.Form | None, bool]:
+        trigger_type = request.POST.get('_trigger_type_change') if request.method == 'POST' else None
+        fallback = trigger_type or (obj.type if obj else request.GET.get('type') or "click")
+        return trigger_registry.get(trigger_type or fallback), trigger_type is not None
+
+    def get_fieldsets(self, request, obj=None):
+        """Return fieldsets with dynamic config fields based on trigger type."""
+        base_fieldsets = [
+            (None, {
+                'fields': ('automation_content', 'type', 'slot', 'position')
+            }),
+        ]
+        trigger_class, changed = self.get_trigger(request, obj)
+        # Add config fieldset if trigger has config fields
+        if trigger_class and not changed:
+            if trigger_class.declared_fields:
+                # Get all config field names (with config_ prefix)
+                base_fieldsets.append((
+                   trigger_class.name,
+                    {
+                        'fields': list(trigger_class.declared_fields.keys()),
+                        'classes': ('collapse',),
+                    }
+                ))
+        return base_fieldsets
+
+    def get_form(self, request, obj=None, **kwargs):
+        """Customize form instance with request context."""
+        trigger_class, changed = self.get_trigger(request, obj)
+        if trigger_class and not changed:
+            self.form = type("FormWithTriggerConfig", (AutomationTriggerAdminForm, trigger_class), {})
+        else:
+            self.form = AutomationTriggerAdminForm
+        return super().get_form(request, obj, **kwargs)
+
+    def save_model(self, request, obj, form, change):
+        """Handle type changes during save."""
+        # Check if this is a type change
+        if '_trigger_type_change' in request.POST:
+            new_type = request.POST.get('_trigger_type_change')
+            if new_type:
+                obj.type = new_type
+                # Clear old config when changing type
+                obj.config = {}
+
+        super().save_model(request, obj, form, change)
+
+    def response_change(self, request, obj):
+        """Redirect to change form with new type after type change."""
+        if '_trigger_type_change' in request.POST:
+            # Redirect to same change form to reload with new fields
+            from django.http import HttpResponseRedirect
+            from django.urls import reverse
+            url = reverse('admin:%s_%s_change' % (
+                obj._meta.app_label,
+                obj._meta.model_name),
+                args=[obj.pk]
+            )
+            return HttpResponseRedirect(url)
+
+        return super().response_change(request, obj)
 
     def get_model_perms(self, request):  # Hides from admin index/app list
         return {}
+
+    def __str__(self):
+        return str(self.name)
