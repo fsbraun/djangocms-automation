@@ -159,8 +159,7 @@
                 });
 
                 // Remove button
-                const removeBtn = document.createElement('button');
-                removeBtn.type = 'a';
+                const removeBtn = document.createElement('a');
                 removeBtn.className = 'deletelink';
                 removeBtn.title = 'Remove condition';
                 removeBtn.addEventListener('click', () => this.removeCondition(index));

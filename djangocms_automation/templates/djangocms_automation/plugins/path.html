@@ -5,4 +5,8 @@
             {% with parentloop=forloop parent=instance %}{% render_plugin plugin %}{% endwith %}
         {% endfor %}
     </div>
+{% else %}
+    <div class="automation-branch empty">
+        {% include "djangocms_automation/plugins/noop.html" %}
+    </div>
 {% endif %}

@@ -193,9 +193,6 @@ body {
                 background: var(--dca-white);
             }
         }
-        .automation-branch.empty {
-            flex: 0.1;
-        }
     }
 }
 
