@@ -39,19 +39,22 @@ class TestTriggerValidation:
             "path": "/login/",
             "metadata": {"role": "primary"},
         }
-        assert ClickTrigger.validate_payload(payload) is True
+        trigger = ClickTrigger()
+        assert trigger.validate_payload(payload) is True
 
     def test_click_trigger_missing_required(self):
         payload = {
             "element_id": "btn-login",
             # missing timestamp
         }
+        trigger = ClickTrigger()
         with pytest.raises(ValidationError):
-            ClickTrigger.validate_payload(payload)
+            trigger.validate_payload(payload)
 
     def test_click_trigger_missing_required_no_raise(self):
         payload = {"element_id": "btn-login"}
-        assert ClickTrigger.validate_payload(payload, raise_errors=False) is False
+        trigger = ClickTrigger()
+        assert trigger.validate_payload(payload, raise_errors=False) is False
 
     def test_mail_trigger_valid_payload(self):
         payload = {
@@ -61,7 +64,8 @@ class TestTriggerValidation:
             "subject": "Welcome",
             "status": "sent",
         }
-        assert MailTrigger.validate_payload(payload) is True
+        trigger = MailTrigger()
+        assert trigger.validate_payload(payload) is True
 
     def test_mail_trigger_invalid_enum(self):
         payload = {
@@ -71,8 +75,9 @@ class TestTriggerValidation:
             "subject": "Welcome",
             "status": "delivered",  # not in enum
         }
+        trigger = MailTrigger()
         with pytest.raises(ValidationError):
-            MailTrigger.validate_payload(payload)
+            trigger.validate_payload(payload)
 
     def test_custom_validator_pass_through(self):
         calls = []
@@ -81,14 +86,16 @@ class TestTriggerValidation:
             calls.append("called")
             # emulate success
         payload = {"element_id": "x", "timestamp": "2025-11-22T10:00:00Z"}
-        assert ClickTrigger.validate_payload(payload, validator=custom) is True
+        trigger = ClickTrigger()
+        assert trigger.validate_payload(payload, validator=custom) is True
         assert calls == ["called"]
 
     def test_custom_validator_failure(self):
         def custom(schema, payload):
             raise ValidationError("boom")
+        trigger = ClickTrigger()
         with pytest.raises(ValidationError):
-            ClickTrigger.validate_payload({"element_id": "x"}, validator=custom)
+            trigger.validate_payload({"element_id": "x"}, validator=custom)
 
     def test_missing_required_fields_fallback_when_jsonschema_absent(monkeypatch):
         """Simulate absence of jsonschema to exercise fallback logic.
@@ -101,8 +108,9 @@ class TestTriggerValidation:
         original_validator = triggers_mod.Draft202012Validator
         try:
             triggers_mod.Draft202012Validator = None  # force fallback
+            trigger = ClickTrigger()
             with pytest.raises(ValueError):
-                ClickTrigger.validate_payload({"element_id": "only"})
+                trigger.validate_payload({"element_id": "only"})
         finally:
             triggers_mod.Draft202012Validator = original_validator
 
@@ -110,14 +118,16 @@ class TestTriggerValidation:
         payload = {
             "scheduled_at": "2025-12-01T09:00:00Z",
         }
-        assert TimerTrigger.validate_payload(payload) is True
+        trigger = TimerTrigger()
+        assert trigger.validate_payload(payload) is True
 
     def test_timer_trigger_valid_payload_with_timezone(self):
         payload = {
             "scheduled_at": "2025-12-01T09:00:00+01:00",
             "timezone": "Europe/Berlin",
         }
-        assert TimerTrigger.validate_payload(payload) is True
+        trigger = TimerTrigger()
+        assert trigger.validate_payload(payload) is True
 
     def test_timer_trigger_valid_payload_with_recurrence(self):
         payload = {
@@ -128,7 +138,8 @@ class TestTriggerValidation:
                 "end_date": "2025-12-31T23:59:59Z",
             },
         }
-        assert TimerTrigger.validate_payload(payload) is True
+        trigger = TimerTrigger()
+        assert trigger.validate_payload(payload) is True
 
     def test_timer_trigger_valid_payload_with_count(self):
         payload = {
@@ -138,14 +149,16 @@ class TestTriggerValidation:
                 "count": 10,
             },
         }
-        assert TimerTrigger.validate_payload(payload) is True
+        trigger = TimerTrigger()
+        assert trigger.validate_payload(payload) is True
 
     def test_timer_trigger_missing_scheduled_at(self):
         payload = {
             "timezone": "Europe/Berlin",
         }
+        trigger = TimerTrigger()
         with pytest.raises(ValidationError):
-            TimerTrigger.validate_payload(payload)
+            trigger.validate_payload(payload)
 
     def test_timer_trigger_invalid_frequency(self):
         payload = {
@@ -154,8 +167,9 @@ class TestTriggerValidation:
                 "frequency": "yearly",  # not in enum
             },
         }
+        trigger = TimerTrigger()
         with pytest.raises(ValidationError):
-            TimerTrigger.validate_payload(payload)
+            trigger.validate_payload(payload)
 
     def test_timer_trigger_invalid_interval(self):
         payload = {
@@ -165,6 +179,7 @@ class TestTriggerValidation:
                 "interval": 0,  # minimum is 1
             },
         }
+        trigger = TimerTrigger()
         with pytest.raises(ValidationError):
-            TimerTrigger.validate_payload(payload)
+            trigger.validate_payload(payload)
 
