@@ -160,9 +160,8 @@
 
                 // Remove button
                 const removeBtn = document.createElement('button');
-                removeBtn.type = 'button';
-                removeBtn.className = 'condition-remove-btn btn';
-                removeBtn.textContent = '✕';
+                removeBtn.type = 'a';
+                removeBtn.className = 'deletelink';
                 removeBtn.title = 'Remove condition';
                 removeBtn.addEventListener('click', () => this.removeCondition(index));
 
@@ -177,8 +176,8 @@
             // Add condition button
             const addBtn = document.createElement('button');
             addBtn.type = 'button';
-            addBtn.className = 'btn';
-            addBtn.textContent = '+ Add Condition';
+            addBtn.className = 'btn button';
+            addBtn.textContent = this.container.dataset.addLabel ||'Add Condition';
             addBtn.addEventListener('click', () => {
                 this.addCondition();
                 this.focusLastField = true;

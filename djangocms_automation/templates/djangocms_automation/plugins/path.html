@@ -1,12 +1,8 @@
 {% load cms_tags %}
 {% if instance.child_plugin_instances %}
-    <div class="automation-branch else">
+    <div class="automation-branch">
         {% for plugin in instance.child_plugin_instances %}
             {% with parentloop=forloop parent=instance %}{% render_plugin plugin %}{% endwith %}
         {% endfor %}
-    </div>
-   {% else %}
-    <div class="automation-branch empty">
-        {% include "djangocms_automation/plugins/noop.html" %}
     </div>
 {% endif %}

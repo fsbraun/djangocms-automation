@@ -1,8 +1,6 @@
-from collections import defaultdict
 import uuid
 
 from django.conf import settings
-from django.contrib.contenttypes.models import ContentType
 from django.db import models
 from django.db.models import Q
 from django.utils.timezone import now
@@ -14,7 +12,6 @@ from cms.models.fields import PlaceholderRelationField
 from .instances import AutomationAction  # noqa F401
 from .services import service_registry
 from .triggers import trigger_registry
-from .widgets import ConditionBuilderWidget
 
 
 class AutomationContent(models.Model):
@@ -121,7 +118,6 @@ class APIKey(models.Model):
         """Get available service choices."""
         return service_registry.get_choices()
 
-
 class AutomationPluginModel(CMSPlugin):
     """Base model for automation plugins."""
 
@@ -129,7 +125,6 @@ class AutomationPluginModel(CMSPlugin):
         abstract = True
 
     uuid = models.UUIDField(
-        unique=True,
         editable=False,
         verbose_name=_("UUID"),
         default=uuid.uuid4,
@@ -141,7 +136,7 @@ class AutomationPluginModel(CMSPlugin):
         help_text=_("Optional comment about this automation step"),
     )
 
-    def execute(self, action: AutomationAction, single_step: bool = False):
+    def execute(self, action, single_step: bool = False):
         """Execute the plugin logic for the given action."""
         raise NotImplementedError("Subclasses must implement the execute method.")
 
@@ -160,3 +155,21 @@ class IfPluginModel(AutomationPluginModel):
         default=dict,
     )
 
+    no_yes_channel = _("No yes channel defined. The yes channel determines which actions will be executed if the condition is met. "
+                       "Please add a \"Yes\" branch to this conditional in the editor.")
+    no_no_channel = _("No no channel defined. The no channel determines which actions will be executed if the condition is not met. "
+                       "Please add a \"No\" branch to this conditional in the editor.")
+    multiple_channels = _("Both the \"Yes\" and \"No\" cannot be defined more than once. Please make sure only one branch is present "
+                          "for both of them for this conditional.")
+
+    def messages(self):
+        messages = []
+        yes_channels = [child for child in self.child_plugin_instances if child.plugin_type == "ThenPlugin"]
+        no_channels = [child for child in self.child_plugin_instances if child.plugin_type == "ElsePlugin"]
+        if len(yes_channels) == 0:
+            messages.append(self.no_yes_channel)
+        if len(no_channels) == 0:
+            messages.append(self.no_no_channel)
+        if len(yes_channels) > 1 or len(no_channels) > 1:
+            messages.append(self.multiple_channels)
+        return messages

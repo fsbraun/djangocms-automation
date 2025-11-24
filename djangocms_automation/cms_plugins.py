@@ -4,18 +4,28 @@ from cms.plugin_base import CMSPluginBase
 from cms.plugin_pool import plugin_pool
 
 from . import forms, models
+from .constants import Module
 
 automation_plugins = []
+action_plugins = []
+modifier_plugins = []
+
 
 def register_automation_plugin(cls):
     """Decorator to register an automation plugin with common settings."""
     plugin_pool.register_plugin(cls)
     automation_plugins.append(cls.__name__)
+    if "Action" in cls.__name__:
+        # Convention: Action plugins have "Action" in their class name
+        action_plugins.append(cls.__name__)
+    if "Modifier" in cls.__name__:
+        # Convention: Modifier plugins have "Modifier" in their class name
+        modifier_plugins.append(cls.__name__)
     return cls
 
 
 class AutomationPlugin(CMSPluginBase):
-    module = _("Automation")
+    module = Module.CORE
     render_template = "djangocms_automation/plugins/action.html"
     change_form_template = "djangocms_frontend/admin/base.html"
     show_add_form = False
@@ -31,14 +41,9 @@ class AutomationPlugin(CMSPluginBase):
 
 
 @register_automation_plugin
-class AutomationTrigger(AutomationPlugin):
-    name = _("Trigger")
-    render_template = "djangocms_automation/plugins/trigger.html"
-
-
-@register_automation_plugin
 class AutomationIf(AutomationPlugin):
     name = _("Conditional")
+    module = Module.FLOW
     render_template = "djangocms_automation/plugins/if.html"
 
     show_add_form = True
@@ -68,6 +73,8 @@ class AutomationIf(AutomationPlugin):
 @register_automation_plugin
 class ThenPlugin(AutomationPlugin):
     name = _("Yes")
+    module = Module.FLOW
+
     render_template = "djangocms_automation/plugins/if_then.html"
     require_parent = True
     parent_classes = ["AutomationIf"]
@@ -77,6 +84,8 @@ class ThenPlugin(AutomationPlugin):
 @register_automation_plugin
 class ElsePlugin(AutomationPlugin):
     name = _("No")
+    module = Module.FLOW
+
     render_template = "djangocms_automation/plugins/if_else.html"
     require_parent = True
     parent_classes = ["AutomationIf"]
@@ -84,25 +93,71 @@ class ElsePlugin(AutomationPlugin):
 
 
 @register_automation_plugin
+class AutomationSplit(AutomationPlugin):
+    name = _("Split")
+    module = Module.FLOW
+    render_template = "djangocms_automation/plugins/split.html"
+
+    show_add_form = False
+
+    allow_children = True
+    child_classes = ["AutomationPath"]
+
+
+@register_automation_plugin
+class AutomationPath(AutomationPlugin):
+    name = _("Path")
+    module = Module.FLOW
+    render_template = "djangocms_automation/plugins/path.html"
+
+    show_add_form = False
+    require_parent = True
+    allow_children = True
+    parent_classes = ["AutomationSplit"]
+
+
+@register_automation_plugin
 class AutomationAction(AutomationPlugin):
     name = _("Example action")
+    module = Module.ACTION
+
     render_template = "djangocms_automation/plugins/action.html"
 
     allow_children = True
-    child_classes = ["NextModifier", "EndModifier"]
+    child_classes = modifier_plugins
+
+
+class ModifierPlugin(AutomationPlugin):
+    module = Module.MODIFIER
+    render_template = "djangocms_automation/modifiers/general.html"
+    parent_classes = action_plugins
+
+    def render(self, context, instance, placeholder):
+        context = super().render(context, instance, placeholder)
+        context.update({
+            "icon": getattr(self, "icon", ""),
+            "title": getattr(self, "name", ""),
+            "class": getattr(self, "css_class", ""),
+        })
+        return context
 
 
 @register_automation_plugin
-class NextModifier(AutomationPlugin):
+class NextModifier(ModifierPlugin):
     name = _("Trigger Automation")
-    render_template = "djangocms_automation/modifiers/trigger.html"
-
-    parent_classes = ["AutomationAction"]
+    css_class = "next"
+    icon = "bi-code-slash"
 
 
 @register_automation_plugin
-class EndModifier(AutomationPlugin):
+class EndModifier(ModifierPlugin):
     name = _("End")
-    render_template = "djangocms_automation/modifiers/end.html"
+    css_class = "end"
+    icon = "bi-check2-square"
 
-    parent_classes = ["AutomationAction"]
+
+@register_automation_plugin
+class OpenAIModifier(ModifierPlugin):
+    name = _("OpenAI")
+    css_class = "openai"
+    icon = "bi-openai"

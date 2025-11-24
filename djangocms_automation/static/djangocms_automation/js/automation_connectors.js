@@ -263,6 +263,7 @@
         const recurseBranches = (branch) => {
             const branches = branch.querySelectorAll('& > .automation-group > .automation-branches > .automation-branch');
             if (!branches.length) {
+                if (branch.classList.contains('empty')) return 0.1;
                 return branch.querySelector('& > .automation-step') ? 1 : 0;
             }
             let sum = 0;

@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% load cms_tags sekizai_tags static i18n automation_tags %}
+{% block navbar %}{% endblock %}
 {% block content %}
 <div class="automation-container">
     {% render_model_block automation_content.automation %}
@@ -77,6 +78,21 @@
     </symbol>
     <symbol xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" id="bi-code-slash" viewBox="0 0 16 16">
     <path d="M10.478 1.647a.5.5 0 1 0-.956-.294l-4 13a.5.5 0 0 0 .956.294zM4.854 4.146a.5.5 0 0 1 0 .708L1.707 8l3.147 3.146a.5.5 0 0 1-.708.708l-3.5-3.5a.5.5 0 0 1 0-.708l3.5-3.5a.5.5 0 0 1 .708 0m6.292 0a.5.5 0 0 0 0 .708L14.293 8l-3.147 3.146a.5.5 0 0 0 .708.708l3.5-3.5a.5.5 0 0 0 0-.708l-3.5-3.5a.5.5 0 0 0-.708 0"/>
+    </symbol>
+    <symbol xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" id="bi-exclamation-circle-fill" viewBox="0 0 16 16">
+    <path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0M8 4a.905.905 0 0 0-.9.995l.35 3.507a.552.552 0 0 0 1.1 0l.35-3.507A.905.905 0 0 0 8 4m.002 6a1 1 0 1 0 0 2 1 1 0 0 0 0-2"/>
+    </symbol>
+    <symbol xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" id="bi-exclamation-circle" viewBox="0 0 16 16">
+    <path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14m0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16"/>
+    <path d="M7.002 11a1 1 0 1 1 2 0 1 1 0 0 1-2 0M7.1 4.995a.905.905 0 1 1 1.8 0l-.35 3.507a.552.552 0 0 1-1.1 0z"/>
+    </symbol>
+    <symbol xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" id="bi-power" viewBox="0 0 16 16">
+    <path d="M7.5 1v7h1V1z"/>
+    <path d="M3 8.812a5 5 0 0 1 2.578-4.375l-.485-.874A6 6 0 1 0 11 3.616l-.501.865A5 5 0 1 1 3 8.812"/>
+    </symbol>
+    <symbol xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" id="bi-exclamation-triangle" viewBox="0 0 16 16">
+    <path d="M7.938 2.016A.13.13 0 0 1 8.002 2a.13.13 0 0 1 .063.016.15.15 0 0 1 .054.057l6.857 11.667c.036.06.035.124.002.183a.2.2 0 0 1-.054.06.1.1 0 0 1-.066.017H1.146a.1.1 0 0 1-.066-.017.2.2 0 0 1-.054-.06.18.18 0 0 1 .002-.183L7.884 2.073a.15.15 0 0 1 .054-.057m1.044-.45a1.13 1.13 0 0 0-1.96 0L.165 13.233c-.457.778.091 1.767.98 1.767h13.713c.889 0 1.438-.99.98-1.767z"/>
+    <path d="M7.002 12a1 1 0 1 1 2 0 1 1 0 0 1-2 0M7.1 5.995a.905.905 0 1 1 1.8 0l-.35 3.507a.552.552 0 0 1-1.1 0z"/>
     </symbol>
 </svg>
 {% addtoblock "css" %}<link rel="stylesheet" type="text/css" href="{% static 'djangocms_automation/css/charts.css' %}">{% endaddtoblock %}

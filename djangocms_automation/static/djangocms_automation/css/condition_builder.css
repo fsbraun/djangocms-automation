@@ -9,7 +9,7 @@
 .condition-logic {
     margin-bottom: 20px;
     select {
-        max-width: 200px;
+        max-width: 300px;
     }
 }
 
@@ -32,26 +32,16 @@
 }
 
 
-.condition-remove-btn {
-    background: var(--delete-button-bg);
-    color: white;
+.deletelink {
+    height: 20px;
     cursor: pointer;
 }
 
-.condition-remove-btn:hover {
-    background: #c82333;
-}
-
-.condition-add-btn {
-    margin-top: 8px;
-    padding: 6px 12px;
-    background: #28a745;
-    color: white;
-    border: none;
-    border-radius: 3px;
+button.btn {
+    border: var(--border-color) 1px solid;
+    background: var(--button-bg);
+    color: var(--button-text);
+    border-radius: var(--dca-btn-radius, var(--border-radius));
+    padding-inline: 12px;
     cursor: pointer;
-}
-
-.condition-add-btn:hover {
-    background: #218838;
 }

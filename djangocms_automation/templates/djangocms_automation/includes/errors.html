@@ -1,0 +1,13 @@
+{% load sekizai_tags static %}
+{% if errors %}
+<div class="errors">
+    <svg width="16" height="16"><use xlink:href="#bi-exclamation-triangle"></use></svg>
+    <ul>
+    {% for error in errors %}
+        <li>{{ error }}</li>
+    {% endfor %}
+    </ul>
+</div>
+{% addtoblock "css" %}<link rel="stylesheet" type="text/css" href="{% static 'djangocms_automation/css/error_popup.css' %}">{% endaddtoblock %}
+{% addtoblock "js" %}<script src="{% static 'djangocms_automation/js/error_popup.js' %}"></script>{% endaddtoblock %}
+{% endif %}

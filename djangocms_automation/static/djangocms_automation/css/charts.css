@@ -4,7 +4,6 @@ body {
 }
 
 .automation-container {
-    padding-inline: 20px;
     .title {
         padding-block: 10px;
         font-weight: bold;
@@ -19,10 +18,11 @@ body {
 }
 
 .cms-structure-mode-structure .automation-container {
-    margin-inline-end: 416px;
+    padding-inline-end: 416px;
 }
 
 .automation-scrollable-container {
+    padding: 20px;
     overflow: auto;
 }
 
@@ -45,9 +45,10 @@ body {
         width: fit-content;
         background: var(--dca-white);
         border: var(--dca-black) 1px solid;
-        border-radius: var(--dca-border-radius);
+        border-radius: var(--dca-border-radius, 20px);
         width: 180px;
         min-height: 100px;
+        margin-inline: 50px;
         display: inline-block;
         z-index: 1;
         box-shadow: 0 0 5px color-mix(in srgb,var(--dca-black) 20%,transparent);
@@ -101,7 +102,12 @@ body {
             border-radius: 50%;
             border: var(--dca-black) 1px solid;
         }
-
+        .errors {
+            color: red;
+            position: absolute;
+            top: -10px;
+            inset-inline-end: -10px;
+        }
     }
     .automation-trigger {
         border-radius: 50%;
@@ -110,7 +116,13 @@ body {
         min-height: 75px;
     }
 
-    .automation-if {
+    .automation-noop {
+        width: 0;
+        height: 0;
+        min-height: 0;
+    }
+
+    .automation-if, .automation-split {
         border-radius: 0;
         border: none;
         background: none;
@@ -153,7 +165,13 @@ body {
         .else-branch {
             inset-inline-start: 100%;
         }
-   }
+    }
+    .automation-join {
+        width: 30px;
+        height: 30px;
+        min-height: unset;
+        border-radius: 50%;
+    }
     .automation-branches {
         display: flex;
         margin-bottom: 20px;
@@ -189,7 +207,6 @@ body {
 
 .automation-connectors path {
     stroke: var(--dca-black);
-    stroke-dasharray: 6, 4;
     stroke-width: 1px;
     fill: none;
     stroke-linecap: round;

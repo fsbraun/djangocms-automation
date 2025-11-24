@@ -151,7 +151,12 @@ class ConditionBuilderWidget(forms.Widget):
         # Container for the builder UI (initialized by JS)
         container_id = hidden_attrs.get('id', name) + '_builder'
         operators = json.dumps([(key, str(value)) for key, value in self.operators], ensure_ascii=False)
-        dataset = f'data-operators="{escape(operators)}" data-and-label="{escape(str(_("All conditions (AND)")))}" data-or-label="{escape(str(_("Any condition (OR)")))}"'
+        dataset = (
+			f'data-operators="{escape(operators)}" '
+			f'data-and-label="{escape(str(_("All of the following (AND)")))}" '
+			f'data-or-label="{escape(str(_("Any of the following (OR)")))}"'
+            f'data-add-label="{escape(str(_("Add condition")))}"'
+        )
         container = f'<div id="{escape(container_id)}" class="condition-builder-widget" {dataset}></div>'
 
         return mark_safe(hidden_input + container)
