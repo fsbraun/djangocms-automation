@@ -6,7 +6,7 @@
                 {% include "djangocms_automation/includes/pause.html" %}
             {% endif %}
             <svg width="16" height="16"><use xlink:href="#{{ trigger.get_definition.icon }}"></use></svg>
-            <div class="automation-title">{{ trigger.slot.capitalize }}</div>
+            <div class="automation-title">{{ trigger.get_definition.name }}</div>
         </div>
     {% endrender_model_block %}
 </div>

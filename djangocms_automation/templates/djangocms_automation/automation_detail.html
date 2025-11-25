@@ -16,6 +16,7 @@
                 <div class="automation-graph">
                     {% include "djangocms_automation/plugins/trigger.html" with trigger=trigger %}
                     {% render_placeholder trigger.placeholder %}
+                    {% include "djangocms_automation/plugins/end.html" %}
                 </div>
             </div>
         </div>
@@ -25,7 +26,7 @@
                 {% translate "Add Trigger to create placeholders" %}
             </a>
         {% else %}
-            <p>{% translate "No placeholders available." %}</p>
+            <p>{% translate "No triggers available." %}</p>
         {% endif %}
     {% endfor %}
 </div>
