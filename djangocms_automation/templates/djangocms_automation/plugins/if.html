@@ -4,12 +4,9 @@
         {% include "djangocms_automation/includes/errors.html" with errors=instance.messages %}
         <svg width="16" height="16"><use xlink:href="#bi-signpost-split"></use></svg>
         {% if title %}<div class="automation-title">{{ instance.question|default:title }} </div>{% endif %}
-        {% if not empty %}
-            <div class="then-branch">{% translate "Yes" %}</div>
-            <div class="else-branch">{% translate "No" %}</div>
-        {% endif %}
+        <div class="then-branch">{% translate "Yes" %}</div>
+        <div class="else-branch">{% translate "No" %}</div>
     </div>
-    {% if not empty %}
     <div class="automation-branches">
         {% for plugin in instance.child_plugin_instances|then_branch %}
             {% with parentloop=forloop parent=instance %}{% render_plugin plugin %}{% endwith %}
@@ -22,5 +19,4 @@
             <div class="automation-branch empty"></div>
         {% endfor %}
     </div>
-    {% endif %}
 </div>

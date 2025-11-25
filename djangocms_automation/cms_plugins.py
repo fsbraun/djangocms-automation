@@ -29,6 +29,7 @@ class AutomationPlugin(CMSPluginBase):
     render_template = "djangocms_automation/plugins/action.html"
     change_form_template = "djangocms_frontend/admin/base.html"
     show_add_form = False
+    allowed_models = ["djangocms_automation.AutomationContent"]
 
     def render(self, context, instance, placeholder):
         context.update(
