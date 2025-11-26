@@ -27,20 +27,20 @@ class AutomationView(DetailView):
         if slots:
             ct = ContentType.objects.get_for_model(obj)
             # Fetch existing placeholders for these slots
-            placeholders = {placeholder.slot: placeholder for placeholder in Placeholder.objects.filter(
+            placeholders = {
+                placeholder.slot: placeholder
+                for placeholder in Placeholder.objects.filter(
                     content_type=ct,
                     object_id=obj.pk,
                     slot__in=slots,
-                )}
+                )
+            }
             existing_slots = set(placeholders.keys())
 
             # Create missing placeholders in bulk
             missing = [slot for slot in slots if slot not in existing_slots]
             if missing:
-                to_create = [
-                    Placeholder(slot=slot, content_type=ct, object_id=obj.pk)
-                    for slot in missing
-                ]
+                to_create = [Placeholder(slot=slot, content_type=ct, object_id=obj.pk) for slot in missing]
                 try:
                     # Prefer ignoring conflicts if DB has a uniqueness constraint
                     Placeholder.objects.bulk_create(to_create, ignore_conflicts=True)
@@ -49,11 +49,14 @@ class AutomationView(DetailView):
                     Placeholder.objects.bulk_create(to_create)
 
                 # Re-query to include newly created placeholders
-                placeholders = {placeholder.slot: placeholder for placeholder in Placeholder.objects.filter(
-                    content_type=ct,
-                    object_id=obj.pk,
-                    slot__in=slots,
-                )}
+                placeholders = {
+                    placeholder.slot: placeholder
+                    for placeholder in Placeholder.objects.filter(
+                        content_type=ct,
+                        object_id=obj.pk,
+                        slot__in=slots,
+                    )
+                }
         else:
             placeholders = {}
 

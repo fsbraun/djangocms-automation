@@ -5,7 +5,7 @@ from django.contrib import admin
 from django.utils.html import format_html
 from django.utils.translation import gettext_lazy as _
 
-from cms.admin.utils import GrouperModelAdmin
+from cms.admin.utils import ChangeListActionsMixin, GrouperModelAdmin
 
 from .forms import AutomationTriggerAdminForm
 from .models import Automation, AutomationContent, APIKey, AutomationTrigger
@@ -102,9 +102,21 @@ class APIKeyAdmin(admin.ModelAdmin):
     search_fields = ("name", "description")
     readonly_fields = ("created", "updated", "masked_key")
     fieldsets = (
-        (None, {"fields": ("name", "service", "is_active")}),
-        ("API Key", {"fields": ("api_key", "masked_key"), "classes": ("collapse",)}),
-        ("Details", {"fields": ("description", "created", "updated")}),
+        (
+            None,
+            {
+                "fields": (
+                    "name",
+                    (
+                        "service",
+                        "api_key",
+                    ),
+                    "masked_key",
+                    "is_active",
+                )
+            },
+        ),
+        ("Details", {"fields": ("description", ("created", "updated")), "classes": ("collapse",)}),
     )
 
     def service_display(self, obj):
@@ -127,47 +139,54 @@ class APIKeyAdmin(admin.ModelAdmin):
 
 
 @admin.register(AutomationTrigger)
-class AutomationTriggerAdmin(admin.ModelAdmin):
+class AutomationTriggerAdmin(ChangeListActionsMixin, admin.ModelAdmin):
     """Admin for AutomationTrigger: add/change views available, hidden from index."""
 
     name = _("Trigger")
     form = AutomationTriggerAdminForm
-    readonly_fields = ("position",)
-    ordering = ("automation_content", "position")
+    list_display = (
+        "__str__",
+        "type",
+        "slot",
+    )
+    list_editable = ("slot",)  # Makes 'slot' editable in changelist with save button
+    ordering = (
+        "automation_content",
+        "position",
+    )
+    list_filter = ("automation_content",)
 
-    change_form_template = "djangocms_frontend/admin/base.html"
+    # change_form_template = "djangocms_frontend/admin/base.html"
 
     class Media:
-        js = ('djangocms_automation/js/trigger_type_change.js',)
-        css = {
-            'all': ('djangocms_automation/css/trigger_admin.css',)
-        }
+        js = ("djangocms_automation/js/trigger_type_change.js",)
+        css = {"all": ("djangocms_automation/css/trigger_admin.css",)}
 
     @staticmethod
     def get_trigger(request, obj) -> tuple[forms.Form | None, bool]:
-        trigger_type = request.POST.get('_trigger_type_change') if request.method == 'POST' else None
-        fallback = trigger_type or (obj.type if obj else request.GET.get('type') or "click")
+        trigger_type = request.POST.get("_trigger_type_change") if request.method == "POST" else None
+        fallback = trigger_type or (obj.type if obj else request.GET.get("type") or "click")
         return trigger_registry.get(trigger_type or fallback), trigger_type is not None
 
     def get_fieldsets(self, request, obj=None):
         """Return fieldsets with dynamic config fields based on trigger type."""
         base_fieldsets = [
-            (None, {
-                'fields': ('automation_content', 'type', 'slot', 'position')
-            }),
+            (None, {"fields": ("automation_content", "type", "slot", "position")}),
         ]
         trigger_class, changed = self.get_trigger(request, obj)
         # Add config fieldset if trigger has config fields
         if trigger_class and not changed:
             if trigger_class.declared_fields:
                 # Get all config field names (with config_ prefix)
-                base_fieldsets.append((
-                   trigger_class.name,
-                    {
-                        'fields': list(trigger_class.declared_fields.keys()),
-                        'classes': ('collapse',),
-                    }
-                ))
+                base_fieldsets.append(
+                    (
+                        trigger_class.name,
+                        {
+                            "fields": list(trigger_class.declared_fields.keys()),
+                            "classes": ("collapse",),
+                        },
+                    )
+                )
         return base_fieldsets
 
     def get_form(self, request, obj=None, **kwargs):
@@ -181,19 +200,21 @@ class AutomationTriggerAdmin(admin.ModelAdmin):
         form = super().get_form(request, obj, **kwargs)
 
         # Add localized confirmation message as data attribute
-        if 'type' in form.base_fields:
-            form.base_fields['type'].widget.attrs['data-confirm-message'] = str(_(
-                "Changing the trigger type will reload the form with different configuration fields. "
-                "Current configuration will not be saved. Continue?"
-            ))
+        if "type" in form.base_fields:
+            form.base_fields["type"].widget.attrs["data-confirm-message"] = str(
+                _(
+                    "Changing the trigger type will reload the form with different configuration fields. "
+                    "Current configuration will not be saved. Continue?"
+                )
+            )
 
         return form
 
     def save_model(self, request, obj, form, change):
         """Handle type changes during save."""
         # Check if this is a type change
-        if '_trigger_type_change' in request.POST:
-            new_type = request.POST.get('_trigger_type_change')
+        if "_trigger_type_change" in request.POST:
+            new_type = request.POST.get("_trigger_type_change")
             if new_type:
                 obj.type = new_type
                 # Clear old config when changing type
@@ -203,17 +224,13 @@ class AutomationTriggerAdmin(admin.ModelAdmin):
 
     def response_change(self, request, obj):
         """Redirect to change form with new type after type change."""
-        if '_trigger_type_change' in request.POST:
+        if "_trigger_type_change" in request.POST:
             # Redirect to same change form to reload with new fields
             from django.http import HttpResponseRedirect
             from django.urls import reverse
-            url = reverse('admin:%s_%s_change' % (
-                obj._meta.app_label,
-                obj._meta.model_name),
-                args=[obj.pk]
-            )
-            return HttpResponseRedirect(url)
 
+            url = reverse("admin:%s_%s_change" % (obj._meta.app_label, obj._meta.model_name), args=[obj.pk])
+            return HttpResponseRedirect(url)
         return super().response_change(request, obj)
 
     def get_model_perms(self, request):  # Hides from admin index/app list

@@ -11,6 +11,7 @@ Automations. Each trigger defines:
 
 Concrete example triggers are provided for "Click" and "Mail" events.
 """
+
 from __future__ import annotations
 
 from typing import Any, Dict, List, Callable, Optional
@@ -126,6 +127,7 @@ trigger_registry = TriggerRegistry()
 # Example concrete trigger definitions
 # ---------------------------------------------------------------------------
 
+
 # Click Trigger schema: expects element metadata and optional context
 class ClickTrigger(Trigger):
     id = "click"
@@ -167,11 +169,11 @@ class MailTrigger(Trigger):
     status_filter = forms.ChoiceField(
         label=_("Status filter"),
         choices=[
-            ('', _("Any")),
-            ('queued', _("Queued")),
-            ('sent', _("Sent")),
-            ('bounced', _("Bounced")),
-            ('opened', _("Opened")),
+            ("", _("Any")),
+            ("queued", _("Queued")),
+            ("sent", _("Sent")),
+            ("bounced", _("Bounced")),
+            ("opened", _("Opened")),
         ],
         required=False,
         help_text=_("Only trigger for this email status"),
@@ -215,11 +217,11 @@ class TimerTrigger(Trigger):
     recurrence_frequency = forms.ChoiceField(
         label=_("Recurrence frequency"),
         choices=[
-            ('', '---'),
-            ('hourly', _("Hourly")),
-            ('daily', _("Daily")),
-            ('weekly', _("Weekly")),
-            ('monthly', _("Monthly")),
+            ("", "---"),
+            ("hourly", _("Hourly")),
+            ("daily", _("Daily")),
+            ("weekly", _("Weekly")),
+            ("monthly", _("Monthly")),
         ],
         required=False,
         help_text=_("How often should this trigger repeat?"),

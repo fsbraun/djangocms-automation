@@ -55,11 +55,16 @@ class AutomationIf(AutomationPlugin):
     model = models.ConditionalPluginModel
     form = forms.ConditionalPluginForm
     fieldsets = (
-        (None, {"fields": ("question", "condition",)}),
-        (_("Comment"), {
-            "classes": ("collapse",),
-            "fields": ("comment",)
-        }),
+        (
+            None,
+            {
+                "fields": (
+                    "question",
+                    "condition",
+                )
+            },
+        ),
+        (_("Comment"), {"classes": ("collapse",), "fields": ("comment",)}),
     )
 
     def render(self, context, instance, placeholder):
@@ -136,11 +141,13 @@ class ModifierPlugin(AutomationPlugin):
 
     def render(self, context, instance, placeholder):
         context = super().render(context, instance, placeholder)
-        context.update({
-            "icon": getattr(self, "icon", ""),
-            "title": getattr(self, "name", ""),
-            "class": getattr(self, "css_class", ""),
-        })
+        context.update(
+            {
+                "icon": getattr(self, "icon", ""),
+                "title": getattr(self, "name", ""),
+                "class": getattr(self, "css_class", ""),
+            }
+        )
         return context
 
 

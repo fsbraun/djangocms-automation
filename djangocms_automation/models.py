@@ -15,7 +15,9 @@ from .triggers import trigger_registry
 
 
 class AutomationContent(models.Model):
-    automation = models.ForeignKey("djangocms_automation.Automation", related_name="contents", on_delete=models.CASCADE)
+    automation = models.ForeignKey(
+        "djangocms_automation.Automation", related_name="contents", on_delete=models.CASCADE
+    )
     description = models.TextField()
 
     placeholders = PlaceholderRelationField()
@@ -43,19 +45,27 @@ class Automation(models.Model):
     def __str__(self):
         return self.name
 
+    class Meta:
+        verbose_name = _("Automation")
+        verbose_name_plural = _("Automations")
+
 
 class AutomationTrigger(models.Model):
     automation_content = models.ForeignKey(AutomationContent, related_name="triggers", on_delete=models.CASCADE)
     slot = models.SlugField(
         verbose_name=_("Slot"),
-        help_text=_("Unique identifier for this trigger within the automation content. Used, e.g., if it needs to be triggered by other automation."),
+        help_text=_(
+            "Unique identifier for this trigger within the automation content. Used, e.g., if it needs to be triggered by other automation."
+        ),
         max_length=255,
     )
     type = models.CharField(max_length=100, default="code")
     config = models.JSONField(default=dict, editable=False)
-    position = models.PositiveIntegerField(default=0)
+    position = models.PositiveIntegerField(default=0, verbose_name="#")
 
     class Meta:
+        verbose_name = _("Trigger")
+        verbose_name_plural = _("Triggers")
         ordering = ["position"]
 
     def get_definition(self):
@@ -98,8 +108,8 @@ class APIKey(models.Model):
     updated = models.DateTimeField(auto_now=True, verbose_name=_("Updated"))
 
     class Meta:
-        verbose_name = _("API Key")
-        verbose_name_plural = _("API Keys")
+        verbose_name = _("Secret")
+        verbose_name_plural = _("Secrets")
         ordering = ["service", "name"]
         indexes = [
             models.Index(fields=["service", "is_active"]),
@@ -117,6 +127,7 @@ class APIKey(models.Model):
     def get_service_choices(cls):
         """Get available service choices."""
         return service_registry.get_choices()
+
 
 class AutomationPluginModel(CMSPlugin):
     """Base model for automation plugins."""
@@ -143,24 +154,35 @@ class AutomationPluginModel(CMSPlugin):
 
 class ConditionalPluginModel(AutomationPluginModel):
     """Model for 'Conditional' automation plugin."""
+
     question = models.CharField(
         max_length=255,
         verbose_name=_("Question"),
         blank=True,
-        help_text=_("The question this conditional answers, e.g., 'Is the user active?' It will be shown in the editor."),
+        help_text=_(
+            "The question this conditional answers, e.g., 'Is the user active?' It will be shown in the editor."
+        ),
     )
     condition = models.JSONField(
         verbose_name=_("Condition"),
-        help_text=_("Condition to evaluate for this conditional to evaluate. Use double curly braces {{ }} for data attribute resolution, e.g. {{ first_name }}."),
+        help_text=_(
+            "Condition to evaluate for this conditional to evaluate. Use double curly braces {{ }} for data attribute resolution, e.g. {{ first_name }}."
+        ),
         default=dict,
     )
 
-    no_yes_channel = _("No \"Yes\" channel defined. The yes channel determines which actions will be executed if the condition is met. "
-                       "Please add a \"Yes\" branch to this conditional in the structure board.")
-    no_no_channel = _("No \"No\" channel defined. The no channel determines which actions will be executed if the condition is not met. "
-                       "Please add a \"No\" branch to this conditional in the structure board.")
-    multiple_channels = _("Both the \"Yes\" and \"No\" cannot be defined more than once. Please make sure only one branch is present "
-                          "for both of them for this conditional.")
+    no_yes_channel = _(
+        'No "Yes" channel defined. The yes channel determines which actions will be executed if the condition is met. '
+        'Please add a "Yes" branch to this conditional in the structure board.'
+    )
+    no_no_channel = _(
+        'No "No" channel defined. The no channel determines which actions will be executed if the condition is not met. '
+        'Please add a "No" branch to this conditional in the structure board.'
+    )
+    multiple_channels = _(
+        'Both the "Yes" and "No" cannot be defined more than once. Please make sure only one branch is present '
+        "for both of them for this conditional."
+    )
 
     def messages(self):
         messages = []

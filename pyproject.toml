@@ -31,7 +31,6 @@ dynamic = [ "version" ]
 dependencies = [
   "django>=4.2",
   "django-cms>=4.1",
-  "django-admin-sortable2",
   "jsonschema>=4.22",
 ]
 

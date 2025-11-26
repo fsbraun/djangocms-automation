@@ -3,7 +3,7 @@ import re
 
 def resolve_path(context, path):
     """Resolve a dotted path safely through dicts/lists only."""
-    parts = path.split('.')
+    parts = path.split(".")
     value = context
 
     for part in parts:
@@ -14,13 +14,14 @@ def resolve_path(context, path):
                 idx = int(part)
                 value = value[idx]
             except (ValueError, IndexError):
-                return ''  # invalid index
+                return ""  # invalid index
         else:
             # Block attribute access to objects (security)
-            return ''
+            return ""
         if value is None:
-            return ''
+            return ""
     return value
+
 
 VAR_PATTERN = re.compile(r"{{\s*([a-zA-Z0-9_.]+)\s*}}")
 

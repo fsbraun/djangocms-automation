@@ -21,18 +21,20 @@ def run_pending_automations(timestamp: datetime.datetime | None = None):
     The plugins are downcasted and have their `child_plugin_instances` set before the execute
     method is called."""
 
-
     if timestamp is None:
         timestamp = now()
 
-    subquery = AutomationContent.objects.filter(
-        automation=models.OuterRef('automation_instance__automation')
-    ).values('pk')[:1]
+    subquery = AutomationContent.objects.filter(automation=models.OuterRef("automation_instance__automation")).values(
+        "pk"
+    )[:1]
 
     automation_actions = list(
-        AutomationAction.objects
-        .filter(Q(paused_until=None) | Q(paused_until__lte=timestamp), finished__isnull=True, automation_instance__testing=None)
-        .select_related('automation_instance', 'automation_instance__automation')
+        AutomationAction.objects.filter(
+            Q(paused_until=None) | Q(paused_until__lte=timestamp),
+            finished__isnull=True,
+            automation_instance__testing=None,
+        )
+        .select_related("automation_instance", "automation_instance__automation")
         .annotate(automation_content_id=models.Subquery(subquery, output_field=models.IntegerField()))
     )
 
@@ -47,10 +49,7 @@ def run_selected_actions(automation_actions, single_step: bool):
     plugins = list(CMSPlugin.objects.filter(placeholder__in=placeholders, language=settings.LANGUAGE_CODE))
     plugins = list(downcast_plugins(plugins, placeholders, select_placeholder=True))
     get_plugins_as_layered_tree(list(plugins))
-    plugin_dict = {
-        plugin.uuid: plugin
-        for plugin in plugins if hasattr(plugin, 'uuid')
-    }
+    plugin_dict = {plugin.uuid: plugin for plugin in plugins if hasattr(plugin, "uuid")}
 
     for action in automation_actions:
         action._plugin = plugin_dict.get(action.status)

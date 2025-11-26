@@ -58,6 +58,10 @@ class AutomationInstance(models.Model):
     def __str__(self):
         return f"<AutomationInstance for {self.automation}>"
 
+    class Meta:
+        verbose_name = _("Execution Instance")
+        verbose_name_plural = _("Execution Instances")
+
 
 class AutomationAction(models.Model):
     automation_instance = models.ForeignKey(

@@ -223,25 +223,21 @@ class TestAPIKeyAdmin:
         """Test that fieldsets are properly configured."""
         fieldsets = api_key_admin.fieldsets
 
-        assert len(fieldsets) == 3
+        assert len(fieldsets) == 2
 
         # First fieldset (None) - basic fields
         assert fieldsets[0][0] is None
-        assert "name" in fieldsets[0][1]["fields"]
-        assert "service" in fieldsets[0][1]["fields"]
-        assert "is_active" in fieldsets[0][1]["fields"]
+        fields = fieldsets[0][1]["fields"]
+        assert "name" in fields
+        assert ("service", "api_key") in fields
+        assert "masked_key" in fields
+        assert "is_active" in fields
 
-        # Second fieldset - API Key (collapsed)
-        assert "API Key" in fieldsets[1][0]
-        assert "api_key" in fieldsets[1][1]["fields"]
-        assert "masked_key" in fieldsets[1][1]["fields"]
+        # Second fieldset - Details (collapsed)
+        assert "Details" in fieldsets[1][0]
+        assert "description" in fieldsets[1][1]["fields"]
+        assert ("created", "updated") in fieldsets[1][1]["fields"]
         assert "collapse" in fieldsets[1][1]["classes"]
-
-        # Third fieldset - Details
-        assert "Details" in fieldsets[2][0]
-        assert "description" in fieldsets[2][1]["fields"]
-        assert "created" in fieldsets[2][1]["fields"]
-        assert "updated" in fieldsets[2][1]["fields"]
 
     def test_form_class(self, api_key_admin):
         """Test that the correct form class is used."""

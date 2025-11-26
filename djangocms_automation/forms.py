@@ -26,7 +26,7 @@ class TriggerChoiceField(forms.ChoiceField):
     widget = widgets.TriggerSelectWidget
 
     def __init__(self, *args, **kwargs):
-        kwargs.setdefault('choices', trigger_registry.get_choices())
+        kwargs.setdefault("choices", trigger_registry.get_choices())
         super().__init__(*args, **kwargs)
 
     def valid_value(self, value):  # Strict registry membership
@@ -53,9 +53,10 @@ class AutomationTriggerAdminForm(forms.ModelForm):
 
         # Custom queryset: nur Inhalte aktiver Automationen
         from .models import AutomationContent
-        self.fields["automation_content"].queryset = (
-            AutomationContent.admin_manager.select_related("automation").current_content()
-        )
+
+        self.fields["automation_content"].queryset = AutomationContent.admin_manager.select_related(
+            "automation"
+        ).current_content()
         self.fields["automation_content"].widget = forms.HiddenInput()
 
     def clean(self):
@@ -64,7 +65,7 @@ class AutomationTriggerAdminForm(forms.ModelForm):
 
         # Extract config fields
         config = {}
-        trigger_type = cleaned_data.get('type')
+        trigger_type = cleaned_data.get("type")
 
         if trigger_type:
             trigger_class = trigger_registry.get(trigger_type)
@@ -73,12 +74,12 @@ class AutomationTriggerAdminForm(forms.ModelForm):
                     if field_name in cleaned_data:
                         value = cleaned_data[field_name]
                         # Convert datetime objects to ISO strings for JSON storage
-                        if hasattr(value, 'isoformat'):
+                        if hasattr(value, "isoformat"):
                             value = value.isoformat()
                         config[field_name] = value
 
         # Store config in cleaned_data so it can be saved
-        cleaned_data['_config'] = config
+        cleaned_data["_config"] = config
         return cleaned_data
 
     def save(self, commit=True):
@@ -86,8 +87,8 @@ class AutomationTriggerAdminForm(forms.ModelForm):
         instance = super().save(commit=False)
 
         # Set config from cleaned data
-        if hasattr(self, 'cleaned_data') and '_config' in self.cleaned_data:
-            instance.config = self.cleaned_data['_config']
+        if hasattr(self, "cleaned_data") and "_config" in self.cleaned_data:
+            instance.config = self.cleaned_data["_config"]
 
         if commit:
             instance.save()
@@ -104,4 +105,3 @@ class ConditionalPluginForm(forms.ModelForm):
         widgets = {
             "condition": widgets.ConditionBuilderWidget,
         }
-

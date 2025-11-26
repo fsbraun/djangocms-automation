@@ -20,7 +20,7 @@ class TestTriggerRegistry:
 
     def test_get_choices(self):
         choices = trigger_registry.get_choices()
-        assert ("click", "Click") in choices
+        assert ("click", "Manual") in choices
         assert ("mail", "Mail") in choices
         assert ("timer", "Timer") in choices
 
@@ -85,6 +85,7 @@ class TestTriggerValidation:
         def custom(schema, payload):  # should be invoked instead of builtin
             calls.append("called")
             # emulate success
+
         payload = {"element_id": "x", "timestamp": "2025-11-22T10:00:00Z"}
         trigger = ClickTrigger()
         assert trigger.validate_payload(payload, validator=custom) is True
@@ -93,6 +94,7 @@ class TestTriggerValidation:
     def test_custom_validator_failure(self):
         def custom(schema, payload):
             raise ValidationError("boom")
+
         trigger = ClickTrigger()
         with pytest.raises(ValidationError):
             trigger.validate_payload({"element_id": "x"}, validator=custom)
@@ -182,4 +184,3 @@ class TestTriggerValidation:
         trigger = TimerTrigger()
         with pytest.raises(ValidationError):
             trigger.validate_payload(payload)
-
