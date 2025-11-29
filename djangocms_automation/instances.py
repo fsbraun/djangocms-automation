@@ -141,13 +141,6 @@ class AutomationAction(models.Model):
         default=dict,
     )
 
-    def mark_completed(self, message="", result=None):
-        self.finished = now()
-        self.state = COMPLETED
-        self.message = message or ""
-        self.result = result or {}
-        self.save(update_fields=["finished", "message", "state", "result"])
-
     @property
     def data(self):
         return self.automation_instance.data
