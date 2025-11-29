@@ -117,13 +117,15 @@ class APIKeyAdmin(admin.ModelAdmin):
         ("Details", {"fields": ("description", ("created", "updated")), "classes": ("collapse",)}),
     )
 
+    @admin.display(
+        description=_("Service"),
+        ordering="service",
+    )
     def service_display(self, obj):
         """Display the human-readable service name."""
         return obj.get_service_display()
 
-    service_display.short_description = "Service"
-    service_display.admin_order_field = "service"
-
+    @admin.display(description="Masked Key")
     def masked_key(self, obj):
         """Display a masked version of the API key for security."""
         if obj.api_key:
@@ -132,8 +134,6 @@ class APIKeyAdmin(admin.ModelAdmin):
                 return f"{obj.api_key[:4]}{'*' * (key_length - 8)}{obj.api_key[-4:]}"
             return "*" * key_length
         return "-"
-
-    masked_key.short_description = "Masked Key"
 
 
 @admin.register(AutomationTrigger)
