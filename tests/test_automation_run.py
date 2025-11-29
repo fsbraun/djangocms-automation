@@ -20,7 +20,7 @@ class DummyActionPluginModel(BaseActionPluginModel):
     """Real CMSPlugin-based dummy action model for testing."""
 
     class Meta:
-        app_label = 'djangocms_automation'
+        app_label = "djangocms_automation"
 
     def execute(self, action: AutomationAction, data=None, single_step=False):
         """Execute the action and return status."""
@@ -32,6 +32,7 @@ class DummyActionPluginModel(BaseActionPluginModel):
 @plugin_pool.register_plugin
 class DummyActionPlugin(CMSPluginBase):
     """CMS Plugin wrapper for DummyActionPluginModel."""
+
     model = DummyActionPluginModel
     name = "Dummy Action Plugin"
     render_template = "djangocms_automation/plugins/action.html"
@@ -69,6 +70,7 @@ def test_run_automation_through_chain(automation_content, admin_user, settings):
 
     # Get or create placeholder for the start slot
     from django.contrib.contenttypes.models import ContentType
+
     content_type = ContentType.objects.get_for_model(AutomationContent)
     placeholder = Placeholder.objects.get_or_create(
         content_type=content_type,
@@ -79,26 +81,26 @@ def test_run_automation_through_chain(automation_content, admin_user, settings):
     # Add three dummy action plugins in a chain
     p1 = add_plugin(
         placeholder=placeholder,
-        plugin_type='DummyActionPlugin',
+        plugin_type="DummyActionPlugin",
         language=settings.LANGUAGE_CODE,
     )
     p1 = DummyActionPluginModel.objects.get(pk=p1.pk)
 
     p2 = add_plugin(
         placeholder=placeholder,
-        plugin_type='DummyActionPlugin',
+        plugin_type="DummyActionPlugin",
         language=settings.LANGUAGE_CODE,
         parent=p1,
-        position='first-child',
+        position="first-child",
     )
     p2 = DummyActionPluginModel.objects.get(pk=p2.pk)
 
     p3 = add_plugin(
         placeholder=placeholder,
-        plugin_type='DummyActionPlugin',
+        plugin_type="DummyActionPlugin",
         language=settings.LANGUAGE_CODE,
         parent=p2,
-        position='last-child',
+        position="last-child",
     )
     p3 = DummyActionPluginModel.objects.get(pk=p3.pk)
 
@@ -130,4 +132,3 @@ def test_run_automation_through_chain(automation_content, admin_user, settings):
         assert action.finished is not None
         assert "input" in action.result
         assert "plugin_id" in action.result
-

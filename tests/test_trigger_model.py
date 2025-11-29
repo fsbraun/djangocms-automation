@@ -21,8 +21,7 @@ def automation(db):
 @pytest.fixture
 def automation_content(automation, admin_user):
     return AutomationContent.objects.with_user(admin_user).create(
-        automation=automation,
-        description="Test automation content"
+        automation=automation, description="Test automation content"
     )
 
 
@@ -53,7 +52,6 @@ class DummyPlugin:
 
 @pytest.mark.django_db
 class TestAutomationTriggerExecution:
-
     def test_trigger_execution_creates_instance_and_action(self, trigger, monkeypatch):
         """Test that trigger_execution creates AutomationInstance and AutomationAction."""
         # Setup
@@ -62,14 +60,14 @@ class TestAutomationTriggerExecution:
 
         # Mock Placeholder.objects.get_for_obj
         mock_placeholder = SimpleNamespace(
-            slot=trigger.slot,
-            get_plugins=lambda: SimpleNamespace(first=lambda: dummy_plugin)
+            slot=trigger.slot, get_plugins=lambda: SimpleNamespace(first=lambda: dummy_plugin)
         )
 
         def mock_get_for_obj(obj):
             return SimpleNamespace(get=lambda slot: mock_placeholder)
 
         from cms.models import Placeholder
+
         monkeypatch.setattr(Placeholder.objects, "get_for_obj", mock_get_for_obj)
 
         test_data = {"user_id": 123, "action": "test"}
@@ -79,9 +77,8 @@ class TestAutomationTriggerExecution:
 
         # Assert - AutomationInstance created
         from djangocms_automation.instances import AutomationInstance
-        instance = AutomationInstance.objects.filter(
-            automation_content=trigger.automation_content
-        ).first()
+
+        instance = AutomationInstance.objects.filter(automation_content=trigger.automation_content).first()
 
         assert instance is not None
         assert instance.data == test_data
@@ -90,15 +87,13 @@ class TestAutomationTriggerExecution:
 
         # Assert - AutomationAction created
         from djangocms_automation.instances import AutomationAction
-        action = AutomationAction.objects.filter(
-            automation_instance=instance
-        ).first()
+
+        action = AutomationAction.objects.filter(automation_instance=instance).first()
 
         assert action is not None
         assert action.previous is None
         assert action.plugin_ptr == plugin_uuid
         assert action.finished is None
-
 
     def test_trigger_execution_with_no_data(self, trigger, monkeypatch):
         """Test that trigger_execution works with data=None, defaulting to empty dict."""
@@ -106,14 +101,14 @@ class TestAutomationTriggerExecution:
         dummy_plugin = DummyPlugin(plugin_uuid)
 
         mock_placeholder = SimpleNamespace(
-            slot=trigger.slot,
-            get_plugins=lambda: SimpleNamespace(first=lambda: dummy_plugin)
+            slot=trigger.slot, get_plugins=lambda: SimpleNamespace(first=lambda: dummy_plugin)
         )
 
         def mock_get_for_obj(obj):
             return SimpleNamespace(get=lambda slot: mock_placeholder)
 
         from cms.models import Placeholder
+
         monkeypatch.setattr(Placeholder.objects, "get_for_obj", mock_get_for_obj)
 
         # Act - call with no data argument
@@ -121,9 +116,8 @@ class TestAutomationTriggerExecution:
 
         # Assert
         from djangocms_automation.instances import AutomationInstance
-        instance = AutomationInstance.objects.filter(
-            automation_content=trigger.automation_content
-        ).first()
+
+        instance = AutomationInstance.objects.filter(automation_content=trigger.automation_content).first()
 
         assert instance is not None
         assert instance.data == {}
@@ -135,14 +129,14 @@ class TestAutomationTriggerExecution:
         dummy_plugin = DummyPlugin(plugin_uuid)
 
         mock_placeholder = SimpleNamespace(
-            slot=trigger.slot,
-            get_plugins=lambda: SimpleNamespace(first=lambda: dummy_plugin)
+            slot=trigger.slot, get_plugins=lambda: SimpleNamespace(first=lambda: dummy_plugin)
         )
 
         def mock_get_for_obj(obj):
             return SimpleNamespace(get=lambda slot: mock_placeholder)
 
         from cms.models import Placeholder
+
         monkeypatch.setattr(Placeholder.objects, "get_for_obj", mock_get_for_obj)
 
         # Act - trigger multiple times
@@ -152,9 +146,8 @@ class TestAutomationTriggerExecution:
 
         # Assert - three separate instances
         from djangocms_automation.instances import AutomationInstance
-        instances = AutomationInstance.objects.filter(
-            automation_content=trigger.automation_content
-        )
+
+        instances = AutomationInstance.objects.filter(automation_content=trigger.automation_content)
 
         assert instances.count() == 3
         assert instances[0].data == {"run": 1}
@@ -182,15 +175,13 @@ class TestAutomationTriggerExecution:
 
         def mock_get(slot):
             slot_requests.append(slot)
-            return SimpleNamespace(
-                slot=slot,
-                get_plugins=lambda: SimpleNamespace(first=lambda: dummy_plugin)
-            )
+            return SimpleNamespace(slot=slot, get_plugins=lambda: SimpleNamespace(first=lambda: dummy_plugin))
 
         def mock_get_for_obj(obj):
             return SimpleNamespace(get=mock_get)
 
         from cms.models import Placeholder
+
         monkeypatch.setattr(Placeholder.objects, "get_for_obj", mock_get_for_obj)
 
         # Act

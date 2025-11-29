@@ -26,13 +26,16 @@ def run_pending_automations(timestamp: datetime.datetime | None = None):
     if timestamp is None:
         timestamp = now()
 
-
     automation_actions = AutomationAction.objects.filter(
-            Q(paused_until=None) | Q(paused_until__lte=timestamp),
-            finished__isnull=True,
-            automation_instance__testing=None,
-        ).values_list("automation_instance__automation_content_id", flat=True)
-    automation_contents = list(AutomationContent.objects.filter(pk__in=automation_actions, automation__is_active=True).select_related("automation"))
+        Q(paused_until=None) | Q(paused_until__lte=timestamp),
+        finished__isnull=True,
+        automation_instance__testing=None,
+    ).values_list("automation_instance__automation_content_id", flat=True)
+    automation_contents = list(
+        AutomationContent.objects.filter(pk__in=automation_actions, automation__is_active=True).select_related(
+            "automation"
+        )
+    )
 
 
 def _link_tree(plugins: list[CMSPlugin]):
@@ -57,7 +60,6 @@ def _link_tree(plugins: list[CMSPlugin]):
         previous_plugin.next_plugin_instance = None
 
 
-
 def create_datastructure_for_automation(automation_action: AutomationAction) -> dict[int, AutomationContent]:
     placeholders = Placeholder.objects.filter(
         content_type=ContentType.objects.get_for_model(AutomationContent),
@@ -68,7 +70,6 @@ def create_datastructure_for_automation(automation_action: AutomationAction) -> 
     root_plugins = get_plugins_as_layered_tree(list(plugins))
     _link_tree(root_plugins)
     return {plugin.uuid: plugin for plugin in plugins if hasattr(plugin, "uuid")}
-
 
 
 @task
@@ -112,4 +113,3 @@ def execute_pending_automations(timestamp: datetime.datetime | None = None):
     )
     for action in actions:
         execute_action.enqueue(action.pk)
-

@@ -92,7 +92,6 @@ class AutomationTrigger(models.Model):
 
             execute_action.enqueue(action.pk, data=data)
 
-
     def __str__(self):
         type = trigger_registry.get(self.type)
         return f"{self.slot.capitalize()} ({type.name if type else 'unknown'})"
@@ -185,6 +184,7 @@ class AutomationPluginModel(CMSPlugin):
             )
         return None
 
+
 class ConditionalPluginModel(AutomationPluginModel):
     """Model for 'Conditional' automation plugin."""
 
@@ -245,7 +245,8 @@ class SplitPluginModel(CMSPlugin):
             return [self.no_paths]
         return []
 
+
 class BaseActionPluginModel(AutomationPluginModel):
     """Base model for action plugins that perform tasks."""
-    pass
 
+    pass

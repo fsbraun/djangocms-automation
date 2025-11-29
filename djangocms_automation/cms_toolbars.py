@@ -28,7 +28,6 @@ class AutomationToolbar(CMSToolbar):
         trigger_menu = menu.get_or_create_menu("automation-trigger-submenu", _("Triggers"))
         self.populate_trigger_menu(trigger_menu, automation_content)
 
-
     def populate_trigger_menu(self, menu, automation_content):
         if not isinstance(self.toolbar.get_object(), AutomationContent):  # or not self.toolbar.edit_mode_active:
             return
