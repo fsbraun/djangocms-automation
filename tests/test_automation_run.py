@@ -1,6 +1,5 @@
 """End-to-end test: run an automation via AutomationTrigger and execute actions."""
 
-
 import pytest
 
 from cms.api import add_plugin
