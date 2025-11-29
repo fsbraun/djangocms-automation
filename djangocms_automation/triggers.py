@@ -17,6 +17,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Callable, Optional
 
 from django import forms
+from django.contrib.admin import widgets
 from django.utils.translation import gettext_lazy as _
 
 try:  # Optional dependency, added to pyproject but keep graceful fallback
@@ -207,6 +208,7 @@ class TimerTrigger(Trigger):
         label=_("Scheduled at"),
         help_text=_("When should this trigger fire?"),
         required=True,
+        widget=widgets.AdminSplitDateTime(),
     )
     timezone = forms.CharField(
         label=_("Timezone"),

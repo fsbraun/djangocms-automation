@@ -1,0 +1,11 @@
+{% comment %}
+{% load l10n sekizai_tags %}
+<svg class="js-add-plugin add-button"
+     data-placeholder="{{ trigger.placeholder.pk|unlocalize}}"
+     {% if instance %}
+     data-plugin="{{ instance.parent.pk|unlocalize }}"
+     data-position="{{ instance.position }}"
+     {% endif %}
+     width="16"
+     height="16"><use xlink:href="#bi-plus-circle"></use></svg>
+{% endcomment %}

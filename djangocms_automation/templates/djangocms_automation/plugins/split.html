@@ -1,5 +1,6 @@
 {% load cms_tags automation_tags i18n %}
 <div class="automation-group">
+    {% include "djangocms_automation/includes/add.html" %}
     <div class="automation-split automation-item{% if empty %} empty{% endif %}">
         {% include "djangocms_automation/includes/errors.html" with errors=instance.messages %}
         <svg width="16" height="16"><use xlink:href="#bi-diagram-2"></use></svg>

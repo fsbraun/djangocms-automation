@@ -110,7 +110,7 @@
                         this.drawBranchConnector(currentItem, branch.querySelector('.automation-item'), branch.dataset.branchType, {branch: true});
                         this.processFlow(branch, nextItem || reconnect);
                     }
-                } else if (nextItem) {
+                } else if (nextItem && !currentNode.classList.contains('end')) {
                     this.drawElbowConnector(currentItem, nextItem);
                 }
             }

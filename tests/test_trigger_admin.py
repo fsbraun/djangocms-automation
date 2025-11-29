@@ -15,10 +15,10 @@ User = get_user_model()
 
 
 @pytest.fixture
-def automation_content(db):
+def automation_content(db, admin_user):
     """Create a test automation content."""
     automation = Automation.objects.create(name="Test Automation", is_active=True)
-    return AutomationContent.objects.create(automation=automation, description="Test automation content")
+    return AutomationContent.objects.with_user(admin_user).create(automation=automation, description="Test automation content")
 
 
 @pytest.fixture

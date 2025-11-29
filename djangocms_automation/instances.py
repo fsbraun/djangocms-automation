@@ -13,19 +13,31 @@ User = get_user_model()
 MAX_FIELD_LENGTH = 256
 
 
+PENDING = "PENDING"
+RUNNING = "RUNNING"
+WAITING = "WAITING"
+COMPLETED = "COMPLETED"
+FAILED = "FAILED"
+
+STATES = [
+    (PENDING, _("Pending")),
+    (RUNNING, _("Running")),
+    (WAITING, _("Waiting")),
+    (COMPLETED, _("Completed")),
+    (FAILED, _("Failed")),
+]
+
+
 class AutomationInstance(models.Model):
-    automation = models.ForeignKey(
-        "djangocms_automation.Automation",
+    automation_content = models.ForeignKey(
+        "djangocms_automation.AutomationContent",
         blank=False,
         on_delete=models.CASCADE,
-        verbose_name=_("Automation"),
+        verbose_name=_("Automation Content"),
     )
-    testing = models.ForeignKey(
-        "djangocms_automation.AutomationContent",
-        blank=True,
-        null=True,
-        on_delete=models.SET_NULL,
-        verbose_name=_("Testing Content"),
+    initial_data = models.JSONField(
+        verbose_name=_("Initial Data"),
+        default=dict,
     )
     data = models.JSONField(
         verbose_name=_("Data"),
@@ -48,7 +60,7 @@ class AutomationInstance(models.Model):
         return super().save(*args, **kwargs)
 
     def get_key(self):
-        return hashlib.sha1(f"{self.automation_id}-{self.id}".encode("utf-8")).hexdigest()
+        return hashlib.sha1(f"{self.automation_content.automation_id}-{self.id}".encode("utf-8")).hexdigest()
 
     @classmethod
     def delete_history(cls, days=30):
@@ -56,7 +68,7 @@ class AutomationInstance(models.Model):
         return automations.delete()
 
     def __str__(self):
-        return f"<AutomationInstance for {self.automation}>"
+        return f"<AutomationInstance for {self.automation_content.automation.name} ({self.id})>"
 
     class Meta:
         verbose_name = _("Execution Instance")
@@ -68,13 +80,19 @@ class AutomationAction(models.Model):
         AutomationInstance,
         on_delete=models.CASCADE,
     )
+    state = models.CharField(
+        max_length=20,
+        choices=STATES,
+        default="PENDING",
+        verbose_name=_("State"),
+    )
     previous = models.ForeignKey(
         "djangocms_automation.AutomationAction",
         on_delete=models.SET_NULL,
         null=True,
         verbose_name=_("Previous action"),
     )
-    status = models.UUIDField(
+    plugin_ptr = models.UUIDField(
         blank=True,
         verbose_name=_("Status"),
     )
@@ -123,9 +141,16 @@ class AutomationAction(models.Model):
         default=dict,
     )
 
+    def mark_completed(self, message="", result=None):
+        self.finished = now()
+        self.state = COMPLETED
+        self.message = message or ""
+        self.result = result or {}
+        self.save(update_fields=["finished", "message", "state", "result"])
+
     @property
     def data(self):
-        return self.automation.data
+        return self.automation_instance.data
 
     def hours_since_created(self) -> float:
         """returns the number of hours since creation of node, 0 if finished"""
@@ -166,7 +191,7 @@ class AutomationAction(models.Model):
         return users
 
     def __str__(self):
-        return f"<ATM {self.status} {self.message} ({self.id})>"
+        return f"<ATM {self.plugin_ptr} {self.message} ({self.id})>"
 
     def __repr__(self):
         return self.__str__()

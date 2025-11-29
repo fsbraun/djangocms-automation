@@ -36,6 +36,7 @@ class AutomationPlugin(CMSPluginBase):
             {
                 "title": self.name,
                 "instance": instance,
+                "end": any(plugin.plugin_type == "EndModifier" for plugin in instance.child_plugin_instances or []),
             }
         )
         return context
@@ -128,6 +129,8 @@ class AutomationAction(AutomationPlugin):
     name = _("Example action")
     module = Module.ACTION
 
+    model = models.BaseActionPluginModel
+
     render_template = "djangocms_automation/plugins/action.html"
 
     allow_children = True
@@ -170,3 +173,10 @@ class OpenAIModifier(ModifierPlugin):
     name = _("OpenAI")
     css_class = "openai"
     icon = "bi-openai"
+
+
+@register_automation_plugin
+class DataModifier(ModifierPlugin):
+    name = _("Data")
+    css_class = "data"
+    icon = "bi-database"

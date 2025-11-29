@@ -65,13 +65,14 @@ class TriggerSelectWidget(forms.Select):
             schema_json = "{}"
             desc_html = _("No trigger selected.")
 
-        info_block = (
-            f'<div id="trigger-description" style="margin-top:0.75rem; padding:0.5rem; background:#var(--hairline-color); border-left:3px solid #0066cc; font-size:14px;">{desc_html}</div>'
-            '<details id="trigger-schema-details" style="margin-top:0.5rem;">'
-            f'<summary style="cursor:pointer; font-weight:500;">{_("Schema details for input data")}</summary>'
-            f'<pre id="trigger-schema" style="margin-top:0.5rem; background:#f8f9fa; border:1px solid #ddd; padding:0.5rem; max-height:24rem; overflow:auto; font-size:12px;">{escape(schema_json)}</pre>'
-            "</details>"
-        )
+        info_block = f'<div id="trigger-description" style="margin-top:0.75rem; padding:0.5rem; background:#var(--hairline-color); border-left:3px solid #0066cc; font-size:14px;">{desc_html}</div>'
+        if schema_json != "{}":
+                info_block += (
+                '<details id="trigger-schema-details" style="margin-top:0.5rem;">'
+                f'<summary style="cursor:pointer; font-weight:500;">{_("Schema details for input data")}</summary>'
+                f'<pre id="trigger-schema" style="margin-top:0.5rem; background:#f8f9fa; border:1px solid #ddd; padding:0.5rem; max-height:24rem; overflow:auto; font-size:12px;">{escape(schema_json)}</pre>'
+                "</details>"
+            )
 
         html = "".join(select_html_parts) + info_block
         return mark_safe(html)

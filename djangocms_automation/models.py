@@ -1,15 +1,14 @@
 import uuid
 
 from django.conf import settings
-from django.db import models
+from django.db import models, transaction
 from django.db.models import Q
-from django.utils.timezone import now
 from django.utils.translation import gettext_lazy as _
 
-from cms.models import CMSPlugin
+from cms.models import CMSPlugin, Placeholder
 from cms.models.fields import PlaceholderRelationField
 
-from .instances import AutomationAction  # noqa F401
+from .instances import AutomationInstance, AutomationAction  # noqa F401
 from .services import service_registry
 from .triggers import trigger_registry
 
@@ -70,6 +69,29 @@ class AutomationTrigger(models.Model):
 
     def get_definition(self):
         return trigger_registry.get(self.type)
+
+    def trigger_execution(self, data=None, start: bool = True):
+        placeholder = Placeholder.objects.get_for_obj(self.automation_content).get(slot=self.slot)
+        plugin = placeholder.get_plugins().first()
+        plugin, _ = plugin.get_plugin_instance()
+
+        with transaction.atomic():
+            instance = AutomationInstance.objects.create(
+                automation_content=self.automation_content,
+                data=data or {},
+                initial_data=data or {},
+            )
+            action = AutomationAction.objects.create(
+                previous=None,
+                automation_instance=instance,
+                plugin_ptr=plugin.uuid,
+                finished=None,
+            )
+        if start:
+            from .tasks import execute_action
+
+            execute_action.enqueue(action.pk, data=data)
+
 
     def __str__(self):
         type = trigger_registry.get(self.type)
@@ -147,10 +169,21 @@ class AutomationPluginModel(CMSPlugin):
         help_text=_("Optional comment about this automation step"),
     )
 
-    def execute(self, action, single_step: bool = False):
+    def execute(self, action: AutomationAction, data: dict, single_step: bool = False):
         """Execute the plugin logic for the given action."""
         raise NotImplementedError("Subclasses must implement the execute method.")
 
+    def get_next_action(self, action: AutomationAction):
+        """Get the next action based on the plugin structure."""
+        next_plugin = self.next_plugin_instance or self.parent
+        if next_plugin:
+            return AutomationAction.objects.create(
+                previous=action,
+                automation_instance=action.automation_instance,
+                plugin_ptr=next_plugin.uuid,
+                finished=None,
+            )
+        return None
 
 class ConditionalPluginModel(AutomationPluginModel):
     """Model for 'Conditional' automation plugin."""
@@ -211,3 +244,8 @@ class SplitPluginModel(CMSPlugin):
         if not self.child_plugin_instances or len(self.child_plugin_instances) == 0:
             return [self.no_paths]
         return []
+
+class BaseActionPluginModel(AutomationPluginModel):
+    """Base model for action plugins that perform tasks."""
+    pass
+

@@ -45,7 +45,7 @@ class AutomationActionInline(admin.TabularInline):
     model = AutomationAction
     extra = 0
     fields = (
-        "status",
+        "state",
         "message",
         "requires_interaction",
         "interaction_user",
@@ -54,31 +54,29 @@ class AutomationActionInline(admin.TabularInline):
         "finished",
         "locked",
     )
-    readonly_fields = ("created", "finished")
+    readonly_fields = ("state", "created", "finished")
     can_delete = False
 
 
 @admin.register(AutomationInstance)
 class AutomationInstanceAdmin(admin.ModelAdmin):
-    list_display = ("id", "automation", "created", "updated")
-    list_filter = ("automation", "created")
-    search_fields = ("key", "automation__name")
+    list_display = ("id", "automation_content__automation", "created", "updated")
+    list_filter = ("automation_content__automation", "created")
+    search_fields = ("key", "automation_content__automation__name")
     readonly_fields = ("key", "created", "updated", "data_display")
     inlines = [AutomationActionInline]
     fieldsets = (
-        (None, {"fields": ("automation", "finished", "key")}),
-        ("Timing", {"fields": ("paused_until", "created", "updated")}),
-        ("Data", {"fields": ("data_display",), "classes": ("collapse",)}),
+        (None, {"fields": ("key", ("created", "updated"))}),
+        (_("Data"), {"fields": ("data_display",), "classes": ("collapse",)}),
     )
 
+    @admin.display(description=_("Current data"))
     def data_display(self, obj):
         """Display JSON data in a formatted, readable way."""
         if obj.data:
             formatted_json = json.dumps(obj.data, indent=2, ensure_ascii=False)
             return format_html('<pre style="margin: 0;">{}</pre>', formatted_json)
         return "-"
-
-    data_display.short_description = "Data (formatted)"
 
 
 class APIKeyAdminForm(forms.ModelForm):
@@ -155,8 +153,6 @@ class AutomationTriggerAdmin(ChangeListActionsMixin, admin.ModelAdmin):
         "position",
     )
     list_filter = ("automation_content",)
-
-    # change_form_template = "djangocms_frontend/admin/base.html"
 
     class Media:
         js = ("djangocms_automation/js/trigger_type_change.js",)

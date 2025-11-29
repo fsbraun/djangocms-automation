@@ -24,24 +24,17 @@ class AutomationToolbar(CMSToolbar):
         # Create the main Automation menu
         menu = self.toolbar.get_or_create_menu("automation-menu", _("Automation"))
 
-        # Add "Triggers" entry that opens the changelist in a modal, filtered by automation_content
-        url = reverse("admin:djangocms_automation_automationtrigger_changelist")
-        url += f"?automation_content={automation_content.pk}"
-        menu.add_modal_item(_("Triggers"), url)
+        # Create a submenu for triggers
+        trigger_menu = menu.get_or_create_menu("automation-trigger-submenu", _("Triggers"))
+        self.populate_trigger_menu(trigger_menu, automation_content)
 
 
-@toolbar_pool.register
-class AutomationTriggerToolbar(CMSToolbar):
-    """Adds a 'Triggers' menu to the CMS toolbar with quick access links."""
-
-    def x_populate(self):
+    def populate_trigger_menu(self, menu, automation_content):
         if not isinstance(self.toolbar.get_object(), AutomationContent):  # or not self.toolbar.edit_mode_active:
             return
         user = self.request.user
         can_add = user.has_perm("djangocms_automation.add_automationtrigger")
         can_change = user.has_perm("djangocms_automation.change_automationtrigger")
-
-        menu = self.toolbar.get_or_create_menu("automation-trigger-menu", _("Triggers"))
 
         if can_add:
             url = (
@@ -66,3 +59,9 @@ class AutomationTriggerToolbar(CMSToolbar):
                 else:
                     # User can see list (due to add?) but cannot change individual triggers
                     menu.add_disabled_item(label)
+
+        # Add "Triggers" entry that opens the changelist in a modal, filtered by automation_content
+        menu.add_break()
+        url = reverse("admin:djangocms_automation_automationtrigger_changelist")
+        url += f"?automation_content={automation_content.pk}"
+        menu.add_modal_item(_("Triggers"), url)

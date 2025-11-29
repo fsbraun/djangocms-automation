@@ -58,6 +58,7 @@ class AutomationTriggerAdminForm(forms.ModelForm):
             "automation"
         ).current_content()
         self.fields["automation_content"].widget = forms.HiddenInput()
+        self.fields["position"].widget = forms.HiddenInput()
 
     def clean(self):
         """Validate and prepare config data."""

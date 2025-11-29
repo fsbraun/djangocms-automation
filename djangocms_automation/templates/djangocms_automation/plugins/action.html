@@ -1,5 +1,6 @@
 {% load cms_tags %}
-<div class="automation-step">
+<div class="automation-step{% if end %} end{% endif %}">
+    {% include "djangocms_automation/includes/add.html" %}
    <div class="automation-action automation-item">
         <div class="card-title">
             <svg width="16" height="16"><use xlink:href="#bi-stars"></use></svg> {{ title }}

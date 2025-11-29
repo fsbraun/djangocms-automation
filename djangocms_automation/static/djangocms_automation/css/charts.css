@@ -37,6 +37,19 @@ body {
         margin-bottom: 20px;
     }
 
+    .automation-step, .automation-group {
+        position: relative;
+    }
+
+    .add-button {
+        position: absolute;
+        left: 50%;
+        transform: translateX(-50%);
+        top: -28px;
+        cursor: pointer;
+        z-index: 10;
+        background: var(--dca-white);
+    }
     .automation-group {
         z-index: 1;
     }
