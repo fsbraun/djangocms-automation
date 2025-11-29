@@ -1,17 +1,14 @@
 import datetime
-from typing import Iterable
-from django.db import models, transaction
 from django.db.models import Q
 from django.utils.timezone import now
 from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
 from django.tasks import task
-from django.utils.translation import gettext_lazy as _
 
 from cms.models import CMSPlugin, Placeholder
 from cms.utils.plugins import downcast_plugins, get_plugins_as_layered_tree
 
-from .instances import AutomationAction, STATES, PENDING, RUNNING, WAITING, COMPLETED, FAILED
+from .instances import AutomationAction, PENDING, RUNNING, COMPLETED, FAILED
 from .models import AutomationContent
 
 
@@ -31,7 +28,7 @@ def run_pending_automations(timestamp: datetime.datetime | None = None):
         finished__isnull=True,
         automation_instance__testing=None,
     ).values_list("automation_instance__automation_content_id", flat=True)
-    automation_contents = list(
+    list(
         AutomationContent.objects.filter(pk__in=automation_actions, automation__is_active=True).select_related(
             "automation"
         )

@@ -27,13 +27,13 @@ def automation_content(admin_user, db):
 @pytest.mark.django_db
 def test_automation_view_creates_missing_placeholders_and_assigns(rf, automation_content):
     # Create two triggers with distinct slots
-    t1 = AutomationTrigger.objects.create(
+    AutomationTrigger.objects.create(
         automation_content=automation_content,
         slot="start",
         type="click",
         position=0,
     )
-    t2 = AutomationTrigger.objects.create(
+    AutomationTrigger.objects.create(
         automation_content=automation_content,
         slot="pause",
         type="click",

@@ -1,9 +1,7 @@
 """End-to-end test: run an automation via AutomationTrigger and execute actions."""
 
-import uuid
 
 import pytest
-from django.conf import settings
 
 from cms.api import add_plugin
 from cms.models import Placeholder
@@ -12,8 +10,7 @@ from cms.plugin_pool import plugin_pool
 
 from djangocms_automation.instances import AutomationAction
 from djangocms_automation.models import Automation, AutomationContent, AutomationTrigger, BaseActionPluginModel
-from djangocms_automation import tasks
-from djangocms_automation.instances import COMPLETED, RUNNING
+from djangocms_automation.instances import COMPLETED
 
 
 class DummyActionPluginModel(BaseActionPluginModel):

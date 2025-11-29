@@ -4,7 +4,6 @@ import uuid
 from types import SimpleNamespace
 
 import pytest
-from django.conf import settings
 
 from djangocms_automation.models import (
     Automation,
