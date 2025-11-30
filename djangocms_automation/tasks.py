@@ -64,7 +64,7 @@ def create_datastructure_for_automation(automation_action: AutomationAction) -> 
     )
     plugins = list(CMSPlugin.objects.filter(placeholder__in=placeholders, language=settings.LANGUAGE_CODE))
     plugins = list(downcast_plugins(plugins, placeholders, select_placeholder=True))
-    root_plugins = get_plugins_as_layered_tree(list(plugins))
+    root_plugins = get_plugins_as_layered_tree(plugins)
     _link_tree(root_plugins)
     return {plugin.uuid: plugin for plugin in plugins if hasattr(plugin, "uuid")}
 
@@ -80,7 +80,7 @@ def execute_action(action_id: int, data: dict, single_step: bool = False):
 
     try:
         next_action = None
-        status, output = action._plugin.execute(action, data=data, single_step=single_step)
+        status, output = action._plugin.execute(action, data=data, single_step=single_step, plugin_dict=plugin_dict)
     except Exception as e:
         action.state = FAILED
         action.result = dict(error=str(e), traceback=str(e.__traceback__))
@@ -93,11 +93,15 @@ def execute_action(action_id: int, data: dict, single_step: bool = False):
 
     if status == COMPLETED:
         action.finished = now()
-        next_action = action._plugin.get_next_action(action)
     action.save()
 
-    if next_action and not single_step:
-        execute_action.enqueue(next_action.pk, data=output)
+    next_actions = action._plugin.get_next_actions(action)
+    if next_actions and not single_step:
+        for next_action in next_actions:
+            execute_action.enqueue(next_action.pk, data=output)
+    elif action.parent is not None and action.parent.finished is None:
+        # Re-enqueue parent action if not finished
+        execute_action.enqueue(action.parent.pk, data=data)
 
 
 def execute_pending_automations(timestamp: datetime.datetime | None = None):

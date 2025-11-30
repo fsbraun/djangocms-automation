@@ -6,7 +6,7 @@ from django.utils.translation import gettext_lazy as _
 from cms.models import CMSPlugin, Placeholder
 from cms.models.fields import PlaceholderRelationField
 
-from .instances import AutomationInstance, AutomationAction  # noqa F401
+from .instances import AutomationInstance, AutomationAction, RUNNING, PENDING, COMPLETED  # noqa F401
 from .services import service_registry
 from .triggers import trigger_registry
 
@@ -81,6 +81,7 @@ class AutomationTrigger(models.Model):
             )
             action = AutomationAction.objects.create(
                 previous=None,
+                parent=None,
                 automation_instance=instance,
                 plugin_ptr=plugin.uuid,
                 finished=None,
@@ -166,21 +167,29 @@ class AutomationPluginModel(CMSPlugin):
         help_text=_("Optional comment about this automation step"),
     )
 
-    def execute(self, action: AutomationAction, data: dict, single_step: bool = False):
+    def execute(self, action: AutomationAction, data: dict, single_step: bool = False, **kwargs):
         """Execute the plugin logic for the given action."""
         raise NotImplementedError("Subclasses must implement the execute method.")
 
-    def get_next_action(self, action: AutomationAction):
+    def get_next_actions(self, action: AutomationAction):
         """Get the next action based on the plugin structure."""
-        next_plugin = self.next_plugin_instance or self.parent
+        if action.state != COMPLETED:
+            return []
+
+        next_plugin = self.next_plugin_instance
         if next_plugin:
-            return AutomationAction.objects.create(
-                previous=action,
-                automation_instance=action.automation_instance,
-                plugin_ptr=next_plugin.uuid,
-                finished=None,
-            )
-        return None
+            # Only create action if the plugin has uuid (is an AutomationPluginModel)
+            if hasattr(next_plugin, "uuid"):
+                return [
+                    AutomationAction.objects.create(
+                        previous=action,
+                        parent=action.parent,
+                        automation_instance=action.automation_instance,
+                        plugin_ptr=next_plugin.uuid,
+                        finished=None,
+                    )
+                ]
+        return []
 
 
 class ConditionalPluginModel(AutomationPluginModel):
@@ -228,7 +237,7 @@ class ConditionalPluginModel(AutomationPluginModel):
         return messages
 
 
-class SplitPluginModel(CMSPlugin):
+class SplitPluginModel(AutomationPluginModel):
     class Meta:
         verbose_name = _("Split Plugin")
         verbose_name_plural = _("Split Plugins")
@@ -242,6 +251,43 @@ class SplitPluginModel(CMSPlugin):
         if not self.child_plugin_instances or len(self.child_plugin_instances) == 0:
             return [self.no_paths]
         return []
+
+    def get_next_actions(self, action: AutomationAction):
+        if action.state == RUNNING and not action.children.exists():
+            next_actions = []
+            for child in self.child_plugin_instances:
+                if child.plugin_type == "AutomationPath" and child.child_plugin_instances:
+                    # Downcast to get the actual plugin instance with uuid
+                    child_instance, _ = child.child_plugin_instances[0].get_plugin_instance()
+                    next_actions.append(
+                        AutomationAction.objects.create(
+                            previous=action,
+                            parent=action,
+                            automation_instance=action.automation_instance,
+                            plugin_ptr=child_instance.uuid,
+                            finished=None,
+                        )
+                    )
+            return next_actions
+        return super().get_next_actions(action)
+
+    def execute(
+        self,
+        action: AutomationAction,
+        data: dict,
+        single_step: bool = False,
+        plugin_dict: dict[CMSPlugin] | None = None,
+    ):
+        path_ends = [
+            child.child_plugin_instances[-1] for child in self.child_plugin_instances if child.child_plugin_instances
+        ]
+        path_ends = AutomationAction.objects.filter(
+            plugin_ptr__in=[p.uuid for p in path_ends], automation_instance=action.automation_instance
+        )
+        completed = all(path.finished for path in path_ends)
+        if path_ends and completed:
+            return COMPLETED, {}
+        return RUNNING, {}
 
 
 class BaseActionPluginModel(AutomationPluginModel):

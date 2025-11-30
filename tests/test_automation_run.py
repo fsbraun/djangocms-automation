@@ -18,7 +18,7 @@ class DummyActionPluginModel(BaseActionPluginModel):
     class Meta:
         app_label = "djangocms_automation"
 
-    def execute(self, action: AutomationAction, data=None, single_step=False):
+    def execute(self, action: AutomationAction, data=None, single_step=False, plugin_dict=None):
         """Execute the action and return status."""
         # Simple successful execution with output
         output = {"input": data, "plugin_id": str(self.uuid)}
@@ -86,7 +86,6 @@ def test_run_automation_through_chain(automation_content, admin_user, settings):
         placeholder=placeholder,
         plugin_type="DummyActionPlugin",
         language=settings.LANGUAGE_CODE,
-        parent=p1,
         position="first-child",
     )
     p2 = DummyActionPluginModel.objects.get(pk=p2.pk)
@@ -95,7 +94,6 @@ def test_run_automation_through_chain(automation_content, admin_user, settings):
         placeholder=placeholder,
         plugin_type="DummyActionPlugin",
         language=settings.LANGUAGE_CODE,
-        parent=p2,
         position="last-child",
     )
     p3 = DummyActionPluginModel.objects.get(pk=p3.pk)
@@ -128,3 +126,93 @@ def test_run_automation_through_chain(automation_content, admin_user, settings):
         assert action.finished is not None
         assert "input" in action.result
         assert "plugin_id" in action.result
+
+
+@pytest.mark.django_db
+def test_run_automation_with_split_children_executes_first_branch_only(automation_content, admin_user, settings):
+    """Create a split with two path children, each containing a DummyAction.
+
+    This verifies that AutomationSplit creates actions for all AutomationPath children,
+    and the automation continues through the paths.
+    """
+    settings.TASKS = {
+        "default": {
+            "BACKEND": "django.tasks.backends.immediate.ImmediateBackend",
+        }
+    }
+
+    trigger = AutomationTrigger.objects.create(
+        automation_content=automation_content,
+        slot="start",
+        type="click",
+        position=0,
+    )
+
+    from django.contrib.contenttypes.models import ContentType
+
+    content_type = ContentType.objects.get_for_model(AutomationContent)
+    placeholder = Placeholder.objects.get_or_create(
+        content_type=content_type,
+        object_id=automation_content.pk,
+        slot="start",
+    )[0]
+
+    # Create initial action plugin
+    add_plugin(
+        placeholder=placeholder,
+        plugin_type="DummyActionPlugin",
+        language=settings.LANGUAGE_CODE,
+    )
+
+    # Create split plugin as child
+    split = add_plugin(
+        placeholder=placeholder,
+        plugin_type="AutomationSplit",
+        language=settings.LANGUAGE_CODE,
+        position="last-child",
+    )
+
+    # Create two path children under split
+    path1 = add_plugin(
+        placeholder=placeholder,
+        plugin_type="AutomationPath",
+        language=settings.LANGUAGE_CODE,
+        target=split,
+    )
+
+    path2 = add_plugin(
+        placeholder=placeholder,
+        plugin_type="AutomationPath",
+        language=settings.LANGUAGE_CODE,
+        target=split,
+    )
+
+    # Add action plugins under each path
+    add_plugin(
+        placeholder=placeholder,
+        plugin_type="DummyActionPlugin",
+        language=settings.LANGUAGE_CODE,
+        target=path1,
+    )
+
+    add_plugin(
+        placeholder=placeholder,
+        plugin_type="DummyActionPlugin",
+        language=settings.LANGUAGE_CODE,
+        target=path2,
+    )
+
+    # Execute
+    trigger.trigger_execution(data={"split": True}, start=True)
+
+    instance = automation_content.automationinstance_set.first()
+    assert instance is not None
+
+    actions = AutomationAction.objects.filter(automation_instance=instance).order_by("created")
+    # Should have actions for: initial action, split (creates 2 path actions), and 2 nested actions
+    assert actions.count() == 4
+    assert all(action.state == COMPLETED for action in actions)
+
+    # All executed actions should be completed
+    for a in actions:
+        assert a.state == COMPLETED

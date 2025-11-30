@@ -92,6 +92,13 @@ class AutomationAction(models.Model):
         null=True,
         verbose_name=_("Previous action"),
     )
+    parent = models.ForeignKey(
+        "djangocms_automation.AutomationAction",
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="children",
+        verbose_name=_("Parent action"),
+    )
     plugin_ptr = models.UUIDField(
         blank=True,
         verbose_name=_("Status"),
