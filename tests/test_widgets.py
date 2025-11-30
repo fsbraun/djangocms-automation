@@ -1,9 +1,6 @@
 """Tests for TriggerSelectWidget and ConditionBuilderWidget rendering and value extraction."""
 
 import json
-import pytest
-from django import forms
-from django.utils.translation import gettext_lazy as _
 
 from djangocms_automation.widgets import TriggerSelectWidget, ConditionBuilderWidget
 from djangocms_automation.triggers import trigger_registry
@@ -48,7 +45,7 @@ def test_condition_builder_widget_renders_and_extracts():
     }
     html = widget.render("condition", value)
     # Should contain hidden input and builder container
-    assert "type=\"hidden\"" in html
+    assert 'type="hidden"' in html
     assert "condition-builder-widget" in html
     # Should serialize value as JSON
     assert "status" in html and "count" in html
@@ -61,5 +58,7 @@ def test_condition_builder_widget_renders_and_extracts():
     assert parsed["logic"] == "and"
     assert len(parsed["conditions"]) == 2
     # If all fields are empty, returns empty string
-    empty_data = {"condition": json.dumps({"logic": "and", "conditions": [{"field": "", "operator": "==", "value": ""}]})}
+    empty_data = {
+        "condition": json.dumps({"logic": "and", "conditions": [{"field": "", "operator": "==", "value": ""}]})
+    }
     assert widget.value_from_datadict(empty_data, None, "condition") == ""

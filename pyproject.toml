@@ -11,6 +11,7 @@ license = "BSD-3-Clause"
 authors = [
   { name = "Fabian Braun", email = "fsbraun@gmx.de" },
 ]
+
 requires-python = ">=3.9"
 classifiers = [
   "Development Status :: 3 - Alpha",
@@ -68,10 +69,10 @@ lint.mccabe.max-complexity = 5
 
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "tests.settings"
-python_files = ["tests.py", "test_*.py", "*_tests.py"]
-addopts = ["--tb=short", "--strict-markers", "--nomigrations"]
-testpaths = ["tests"]
-pythonpath = ["."]
+python_files = [ "tests.py", "test_*.py", "*_tests.py" ]
+addopts = [ "--tb=short", "--strict-markers", "--nomigrations" ]
+testpaths = [ "tests" ]
+pythonpath = [ "." ]
 markers = [
   "django_db: mark test as requiring database access",
 ]
