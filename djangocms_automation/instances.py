@@ -60,7 +60,7 @@ class AutomationInstance(models.Model):
         return super().save(*args, **kwargs)
 
     def get_key(self):
-        return hashlib.sha1(f"{self.automation_content.automation_id}-{self.id}".encode("utf-8")).hexdigest()
+        return hashlib.sha1(f"{self.automation_content.automation_id}-{self.id}".encode()).hexdigest()
 
     @classmethod
     def delete_history(cls, days=30):

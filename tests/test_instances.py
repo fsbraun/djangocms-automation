@@ -46,16 +46,12 @@ def test_automation_instance_key_and_str(automation_content):
     )
     # key is computed on save; first save happens before id exists
     assert inst.key
-    expected_initial = (
-        __import__("hashlib").sha1(f"{automation_content.automation_id}-{None}".encode("utf-8")).hexdigest()
-    )
+    expected_initial = __import__("hashlib").sha1(f"{automation_content.automation_id}-{None}".encode()).hexdigest()
     assert inst.key == expected_initial
     # On subsequent save, key updates to include real id
     inst.save()
     inst.refresh_from_db()
-    expected_after = (
-        __import__("hashlib").sha1(f"{automation_content.automation_id}-{inst.id}".encode("utf-8")).hexdigest()
-    )
+    expected_after = __import__("hashlib").sha1(f"{automation_content.automation_id}-{inst.id}".encode()).hexdigest()
     assert inst.key == expected_after
     # __str__ contains automation name and id
     s = str(inst)

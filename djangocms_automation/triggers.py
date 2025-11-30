@@ -14,7 +14,7 @@ Concrete example triggers are provided for "Click" and "Mail" events.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Callable, Optional
+from typing import Any, Callable
 
 from django import forms
 from django.contrib.admin import widgets
@@ -44,12 +44,12 @@ class Trigger(forms.Form):
     name: str
     description: str
     icon: str
-    data_schema: Dict[str, Any] = {}
+    data_schema: dict[str, Any] = {}
 
     def validate_payload(
         self,
-        payload: Dict[str, Any],
-        validator: Optional[Callable[[Dict[str, Any], Dict[str, Any]], None]] = None,
+        payload: dict[str, Any],
+        validator: Callable[[dict[str, Any], dict[str, Any]], None] | None = None,
         raise_errors: bool = True,
     ) -> bool:
         """Validate a payload against this trigger's ``data_schema``.
@@ -103,7 +103,7 @@ class TriggerRegistry:
     """Registry for available trigger definitions."""
 
     def __init__(self):
-        self._triggers: Dict[str, Trigger] = {}
+        self._triggers: dict[str, Trigger] = {}
 
     def register(self, trigger: Trigger):
         self._triggers[trigger.id] = trigger
@@ -114,10 +114,10 @@ class TriggerRegistry:
     def get(self, trigger_id: str) -> Trigger | None:
         return self._triggers.get(trigger_id)
 
-    def all(self) -> List[Trigger]:
+    def all(self) -> list[Trigger]:
         return list(self._triggers.values())
 
-    def get_choices(self) -> List[tuple[str, str]]:
+    def get_choices(self) -> list[tuple[str, str]]:
         return [(t.id, t.name) for t in self._triggers.values()]
 
 

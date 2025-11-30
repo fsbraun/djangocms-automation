@@ -1,5 +1,5 @@
 import json
-from typing import Iterable
+from collections.abc import Iterable
 
 from django import forms
 from django.utils.html import escape

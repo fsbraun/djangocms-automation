@@ -225,7 +225,7 @@ class AutomationTriggerAdmin(ChangeListActionsMixin, admin.ModelAdmin):
             from django.http import HttpResponseRedirect
             from django.urls import reverse
 
-            url = reverse("admin:%s_%s_change" % (obj._meta.app_label, obj._meta.model_name), args=[obj.pk])
+            url = reverse(f"admin:{obj._meta.app_label}_{obj._meta.model_name}_change", args=[obj.pk])
             return HttpResponseRedirect(url)
         return super().response_change(request, obj)
 
