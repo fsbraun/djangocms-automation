@@ -21,6 +21,7 @@ INSTALLED_APPS = [
     "sekizai",
     "djangocms_automation",
     "djangocms_versioning",
+    "djangocms_form_builder",
 ]
 
 MIDDLEWARE = [

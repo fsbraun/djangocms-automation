@@ -2,5 +2,6 @@ pytest-django
 pytest-cov
 coverage[toml]
 djangocms-versioning
+djangocms-form-builder
+djangocms-text
 jsonschema>=4.22
-
