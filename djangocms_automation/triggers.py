@@ -17,8 +17,11 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from django import forms
+from django.apps import apps
 from django.contrib.admin import widgets
 from django.utils.translation import gettext_lazy as _
+
+from .utilities.json import cleaned_data_to_json_serializable
 
 try:  # Optional dependency, added to pyproject but keep graceful fallback
     from jsonschema import Draft202012Validator, ValidationError
@@ -210,12 +213,6 @@ class TimerTrigger(Trigger):
         required=True,
         widget=widgets.AdminSplitDateTime(),
     )
-    timezone = forms.CharField(
-        label=_("Timezone"),
-        initial="UTC",
-        help_text=_("IANA timezone identifier (e.g., 'Europe/Berlin')"),
-        required=False,
-    )
     recurrence_frequency = forms.ChoiceField(
         label=_("Recurrence frequency"),
         choices=[
@@ -307,11 +304,71 @@ class CodeTrigger(Trigger):
     data_schema = {}
 
 
+class FormSubmissionTrigger(Trigger):
+    id = "form_submission"
+    name = _("Form Submission")
+    description = _("Starts when a form is submitted.")
+    icon = "bi-ui-checks"
+    data_schema = {}
+
+
+if apps.is_installed("djangocms_form_builder"):
+    from djangocms_form_builder.actions import FormAction, register
+
+    @register
+    class AutomationAction(FormAction):
+        verbose_name = _("Trigger automation")
+
+        class Meta:
+            entangled_fields = {
+                "action_parameters": [
+                    "trigger",
+                ]
+            }
+
+        trigger = forms.ModelChoiceField(
+            label=_("Automation to trigger"),
+            queryset=None,  # Set in __init__
+            required=True,
+            help_text=_("Select an automation to start upon form submission."),
+        )
+
+        def __init__(self, *args, **kwargs):
+            from djangocms_automation.models import Automation
+
+            super().__init__(*args, **kwargs)
+            qs = Automation.objects.filter(
+                is_active=True,
+                contents__isnull=False,
+                contents__triggers__type="form_submission",
+            ).distinct()
+            if args:
+                self.fields["trigger"].queryset = qs
+
+        def execute(self, form, request):
+            from .models import AutomationTrigger
+
+            automation = self.get_parameter(form, "trigger")
+            qs = AutomationTrigger.objects.filter(
+                automation_content__automation_id=automation["pk"],
+                type="form_submission",
+            )
+            for trigger in qs:
+                trigger.trigger_execution(
+                    data={
+                        "form_data": cleaned_data_to_json_serializable(form.cleaned_data),
+                        "user_id": request.user.pk if request.user.is_authenticated else None,
+                    },
+                    start=True,
+                )
+
+
 # Register example triggers
 trigger_registry.register(ClickTrigger)
 trigger_registry.register(MailTrigger)
 trigger_registry.register(TimerTrigger)
 trigger_registry.register(CodeTrigger)
+trigger_registry.register(FormSubmissionTrigger)
 
 __all__ = [
     "Trigger",

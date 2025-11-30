@@ -69,7 +69,6 @@ class TestAutomationTriggerAdminForm:
 
         # Check timer-specific fields are in the form
         assert "scheduled_at" in form.fields
-        assert "timezone" in form.fields
         assert "recurrence_frequency" in form.fields
         assert "recurrence_interval" in form.fields
         assert "recurrence_end_date" in form.fields
@@ -131,7 +130,6 @@ class TestAutomationTriggerAdminForm:
         # Second fieldset should be timer config
         timer_fields = fieldsets[1][1]["fields"]
         assert "scheduled_at" in timer_fields
-        assert "timezone" in timer_fields
 
     def test_admin_get_trigger_with_obj(self, automation_content, request_factory, admin_site):
         """Admin get_trigger should return trigger class from object."""

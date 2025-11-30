@@ -2,14 +2,14 @@ import json
 
 from django import forms
 from django.contrib import admin
-from django.utils.html import format_html
+from django.utils.html import format_html, mark_safe
 from django.utils.translation import gettext_lazy as _
 
 from cms.admin.utils import ChangeListActionsMixin, GrouperModelAdmin
 
 from .forms import AutomationTriggerAdminForm
 from .models import Automation, AutomationContent, APIKey, AutomationTrigger
-from .instances import AutomationInstance, AutomationAction
+from .instances import AutomationInstance, AutomationAction, RUNNING, PENDING, FAILED
 from .triggers import trigger_registry
 
 
@@ -52,31 +52,62 @@ class AutomationActionInline(admin.TabularInline):
         "interaction_group",
         "created",
         "finished",
-        "locked",
     )
-    readonly_fields = ("state", "created", "finished")
+    readonly_fields = ("state", "message", "created", "finished")
     can_delete = False
 
 
 @admin.register(AutomationInstance)
 class AutomationInstanceAdmin(admin.ModelAdmin):
-    list_display = ("id", "automation_content__automation", "created", "updated")
+    list_display = ("id", "automation_content__automation", "is_success", "created", "updated")
     list_filter = ("automation_content__automation", "created")
     search_fields = ("key", "automation_content__automation__name")
-    readonly_fields = ("key", "created", "updated", "data_display")
+    readonly_fields = ("key", "created", "updated", "data_display", "error_message_display")
     inlines = [AutomationActionInline]
     fieldsets = (
         (None, {"fields": ("key", ("created", "updated"))}),
-        (_("Data"), {"fields": ("data_display",), "classes": ("collapse",)}),
+        (_("Data"), {"fields": ("data_display",)}),
+        (_("Error Messages"), {"fields": ("error_message_display",)}),
     )
 
-    @admin.display(description=_("Current data"))
+    @admin.display(description=_("Initial data"))
     def data_display(self, obj):
         """Display JSON data in a formatted, readable way."""
         if obj.data:
             formatted_json = json.dumps(obj.data, indent=2, ensure_ascii=False)
-            return format_html('<pre style="margin: 0;">{}</pre>', formatted_json)
+            return format_html("<pre>{}</pre>", formatted_json)
         return "-"
+
+    @admin.display(description=_("Error messages"))
+    def error_message_display(self, obj):
+        """Display error messages from failed actions."""
+        errors = obj.automationaction_set.filter(state=FAILED).values_list("result", flat=True)
+        if errors:
+            messages = [
+                format_html(
+                    "<details><summary>{}</summary><pre>{}</pre></details>",
+                    message.get("error", _("No error message provided.")),
+                    message.get("traceback", _("No traceback available.")),
+                )
+                for message in errors
+            ]
+            return mark_safe("\n".join(messages))
+        return "-"
+
+    @admin.display(description=_("Success"), boolean=True)
+    def is_success(self, obj):
+        """Indicate if the instance has failed actions."""
+        if obj.automationaction_set.filter(state__in=(RUNNING, PENDING)).exists():
+            return None  # Still running
+        return not obj.automationaction_set.filter(state=FAILED).exists()
+
+    def get_queryset(self, request):
+        return (
+            super()
+            .get_queryset(request)
+            .prefetch_related("automationaction_set")
+            .select_related("automation_content", "automation_content__automation")
+        )
 
 
 class APIKeyAdminForm(forms.ModelForm):

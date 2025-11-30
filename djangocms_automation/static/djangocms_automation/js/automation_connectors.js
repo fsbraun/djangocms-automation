@@ -259,7 +259,6 @@
     }
 
     function initWidthStyles(containers) {
-
         const recurseBranches = (branch) => {
             const branches = branch.querySelectorAll('& > .automation-group > .automation-branches > .automation-branch');
             if (!branches.length) {
@@ -278,11 +277,28 @@
         containers.forEach(recurseBranches);
     }
 
+    function initAddTriggerButton() {
+        const btn = document.getElementById('js-add-automation-trigger');
+        if (!btn) return;
+
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+
+            const url = btn.getAttribute('href');
+            if (!url) return;
+            const toobarButton = document.getElementById('cms-top')?.querySelector(`a[href="${url}"]`);
+            if (toobarButton) {
+                toobarButton.click();
+            }
+        });
+    }
 
     // Auto-initialize on DOM ready
     function initAutomationConnectors() {
         const containers = document.querySelectorAll('.automation-graph');
         initWidthStyles(containers);
+        initAddTriggerButton();
         setTimeout(() => {
             containers.forEach(container => {
                 if (!container._automationConnector) {

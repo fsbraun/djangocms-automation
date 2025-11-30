@@ -4,6 +4,7 @@ from django.utils.timezone import now
 from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
 from django.tasks import task
+import traceback
 
 from cms.models import CMSPlugin, Placeholder
 from cms.utils.plugins import downcast_plugins, get_plugins_as_layered_tree
@@ -82,8 +83,10 @@ def execute_action(action_id: int, data: dict, single_step: bool = False):
         next_action = None
         status, output = action._plugin.execute(action, data=data, single_step=single_step, plugin_dict=plugin_dict)
     except Exception as e:
+        tb_str = "".join(traceback.format_exception(type(e), e, e.__traceback__))
         action.state = FAILED
-        action.result = dict(error=str(e), traceback=str(e.__traceback__))
+        action.result = {"error": str(e), "traceback": tb_str}
+        action.finished = now()
         action.save()
         return
 

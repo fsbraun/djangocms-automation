@@ -240,3 +240,23 @@ body {
 .automation-icons {
     display: none;
 }
+
+#js-add-automation-trigger {
+    position: fixed;
+    top: 50vh;
+    left: 50vw;
+    transform: translate(-50%, -50%);
+    border-radius: var(--dca-button-radius, 40px);
+    border: var(--dca-black) 1px solid;
+    background: var(--dca-white);
+    color: var(--dca-black);
+    padding: 0.75em 2em;
+    cursor: pointer;
+    text-decoration: none;
+    box-shadow: 0 2px 8px color-mix(in srgb,var(--dca-black) 10%,transparent);
+    transition: background 0.2s, color 0.2s, box-shadow 0.2s;
+    &:hover {
+        background: var(--dca-secondary, var(--dca-primary));
+        box-shadow: 0 4px 16px color-mix(in srgb,var(--dca-black) 20%,transparent);
+    }
+}
