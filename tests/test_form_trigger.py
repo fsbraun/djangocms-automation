@@ -7,38 +7,13 @@ from django.contrib.contenttypes.models import ContentType
 
 from cms.api import add_plugin
 from cms.models import Placeholder
-from cms.plugin_base import CMSPluginBase
-from cms.plugin_pool import plugin_pool
 
-from djangocms_automation.instances import AutomationAction, COMPLETED
 from djangocms_automation.models import (
     Automation,
     AutomationContent,
     AutomationTrigger,
-    BaseActionPluginModel,
 )
 from djangocms_automation.triggers import FormSubmissionTrigger
-
-
-class DummyActionPluginModel(BaseActionPluginModel):
-    """Real CMSPlugin-based dummy action model for testing."""
-
-    class Meta:
-        app_label = "djangocms_automation"
-
-    def execute(self, action: AutomationAction, data=None, single_step=False, plugin_dict=None):
-        """Execute the action and return status."""
-        output = {"input": data, "plugin_id": str(self.uuid)}
-        return COMPLETED, output
-
-
-@plugin_pool.register_plugin
-class DummyActionPlugin(CMSPluginBase):
-    """CMS Plugin wrapper for DummyActionPluginModel."""
-
-    model = DummyActionPluginModel
-    name = "Dummy Action Plugin"
-    render_template = "djangocms_automation/plugins/action.html"
 
 
 @pytest.fixture
