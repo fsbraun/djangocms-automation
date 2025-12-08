@@ -122,6 +122,7 @@
                 // Field input
                 const fieldInput = document.createElement('input');
                 fieldInput.type = 'text';
+                fieldInput.setAttribute('code', '');
                 fieldInput.value = condition.field;
                 fieldInput.placeholder = 'Field name';
                 fieldInput.addEventListener('input', (e) => {
@@ -152,6 +153,7 @@
                 // Value input
                 const valueInput = document.createElement('input');
                 valueInput.type = 'text';
+                valueInput.setAttribute('code', '');
                 valueInput.value = condition.value;
                 valueInput.placeholder = 'Value';
                 valueInput.addEventListener('input', (e) => {

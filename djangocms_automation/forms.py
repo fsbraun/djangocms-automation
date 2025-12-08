@@ -105,3 +105,15 @@ class ConditionalPluginForm(forms.ModelForm):
         widgets = {
             "condition": widgets.ConditionBuilderWidget,
         }
+
+
+class MailActionDataForm(forms.Form):
+    """Data form for MailAction plugin with email-specific fields."""
+
+    subject = forms.CharField(label=_("Email Subject"), max_length=255, required=True)
+    body = forms.CharField(
+        label=_("Email Body"),
+        widget=forms.Textarea,
+        required=True,
+    )
+    recipient_email = forms.EmailField(label=_("Recipient Email"), required=True)

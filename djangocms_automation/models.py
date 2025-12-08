@@ -12,6 +12,12 @@ from .triggers import trigger_registry
 
 
 class AutomationContent(models.Model):
+    """Container for all versioned content of an automation.
+
+    Holds placeholders and triggers for potentially different versions of an automation.
+    Exists only in the site's default language (not translatable).
+    """
+
     automation = models.ForeignKey(
         "djangocms_automation.Automation", related_name="contents", on_delete=models.CASCADE
     )
@@ -36,6 +42,8 @@ class AutomationContent(models.Model):
 
 
 class Automation(models.Model):
+    """Top-level automation workflow definition."""
+
     name = models.CharField(max_length=255)
     is_active = models.BooleanField(default=True)
 
@@ -48,6 +56,8 @@ class Automation(models.Model):
 
 
 class AutomationTrigger(models.Model):
+    """Entry point that initiates an automation workflow execution."""
+
     automation_content = models.ForeignKey(AutomationContent, related_name="triggers", on_delete=models.CASCADE)
     slot = models.SlugField(
         verbose_name=_("Slot"),
@@ -76,8 +86,8 @@ class AutomationTrigger(models.Model):
         with transaction.atomic():
             instance = AutomationInstance.objects.create(
                 automation_content=self.automation_content,
-                data=data or {},
-                initial_data=data or {},
+                data=data or [],
+                initial_data=data or [],
             )
             action = AutomationAction.objects.create(
                 previous=None,
@@ -193,7 +203,7 @@ class AutomationPluginModel(CMSPlugin):
 
 
 class ConditionalPluginModel(AutomationPluginModel):
-    """Model for 'Conditional' automation plugin."""
+    """Plugin model for conditional branching based on evaluated expressions."""
 
     question = models.CharField(
         max_length=255,
@@ -238,6 +248,8 @@ class ConditionalPluginModel(AutomationPluginModel):
 
 
 class SplitPluginModel(AutomationPluginModel):
+    """Plugin model for parallel execution of multiple workflow paths."""
+
     class Meta:
         verbose_name = _("Split Plugin")
         verbose_name_plural = _("Split Plugins")

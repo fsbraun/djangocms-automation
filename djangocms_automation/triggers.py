@@ -355,10 +355,12 @@ if apps.is_installed("djangocms_form_builder"):
             )
             for trigger in qs:
                 trigger.trigger_execution(
-                    data={
-                        "form_data": cleaned_data_to_json_serializable(form.cleaned_data),
-                        "user_id": request.user.pk if request.user.is_authenticated else None,
-                    },
+                    data=[
+                        {
+                            "data": cleaned_data_to_json_serializable(form.cleaned_data),
+                            "user_id": request.user.pk if request.user.is_authenticated else None,
+                        }
+                    ],
                     start=True,
                 )
 

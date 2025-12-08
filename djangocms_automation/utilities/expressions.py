@@ -19,7 +19,7 @@ from typing import Any
 
 from django.forms import ValidationError
 
-__all__ = ["ExpressionError", "resolve_expression", "is_number_literal", "is_string_literal"]
+__all__ = ["ExpressionError", "resolve_expression", "is_number_literal", "is_string_literal", "validate_expression"]
 
 
 class ExpressionError(ValidationError):
@@ -106,6 +106,30 @@ def _resolve_variable(expr: str, context: dict[str, Any]) -> Any:
     for seg in parts:
         current = _get_from_context(seg, current)
     return current
+
+
+def validate_expression(expr: str) -> bool:
+    """Validate expression syntax without resolving values.
+
+    Returns True if the expression is syntactically valid (number literal,
+    string literal, or valid identifier path). Raises ExpressionError if invalid.
+    """
+    if expr is None:
+        raise ExpressionError("Expression is None")
+    expr = str(expr).strip()
+    if expr == "":
+        raise ExpressionError("Empty expression")
+    if is_string_literal(expr):
+        q = expr[0]
+        if expr[-1] != q:
+            raise ExpressionError("Unterminated string literal")
+        return True
+    if is_number_literal(expr):
+        return True
+    parts = expr.split(".")
+    if not all(_IDENT_RE.match(p) or p.isdigit() for p in parts):
+        raise ExpressionError(f"Invalid identifier path: {expr}")
+    return True
 
 
 def resolve_expression(expr: str, context: dict[str, Any]) -> Any:

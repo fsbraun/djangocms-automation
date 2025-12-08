@@ -5,6 +5,8 @@ from cms.plugin_pool import plugin_pool
 
 from . import forms, models
 from .constants import Module
+from .utilities.expressions import validate_expression
+
 
 automation_plugins = []
 action_plugins = []
@@ -30,12 +32,14 @@ class AutomationPlugin(CMSPluginBase):
     change_form_template = "djangocms_frontend/admin/base.html"
     show_add_form = False
     allowed_models = ["djangocms_automation.AutomationContent"]
+    icon = None
 
     def render(self, context, instance, placeholder):
         context.update(
             {
                 "title": self.name,
                 "instance": instance,
+                "icon": self.icon,
                 "end": any(plugin.plugin_type == "EndModifier" for plugin in instance.child_plugin_instances or []),
             }
         )
@@ -130,6 +134,76 @@ class AutomationAction(AutomationPlugin):
     module = Module.ACTION
 
     model = models.BaseActionPluginModel
+
+    render_template = "djangocms_automation/plugins/action.html"
+
+    allow_children = True
+    child_classes = modifier_plugins
+    data_form = None
+    fieldsets = [
+        (_("Comment"), {"classes": ("collapse",), "fields": ("comment",)}),
+    ]
+
+    def get_form(self, request, obj=None, **kwargs):
+        """Use data_form if defined for additional data fields."""
+        data_form_fields = self.get_data_form_fields(request, obj)
+        data_form_fields["Media"] = type(
+            "Media", (), {"js": (), "css": {"all": ("djangocms_automation/css/plugin_data_form.css",)}}
+        )
+        metaclass = type(self.form)
+        new_form = metaclass(self.form.__name__, (self.form,), data_form_fields)
+        kwargs["form"] = new_form
+        return super().get_form(request, obj=obj, **kwargs)
+
+    def get_data_form_fields(self, request, obj=None):
+        """Return data_form if defined, else a basic form."""
+        from django import forms
+
+        if self.data_form:
+            return {
+                f_name: forms.CharField(
+                    initial=f_name,
+                    required=True,
+                    validators=[validate_expression],
+                    widget=forms.TextInput(attrs={"code": ""}),
+                )
+                for f_name in self.data_form.declared_fields.keys()
+            }
+        return {}
+
+    def get_fieldsets(self, request, obj=None):
+        """Return fieldsets including data_form fields if defined."""
+        fieldsets = super().get_fieldsets(request, obj)
+        if self.data_form:
+            data_fields = list(self.data_form.declared_fields.keys())
+            fieldsets = fieldsets + [
+                (
+                    _("Inputs"),
+                    {
+                        "fields": data_fields,
+                        "classes": ("collapse",),
+                        "description": _(
+                            "<p>Each field is a data source for this action. Enter the value for the action either as a numeric or string literal "
+                            "or as dotted path navigating the automation's data object.</p>"
+                            "<p>Examples:</p>"
+                            '<p><code>"info@django-cms.org"</code> (string literal)<br>'
+                            "<code>42</code> (numeric literal)<br>"
+                            "<code>user.email</code> (data path)</p>"
+                        ),
+                    },
+                ),
+            ]
+        return fieldsets
+
+
+@register_automation_plugin
+class MailAction(AutomationAction):
+    name = _("Send Email")
+    module = Module.ACTION
+    icon = "bi-envelope-at"
+
+    model = models.BaseActionPluginModel
+    data_form = forms.MailActionDataForm
 
     render_template = "djangocms_automation/plugins/action.html"
 

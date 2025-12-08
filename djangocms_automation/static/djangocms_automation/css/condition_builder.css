@@ -45,3 +45,7 @@ button.btn {
     padding-inline: 12px;
     cursor: pointer;
 }
+
+input[code] {
+    font-family: ui-monospace, SFMono-Regular, monospace;
+}
