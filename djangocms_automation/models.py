@@ -25,19 +25,39 @@ class AutomationContent(models.Model):
 
     placeholders = PlaceholderRelationField()
 
-    def get_title(self):
+    def get_title(self) -> str:
+        """Get the automation's name.
+
+        :returns: Name of the associated automation.
+        :rtype: str
+        """
         return self.automation.name
 
-    def get_description(self):
+    def get_description(self) -> str:
+        """Get the content description.
+
+        :returns: Description text.
+        :rtype: str
+        """
         return self.description
 
     def __str__(self):
         return self.get_title()
 
-    def get_template(self):
+    def get_template(self) -> None:
+        """Get the template for rendering (not used).
+
+        :returns: Always None.
+        :rtype: None
+        """
         return None
 
-    def get_placeholder_slots(self):
+    def get_placeholder_slots(self) -> list[str]:
+        """Get slot names for all triggers.
+
+        :returns: List of trigger slot identifiers.
+        :rtype: list[str]
+        """
         return list(self.triggers.values_list("slot", flat=True))
 
 
@@ -76,9 +96,21 @@ class AutomationTrigger(models.Model):
         ordering = ["position"]
 
     def get_definition(self):
+        """Get the trigger type definition from the registry.
+
+        :returns: Trigger definition object or None if not found.
+        """
         return trigger_registry.get(self.type)
 
-    def trigger_execution(self, data=None, start: bool = True):
+    def trigger_execution(self, data: dict | None = None, start: bool = True) -> None:
+        """Create and optionally start an automation instance.
+
+        :param data: Initial data dictionary for the automation.
+        :type data: dict | None
+        :param start: Whether to immediately enqueue the action for execution.
+            Defaults to True.
+        :type start: bool
+        """
         placeholder = Placeholder.objects.get_for_obj(self.automation_content).get(slot=self.slot)
         plugin = placeholder.get_plugins().first()
         plugin, _ = plugin.get_plugin_instance()
@@ -148,19 +180,31 @@ class APIKey(models.Model):
     def __str__(self):
         return f"{self.name} ({self.get_service_display()})"
 
-    def get_service_display(self):
-        """Get the human-readable service name."""
+    def get_service_display(self) -> str:
+        """Get the human-readable service name.
+
+        :returns: Display name of the service, or raw service identifier if not found.
+        :rtype: str
+        """
         service = service_registry.get(self.service)
         return service["name"] if service else self.service
 
     @classmethod
-    def get_service_choices(cls):
-        """Get available service choices."""
+    def get_service_choices(cls) -> list[tuple[str, str]]:
+        """Get available service choices for form fields.
+
+        :returns: List of (value, label) tuples for service selection.
+        :rtype: list[tuple[str, str]]
+        """
         return service_registry.get_choices()
 
 
 class AutomationPluginModel(CMSPlugin):
-    """Base model for automation plugins."""
+    """Base model for all automation plugins.
+
+    Provides common fields (uuid, comment) and abstract methods for
+    execution and action chaining that subclasses must implement.
+    """
 
     class Meta:
         abstract = True
@@ -178,11 +222,26 @@ class AutomationPluginModel(CMSPlugin):
     )
 
     def execute(self, action: AutomationAction, data: dict, single_step: bool = False, **kwargs):
-        """Execute the plugin logic for the given action."""
+        """Execute the plugin logic for the given action.
+
+        :param action: The automation action being executed.
+        :type action: AutomationAction
+        :param data: Current automation data dictionary.
+        :type data: dict
+        :param single_step: If True, execute only this step without continuing.
+        :type single_step: bool
+        :raises NotImplementedError: Subclasses must implement this method.
+        """
         raise NotImplementedError("Subclasses must implement the execute method.")
 
-    def get_next_actions(self, action: AutomationAction):
-        """Get the next action based on the plugin structure."""
+    def get_next_actions(self, action: AutomationAction) -> list[AutomationAction]:
+        """Determine and create the next action(s) in the workflow.
+
+        :param action: The current completed action.
+        :type action: AutomationAction
+        :returns: List of newly created AutomationAction instances to execute next.
+        :rtype: list[AutomationAction]
+        """
         if action.state != COMPLETED:
             return []
 
@@ -234,7 +293,12 @@ class ConditionalPluginModel(AutomationPluginModel):
         "for both of them for this conditional."
     )
 
-    def messages(self):
+    def messages(self) -> list[str]:
+        """Get validation messages for this conditional.
+
+        :returns: List of warning/error messages about missing or duplicate branches.
+        :rtype: list[str]
+        """
         messages = []
         yes_channels = [child for child in self.child_plugin_instances if child.plugin_type == "ThenPlugin"]
         no_channels = [child for child in self.child_plugin_instances if child.plugin_type == "ElsePlugin"]
@@ -259,12 +323,24 @@ class SplitPluginModel(AutomationPluginModel):
         "Please add at least one path plugin to this split plugin in the structure board."
     )
 
-    def messages(self):
+    def messages(self) -> list[str]:
+        """Get validation messages for this split.
+
+        :returns: List of warning messages if no paths are defined.
+        :rtype: list[str]
+        """
         if not self.child_plugin_instances or len(self.child_plugin_instances) == 0:
             return [self.no_paths]
         return []
 
-    def get_next_actions(self, action: AutomationAction):
+    def get_next_actions(self, action: AutomationAction) -> list[AutomationAction]:
+        """Create parallel actions for each path in the split.
+
+        :param action: The current split action.
+        :type action: AutomationAction
+        :returns: List of actions for parallel path execution.
+        :rtype: list[AutomationAction]
+        """
         if action.state == RUNNING and not action.children.exists():
             next_actions = []
             for child in self.child_plugin_instances:
@@ -289,7 +365,20 @@ class SplitPluginModel(AutomationPluginModel):
         data: dict,
         single_step: bool = False,
         plugin_dict: dict[CMSPlugin] | None = None,
-    ):
+    ) -> tuple[str, dict]:
+        """Execute the split plugin, waiting for all paths to complete.
+
+        :param action: The automation action being executed.
+        :type action: AutomationAction
+        :param data: Current automation data dictionary.
+        :type data: dict
+        :param single_step: If True, execute only this step.
+        :type single_step: bool
+        :param plugin_dict: Optional mapping of plugin instances.
+        :type plugin_dict: dict[CMSPlugin] | None
+        :returns: Tuple of (state, result_data).
+        :rtype: tuple[str, dict]
+        """
         path_ends = [
             child.child_plugin_instances[-1] for child in self.child_plugin_instances if child.child_plugin_instances
         ]

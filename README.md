@@ -1,4 +1,5 @@
-# djangocms-automation
+djangocms-automation
+====================
 
 This package extends django CMS with the ability to model and edit automation workflows directly in the Frontend Editor (inline editing). Workflows are composed from CMS plugins (e.g., Triggers, Conditions/If‑Then‑Else, Actions, End) and can be arranged on the page via drag & drop like regular content.
 
@@ -13,3 +14,27 @@ Quick start
 - Add the required building blocks (Trigger, If/Then/Else, Action, End) in the Frontend Editor and configure them.
 
 ![Automation workflow example](automations.jpg)
+
+
+Documentation
+-------------
+
+1. Create the docs virtual environment and install requirements:
+
+   ```bash
+   cd docs
+   make install
+   ```
+
+2. Build the HTML documentation (uses the venv's Sphinx):
+
+   ```bash
+   cd docs
+   make html
+   ```
+
+3. Open the built docs in your browser:
+
+   ```bash
+   open _build/html/index.html
+   ```

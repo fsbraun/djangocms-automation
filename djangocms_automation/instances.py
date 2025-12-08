@@ -29,6 +29,12 @@ STATES = [
 
 
 class AutomationInstance(models.Model):
+    """Runtime instance of an automation execution.
+
+    Tracks the state and data of a single automation run, including initial
+    input data and accumulated results from executed actions.
+    """
+
     automation_content = models.ForeignKey(
         "djangocms_automation.AutomationContent",
         blank=False,
@@ -59,11 +65,23 @@ class AutomationInstance(models.Model):
         self.key = self.get_key()
         return super().save(*args, **kwargs)
 
-    def get_key(self):
+    def get_key(self) -> str:
+        """Generate a unique SHA1 hash key for this instance.
+
+        :returns: Hexadecimal SHA1 hash based on automation and instance IDs.
+        :rtype: str
+        """
         return hashlib.sha1(f"{self.automation_content.automation_id}-{self.id}".encode()).hexdigest()
 
     @classmethod
-    def delete_history(cls, days=30):
+    def delete_history(cls, days: int = 30):
+        """Delete finished automation instances older than specified days.
+
+        :param days: Number of days to retain history. Defaults to 30.
+        :type days: int
+        :returns: Tuple of (number deleted, dict with deletion counts per model).
+        :rtype: tuple
+        """
         automations = cls.objects.filter(finished=True, updated__lt=now() - datetime.timedelta(days=days))
         return automations.delete()
 
@@ -76,6 +94,12 @@ class AutomationInstance(models.Model):
 
 
 class AutomationAction(models.Model):
+    """Individual action step within an automation execution.
+
+    Represents a single plugin execution, tracking its state, timing,
+    and any user interaction requirements.
+    """
+
     automation_instance = models.ForeignKey(
         AutomationInstance,
         on_delete=models.CASCADE,
@@ -153,31 +177,55 @@ class AutomationAction(models.Model):
         return self.automation_instance.data
 
     def hours_since_created(self) -> float:
-        """returns the number of hours since creation of node, 0 if finished"""
+        """Calculate hours elapsed since action creation.
+
+        :returns: Hours since creation, or 0 if action is finished.
+        :rtype: float
+        """
         if self.finished:
             return 0
         return (now() - self.created).total_seconds() / 3600
 
     def get_previous_tasks(self) -> list["AutomationAction"]:
+        """Retrieve the previous action(s) in the execution chain.
+
+        :returns: List of previous AutomationAction instances. For joined actions,
+            returns all merged predecessors; otherwise returns the single previous action.
+        :rtype: list[AutomationAction]
+        """
         if self.message == "Joined" and self.result:
             return self.__class__.objects.filter(id__in=self.result)
         return [self.previous] if self.previous else []
 
     @classmethod
-    def get_open_tasks(cls, user):
+    def get_open_tasks(cls, user) -> tuple["AutomationAction", ...]:
+        """Get all open tasks requiring interaction that the user can access.
+
+        :param user: The user to check permissions for.
+        :type user: User
+        :returns: Tuple of AutomationAction instances awaiting user interaction.
+        :rtype: tuple[AutomationAction, ...]
+        """
         candidates = cls.objects.filter(finished=None, requires_interaction=True)
         return tuple(task for task in candidates if user in task.get_users_with_permission())
 
     def get_users_with_permission(
         self,
-        include_superusers=True,
-        backend="django.contrib.auth.backends.ModelBackend",
+        include_superusers: bool = True,
+        backend: str = "django.contrib.auth.backends.ModelBackend",
     ):
-        """
-        Given an AutomationTaskModel instance, which has access to a list of permission
-        codenames (self.interaction_permissions), the assigned user (self.interaction_user),
-        and assigned group (self.interaction_group), returns a QuerySet of users with
-        applicable permissions that meet the requirements for access.
+        """Get users who have permission to interact with this action.
+
+        Filters users based on required permissions, assigned user/group,
+        and optionally includes superusers.
+
+        :param include_superusers: Include superusers regardless of permissions.
+            Defaults to True.
+        :type include_superusers: bool
+        :param backend: Authentication backend to use for permission checking.
+        :type backend: str
+        :returns: QuerySet of User instances with applicable permissions.
+        :rtype: QuerySet[User]
         """
         users = User.objects.all()
         for permission in self.interaction_permissions:

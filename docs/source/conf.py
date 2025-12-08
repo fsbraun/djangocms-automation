@@ -18,6 +18,30 @@ extensions = [
     "sphinx.ext.autosummary",
 ]
 
+# When building autodoc, many modules import Django/CMS and expect
+# a configured Django settings module. It's usually easier to mock
+# these heavy external dependencies for the docs build.
+autodoc_mock_imports = [
+    "django",
+    "django.conf",
+    "django.db",
+    "django.db.models",
+    "django.apps",
+    "django.contrib",
+    "django.contrib.auth",
+    "django.contrib.contenttypes",
+    "django.contrib.admin",
+    "cms",
+    "cms.plugin_pool",
+    "cms.plugin_base",
+    "cms.api",
+    "djangocms_form_builder",
+    "djangocms_text",
+    "jsonschema",
+    "django_tasks",
+    "django.tasks",
+]
+
 autosummary_generate = True
 autodoc_typehints = "description"
 autodoc_member_order = "bysource"

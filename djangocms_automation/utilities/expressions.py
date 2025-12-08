@@ -32,12 +32,24 @@ _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def is_number_literal(expr: str) -> bool:
-    """Return True if expr is a valid int or float literal."""
+    """Check if expression is a valid numeric literal.
+
+    :param expr: Expression string to check.
+    :type expr: str
+    :returns: True if expr is a valid int or float literal.
+    :rtype: bool
+    """
     return bool(_NUMBER_RE.match(expr) or _INT_ONLY_RE.match(expr))
 
 
 def is_string_literal(expr: str) -> bool:
-    """Return True if expr is a quoted string (single or double quotes)."""
+    """Check if expression is a quoted string literal.
+
+    :param expr: Expression string to check.
+    :type expr: str
+    :returns: True if expr is wrapped in matching single or double quotes.
+    :rtype: bool
+    """
     if len(expr) < 2:
         return False
     if (expr[0], expr[-1]) in (("'", "'"), ('"', '"')):
@@ -111,8 +123,14 @@ def _resolve_variable(expr: str, context: dict[str, Any]) -> Any:
 def validate_expression(expr: str) -> bool:
     """Validate expression syntax without resolving values.
 
-    Returns True if the expression is syntactically valid (number literal,
-    string literal, or valid identifier path). Raises ExpressionError if invalid.
+    Checks if the expression is syntactically valid (number literal,
+    string literal, or valid identifier path).
+
+    :param expr: Expression string to validate.
+    :type expr: str
+    :returns: True if the expression is syntactically valid.
+    :rtype: bool
+    :raises ExpressionError: If the expression syntax is invalid.
     """
     if expr is None:
         raise ExpressionError("Expression is None")
@@ -133,14 +151,22 @@ def validate_expression(expr: str) -> bool:
 
 
 def resolve_expression(expr: str, context: dict[str, Any]) -> Any:
-    """Resolve a simple expression against context.
+    """Resolve a simple expression against a context dictionary.
 
-    Examples:
-            resolve_expression('42', ctx) -> 42
-            resolve_expression('3.14', ctx) -> 3.14
-            resolve_expression('\"hello\"', ctx) -> 'hello'
-            resolve_expression('user.profile.age', ctx) -> value in context
-            resolve_expression('items.0.name', ctx) -> first element's name
+    Supports number literals, string literals, and dotted variable paths.
+
+    :param expr: Expression string to resolve.
+    :type expr: str
+    :param context: Context dictionary for variable resolution.
+    :type context: dict[str, Any]
+    :returns: Resolved value (int, float, str, or context value).
+    :rtype: Any
+    :raises ExpressionError: If the expression is invalid or resolution fails.
+
+    Example::
+
+        resolve_expression('42', ctx)  # -> 42
+        resolve_expression('user.profile.age', ctx)  # -> value from context
     """
     if expr is None:
         raise ExpressionError("Expression is None")
@@ -155,14 +181,36 @@ def resolve_expression(expr: str, context: dict[str, Any]) -> Any:
     return _resolve_variable(expr, context)
 
 
-# Convenience dataclass for compiled expressions (if future caching is desired)
 @dataclass(slots=True)
 class CompiledExpression:
+    """Pre-parsed expression for repeated evaluation.
+
+    Stores the raw expression string for later evaluation against
+    different contexts. Useful for caching frequently used expressions.
+
+    :param raw: The raw expression string.
+    :type raw: str
+    """
+
     raw: str
 
     def evaluate(self, context: dict[str, Any]) -> Any:
+        """Evaluate this expression against a context.
+
+        :param context: Context dictionary for variable resolution.
+        :type context: dict[str, Any]
+        :returns: Resolved value.
+        :rtype: Any
+        """
         return resolve_expression(self.raw, context)
 
 
 def compile_expression(expr: str) -> CompiledExpression:
+    """Create a compiled expression for repeated evaluation.
+
+    :param expr: Expression string to compile.
+    :type expr: str
+    :returns: Compiled expression object.
+    :rtype: CompiledExpression
+    """
     return CompiledExpression(expr)

@@ -8,4 +8,8 @@ from docstrings using :mod:`sphinx.ext.autodoc` and :mod:`sphinx.ext.autosummary
    :maxdepth: 2
    :glob:
 
-   modules
+   models
+   instances
+   triggers
+   tasks
+   utilities_json
