@@ -1,6 +1,11 @@
 djangocms-automation
 ====================
 
+[![Python](https://img.shields.io/badge/python-3.10%20%7C%203.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue)](https://www.python.org/)
+[![Django](https://img.shields.io/badge/django-6.0-green)](https://www.djangoproject.com/)
+[![django CMS](https://img.shields.io/badge/django%20CMS-5.0-cyan)](https://www.django-cms.org/)
+[![License](https://img.shields.io/github/license/fsbraun/djangocms-automation)](https://github.com/fsbraun/djangocms-automation/blob/main/LICENSE)
+
 This package extends django CMS with the ability to model and edit automation workflows directly in the Frontend Editor (inline editing). Workflows are composed from CMS plugins (e.g., Triggers, Conditions/If‑Then‑Else, Actions, End) and can be arranged on the page via drag & drop like regular content.
 
 Overview

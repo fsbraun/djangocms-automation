@@ -2,12 +2,15 @@ import os
 import sys
 from datetime import datetime
 
+from djangocms_automation import __version__
+
+
 # Add project root to sys.path so autodoc can import the package
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 project = "djangocms-automation"
 author = ""
-release = "0.0"
+release = __version__
 
 extensions = [
     "sphinx.ext.autodoc",

@@ -12,4 +12,4 @@ from docstrings using :mod:`sphinx.ext.autodoc` and :mod:`sphinx.ext.autosummary
    instances
    triggers
    tasks
-   utilities_json
+   utilities

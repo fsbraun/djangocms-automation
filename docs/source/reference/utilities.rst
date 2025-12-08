@@ -1,5 +1,5 @@
-Utilities Refernce
-==================
+Utilities Reference
+===================
 
 .. automodule:: djangocms_automation.utilities.json
    :members:
