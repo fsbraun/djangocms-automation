@@ -119,8 +119,8 @@ class TestAutomationTriggerExecution:
         instance = AutomationInstance.objects.filter(automation_content=trigger.automation_content).first()
 
         assert instance is not None
-        assert instance.data == {}
-        assert instance.initial_data == {}
+        assert instance.data == []
+        assert instance.initial_data == []
 
     def test_trigger_execution_multiple_calls_create_multiple_instances(self, trigger, monkeypatch):
         """Test that multiple trigger_execution calls create separate instances."""
