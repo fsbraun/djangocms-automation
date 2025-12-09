@@ -25,9 +25,9 @@ diagram, or by clicking on the edit button in the structure board.
 Action Nodes and Modifiers
 --------------------------
 
-A node corresponds to an plugin (e.g. action plugins or flow control
-plugins). Nodes may have **modifiers** as child plugins that enhance -- or modify -- the behaviour
-of the node: Modifiers .. caution:: text
+A node corresponds to a plugin (e.g. action plugins or flow control
+plugins). Nodes may have **modifiers** as child plugins that enhance or modify
+the behaviour of the node. Modifiers can:
 
 - add information to the automation,
 - introduce pauses/delays, or
@@ -56,6 +56,22 @@ Each action execution is represented by an :class:`~djangocms_automation.models.
 instance which is persisted. Persisted state enables monitoring, resuming and auditing
 automation runs.
 
+Data Flow and Serialization
+----------------------------
+
+Automation data is serialized as JSON and passed between nodes through an in-memory
+list. Each item in the list represents a row of data, akin to rows in a table. When
+a node executes, it performs bulk operations on all data in the list; the results
+are then passed to the next node in the pipeline.
+
+For example, if a trigger collects user input, the data is converted to JSON and
+wrapped in a list. As the automation proceeds through action nodes, each node
+consumes the list, applies its logic (often in bulk to all rows), and produces
+a new list as output for the next node.
+
+This list-based approach enables efficient batch processing and allows modifiers
+to enrich or transform the entire dataset before it is passed downstream.
+
 Pausing and Reviving
 --------------------
 
@@ -77,5 +93,5 @@ in ``djangocms_automation.instances`` and ``djangocms_automation.tasks``; see
 :doc:`../reference/instances` and :doc:`../reference/tasks` for runtime behaviour and
 examples. Helper utilities (for example ``cleaned_data_to_json_serializable``)
 are provided in ``djangocms_automation.utilities.json`` — see
-:doc:`../reference/utilities_json` for usage notes and edge cases.
+:doc:`../reference/utilities` for usage notes and edge cases.
 
