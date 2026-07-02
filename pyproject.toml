@@ -32,6 +32,9 @@ dependencies = [
   "jsonschema>=4.22",
 ]
 
+optional-dependencies.llm = [
+  "litellm>=1.60",
+]
 optional-dependencies.test = [
   "coverage",
   "pytest",

@@ -38,12 +38,13 @@ task to process pending automations.
 Using a cron job
 ^^^^^^^^^^^^^^^^
 
-Add a cron job to run the pending automations periodically. For example, to run
-every minute:
+Add a cron job to run the ``runautomations`` management command periodically.
+It revives paused/pending actions **and** fires due timer triggers. For
+example, to run every minute:
 
 .. code-block:: bash
 
-    * * * * * cd /path/to/your/project && /path/to/venv/bin/python manage.py shell -c "from djangocms_automation.tasks import execute_pending_automations; execute_pending_automations()"
+    * * * * * cd /path/to/your/project && /path/to/venv/bin/python manage.py runautomations
 
 Using Django-Q2
 ^^^^^^^^^^^^^^^
@@ -55,7 +56,8 @@ If you're using `Django-Q2 <https://django-q2.readthedocs.io/>`_, you can schedu
     from django_q.tasks import schedule
 
     schedule(
-        "djangocms_automation.tasks.execute_pending_automations",
+        "django.core.management.call_command",
+        "runautomations",
         schedule_type="I",  # Interval
         minutes=1,
     )
@@ -81,8 +83,8 @@ Create a periodic task in your `Celery <https://docs.celeryq.dev/>`_ configurati
 
     @app.task
     def run_pending_automations():
-        from djangocms_automation.tasks import execute_pending_automations
-        execute_pending_automations()
+        from django.core.management import call_command
+        call_command("runautomations")
 
 Using Django Background Tasks
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

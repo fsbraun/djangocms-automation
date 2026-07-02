@@ -7,3 +7,4 @@ Practical recipes and small focused examples.
    :maxdepth: 1
 
    triggering
+   actions

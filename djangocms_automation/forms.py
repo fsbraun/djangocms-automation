@@ -108,7 +108,12 @@ class ConditionalPluginForm(forms.ModelForm):
 
 
 class MailActionDataForm(forms.Form):
-    """Data form for MailAction plugin with email-specific fields."""
+    """Data form for MailAction plugin with email-specific fields.
+
+    ``subject``, ``recipient_email`` and ``from_email`` are expressions
+    (literal or data path); ``body`` is a template (Textarea widget) with
+    ``{{ dotted.path }}`` substitution.
+    """
 
     subject = forms.CharField(label=_("Email Subject"), max_length=255, required=True)
     body = forms.CharField(
@@ -117,3 +122,8 @@ class MailActionDataForm(forms.Form):
         required=True,
     )
     recipient_email = forms.EmailField(label=_("Recipient Email"), required=True)
+    from_email = forms.EmailField(
+        label=_("Sender Email"),
+        required=False,
+        help_text=_("Optional. Defaults to the site's DEFAULT_FROM_EMAIL."),
+    )

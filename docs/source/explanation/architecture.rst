@@ -52,9 +52,26 @@ Automations are executed via Django's task framework (see
 :doc:`../reference/tasks`). For deterministic test runs the immediate
 backend can be used.
 
-Each action execution is represented by an :class:`~djangocms_automation.models.AutomationAction`
+Each action execution is represented by an :class:`~djangocms_automation.instances.AutomationAction`
 instance which is persisted. Persisted state enables monitoring, resuming and auditing
 automation runs.
+
+Orchestration is owned by the execution engine
+(``djangocms_automation.engine``):
+
+- ``run_action`` atomically *claims* an action (``PENDING`` → ``RUNNING``,
+  so double enqueues are no-ops), builds the linked plugin tree, dispatches
+  ``plugin.execute()`` and handles the outcome.
+- Fan-out nodes (Split, Conditional) go ``WAITING`` while their branch
+  chains run; when a branch ends, the engine wakes the parent exactly once
+  (an atomic ``WAITING`` → ``PENDING`` flip). A completed Split *joins* its
+  branches by concatenating their end outputs.
+- Failures are **fail-fast**: a failed action fails its waiting ancestors
+  and marks the :class:`~djangocms_automation.instances.AutomationInstance`
+  as ``FAILED`` with a ``finished`` timestamp. No silent stops.
+- Actions can pause themselves (``ActionPause``) until a given time —
+  e.g. for rate-limit backoff — and are revived by the ``runautomations``
+  management command.
 
 Data Flow and Serialization
 ----------------------------
@@ -75,23 +92,50 @@ to enrich or transform the entire dataset before it is passed downstream.
 Pausing and Reviving
 --------------------
 
-Actions may set a timestamp to pause execution (delay).
+Actions may set a timestamp to pause execution (delay), either by raising
+``djangocms_automation.engine.ActionPause`` from an action or via
+``engine.pause_action``.
 
-Paused automations are removed from the current execution pipeline
-and revived by a management command that should be run
-periodically via cron. This command checks for paused actions whose
-waiting time has expired and re-enqueues them into the task queue.
+Paused automations are removed from the current execution pipeline and
+revived by the ``runautomations`` management command, which should be run
+periodically via cron. The command re-enqueues paused actions whose waiting
+time has expired and fires due timer triggers.
 
+Actions may also wait for **human input**: the *Wait for User* action sets
+``requires_interaction`` and pauses the run until a permitted user resumes
+it from the admin (Execution Instances → Open tasks).
+
+Actions
+-------
+
+Concrete actions live in ``djangocms_automation.actions`` as proxy models of
+:class:`~djangocms_automation.models.BaseActionPluginModel`, overriding
+``perform(action, rows) -> rows``. Inputs are declared on the CMS plugin via
+a ``data_form``; entered values (expressions or ``{{ path }}`` templates)
+are persisted in the plugin's ``config`` JSON field and resolved against the
+automation data at runtime. Shipped actions:
+
+- **Send Email** — one email per data row via Django's email framework.
+- **Create/Update/Query Records** — Django model CRUD, gated by the
+  ``AUTOMATION_ALLOWED_MODELS`` setting (deny-all by default).
+- **LLM Prompt** — provider-independent LLM completions via LiteLLM
+  (``AUTOMATION_LLM_MODELS`` setting; API keys from the *Secrets* store).
+- **Wait for User** — human-in-the-loop pause/resume.
+
+See :doc:`../howto/actions` for configuration details.
 
 Implementation notes
 --------------------
 
 The data model layer is implemented in ``djangocms_automation.models``; see
 the API reference for models at :doc:`../reference/models` for detailed model
-descriptions and field information. Execution and scheduling logic is located
-in ``djangocms_automation.instances`` and ``djangocms_automation.tasks``; see
-:doc:`../reference/instances` and :doc:`../reference/tasks` for runtime behaviour and
-examples. Helper utilities (for example ``cleaned_data_to_json_serializable``)
-are provided in ``djangocms_automation.utilities.json`` — see
-:doc:`../reference/utilities` for usage notes and edge cases.
+descriptions and field information. Runtime state lives in
+``djangocms_automation.instances``, orchestration in
+``djangocms_automation.engine``, and the task entry points in
+``djangocms_automation.tasks``; see :doc:`../reference/instances` and
+:doc:`../reference/tasks` for runtime behaviour and examples. Helper
+utilities (expression resolution, ``{{ path }}`` templates, the condition
+evaluator and JSON serialization helpers) are provided in
+``djangocms_automation.utilities`` — see :doc:`../reference/utilities` for
+usage notes and edge cases.
 

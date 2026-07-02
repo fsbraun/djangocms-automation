@@ -5,6 +5,9 @@ from cms.plugin_base import CMSPluginBase
 from cms.plugin_pool import plugin_pool
 
 from . import forms, models
+from .actions import llm_action
+from .actions import mail as actions_mail
+from .actions import model_actions, user_input
 from .constants import Module
 from .utilities.expressions import validate_expression
 from .utilities.templates import validate_template
@@ -178,6 +181,11 @@ class ActionPlugin(AutomationPlugin):
         kwargs["form"] = new_form
         return super().get_form(request, obj=obj, **kwargs)
 
+    # When False, the declared data_form fields are used as-is (choice
+    # fields, JSON fields, ...) instead of being converted to expression /
+    # template inputs.
+    convert_data_form = True
+
     def get_data_form_fields(self, request, obj=None):
         """Build the dynamic config fields from the declared data_form.
 
@@ -188,6 +196,16 @@ class ActionPlugin(AutomationPlugin):
         if not self.data_form:
             return {}
         config = (obj.config or {}) if obj is not None else {}
+        if not self.convert_data_form:
+            import copy
+
+            fields = {}
+            for f_name, declared in self.data_form.declared_fields.items():
+                field = copy.deepcopy(declared)
+                if f_name in config:
+                    field.initial = config[f_name]
+                fields[f_name] = field
+            return fields
         fields = {}
         for f_name, declared in self.data_form.declared_fields.items():
             is_template = isinstance(declared.widget, django_forms.Textarea)
@@ -246,13 +264,68 @@ class MailAction(ActionPlugin):
     module = Module.ACTION
     icon = "bi-envelope-at"
 
-    model = models.BaseActionPluginModel
+    model = actions_mail.MailActionPluginModel
     data_form = forms.MailActionDataForm
 
     render_template = "djangocms_automation/plugins/action.html"
 
     allow_children = True
     child_classes = modifier_plugins
+
+
+@register_automation_plugin
+class CreateModelAction(ActionPlugin):
+    name = _("Create Record")
+    module = Module.ACTION
+    icon = "bi-database-add"
+
+    model = model_actions.CreateModelActionModel
+    data_form = model_actions.CreateModelActionForm
+    convert_data_form = False
+
+
+@register_automation_plugin
+class UpdateModelAction(ActionPlugin):
+    name = _("Update Records")
+    module = Module.ACTION
+    icon = "bi-database-gear"
+
+    model = model_actions.UpdateModelActionModel
+    data_form = model_actions.UpdateModelActionForm
+    convert_data_form = False
+
+
+@register_automation_plugin
+class QueryModelAction(ActionPlugin):
+    name = _("Query Records")
+    module = Module.ACTION
+    icon = "bi-database-down"
+
+    model = model_actions.QueryModelActionModel
+    data_form = model_actions.QueryModelActionForm
+    convert_data_form = False
+
+
+@register_automation_plugin
+class LLMAction(ActionPlugin):
+    name = _("LLM Prompt")
+    module = Module.AI
+    icon = "bi-stars"
+
+    model = llm_action.LLMActionPluginModel
+    data_form = llm_action.LLMActionForm
+    convert_data_form = False
+
+
+@register_automation_plugin
+class UserInputAction(ActionPlugin):
+    name = _("Wait for User")
+    module = Module.HIL
+    icon = "bi-person-check"
+
+    model = user_input.UserInputActionPluginModel
+    data_form = user_input.UserInputActionForm
+    convert_data_form = False
 
 
 class ModifierPlugin(AutomationPlugin):
@@ -284,13 +357,6 @@ class EndModifier(ModifierPlugin):
     name = _("End")
     css_class = "end"
     icon = "bi-check2-square"
-
-
-@register_automation_plugin
-class OpenAIModifier(ModifierPlugin):
-    name = _("OpenAI")
-    css_class = "openai"
-    icon = "bi-openai"
 
 
 @register_automation_plugin

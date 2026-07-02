@@ -40,13 +40,22 @@ python manage.py migrate djangocms_automation
 
 ### Running Automations
 
-Automations are executed via background tasks. Set up a periodic task to process pending automations, for example using a cron job (every minute):
+Automations are executed via background tasks. Set up a periodic task that revives paused actions and fires due timer triggers, for example using a cron job (every minute):
 
 ```bash
-* * * * * cd /path/to/project && python manage.py shell -c "from djangocms_automation.tasks import execute_pending_automations; execute_pending_automations()"
+* * * * * cd /path/to/project && python manage.py runautomations
 ```
 
-Alternatively, use [Django-Q2](https://django-q2.readthedocs.io/), [Celery](https://docs.celeryq.dev/), or Django 6.0+ background tasks.
+Alternatively, schedule `call_command("runautomations")` with [Django-Q2](https://django-q2.readthedocs.io/), [Celery](https://docs.celeryq.dev/), or Django 6.0+ background tasks.
+
+### Built-in actions
+
+- **Send Email** — one email per data row via Django's email framework.
+- **Create / Update / Query Records** — Django model CRUD, gated by the `AUTOMATION_ALLOWED_MODELS` setting.
+- **LLM Prompt** — provider-independent LLM calls via [LiteLLM](https://docs.litellm.ai/) (`pip install djangocms-automation[llm]`, models via `AUTOMATION_LLM_MODELS`, API keys in the admin *Secrets* store).
+- **Wait for User** — human-in-the-loop pause/resume from the admin.
+
+Flow control includes conditionals (If/Then/Else with a visual condition builder), parallel splits with automatic joins, and timer/form/manual/code triggers.
 
 Quick start
 -----------
