@@ -49,6 +49,13 @@ command — run it periodically via cron:
 The fire time is stamped into the trigger config (``last_fired``,
 ``fired_count``); one-shot timers fire exactly once.
 
+Via webhook (HTTP POST)
+-----------------------
+
+Triggers of type *Webhook* (and *Mail*) expose a secret URL that external
+services can POST JSON to. See :doc:`webhooks` for setup, signature
+verification, mail ingestion, and writing custom webhook trigger types.
+
 From another automation
 -----------------------
 

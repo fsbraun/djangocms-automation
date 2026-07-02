@@ -55,7 +55,11 @@ Alternatively, schedule `call_command("runautomations")` with [Django-Q2](https:
 - **LLM Prompt** — provider-independent LLM calls via [LiteLLM](https://docs.litellm.ai/) (`pip install djangocms-automation[llm]`, models via `AUTOMATION_LLM_MODELS`, API keys in the admin *Secrets* store).
 - **Wait for User** — human-in-the-loop pause/resume from the admin.
 
-Flow control includes conditionals (If/Then/Else with a visual condition builder), parallel splits with automatic joins, and timer/form/manual/code triggers.
+Flow control includes conditionals (If/Then/Else with a visual condition builder), parallel splits with automatic joins, and timer/form/manual/code/webhook triggers.
+
+### Webhooks
+
+Include `path("automation/", include("djangocms_automation.urls"))` in your urlconf, then give an automation a *Webhook* trigger: any service can start it by POSTing JSON to the trigger's secret URL (`/automation/webhook/<token>/`), optionally authenticated with an HMAC signing secret. The *Mail* trigger builds on this for inbound email — point your mail provider's webhook at it and filter by recipient/subject/status. Custom webhook trigger types are a small `WebhookTrigger` subclass away.
 
 Quick start
 -----------

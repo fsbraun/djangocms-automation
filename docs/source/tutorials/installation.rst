@@ -29,6 +29,16 @@ Configuration
 
     python manage.py migrate djangocms_automation
 
+3. (Optional) Include the package URLs to enable inbound webhooks
+   (see :doc:`../howto/webhooks`):
+
+.. code-block:: python
+
+    urlpatterns = [
+        # ...
+        path("automation/", include("djangocms_automation.urls")),
+    ]
+
 Running Automations
 -------------------
 

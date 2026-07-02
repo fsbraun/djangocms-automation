@@ -14,11 +14,16 @@ Concrete example triggers are provided for "Click" and "Mail" events.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
+import secrets
 from typing import Any, Callable
 
 from django import forms
 from django.apps import apps
 from django.contrib.admin import widgets
+from django.utils.timezone import now
 from django.utils.translation import gettext_lazy as _
 
 from .utilities.json import cleaned_data_to_json_serializable
@@ -128,6 +133,91 @@ class TriggerRegistry:
 trigger_registry = TriggerRegistry()
 
 # ---------------------------------------------------------------------------
+# Webhook framework
+# ---------------------------------------------------------------------------
+
+
+def generate_webhook_token() -> str:
+    """Generate a high-entropy URL-safe webhook token."""
+    return secrets.token_urlsafe(24)
+
+
+class WebhookTrigger(Trigger):
+    """Base class for triggers fired by an inbound HTTP webhook.
+
+    Each trigger of a webhook type gets a secret ``token`` in its config;
+    POSTing to ``.../webhook/<token>/`` (see ``djangocms_automation.urls``)
+    fires the trigger. Subclasses customize payload handling:
+
+    - :meth:`parse_payload` — turn the request into data rows. Return an
+      empty list to accept-but-ignore the request (e.g. filtered out).
+      Raise ``ValueError`` for a malformed payload (results in HTTP 400).
+    - :meth:`verify_request` — authenticate the request beyond the URL
+      token. The default verifies an optional HMAC-SHA256 signature
+      (``signing_secret`` config + ``X-Automation-Signature`` header,
+      hex digest of the raw request body).
+
+    Rows are validated against :attr:`data_schema` before triggering.
+    """
+
+    signature_header = "X-Automation-Signature"
+
+    # Configuration form fields (stored in the trigger's config JSON)
+    token = forms.CharField(
+        label=_("Webhook token"),
+        required=False,  # auto-generated on save when left empty
+        initial=generate_webhook_token,
+        help_text=_("Secret token identifying this webhook. The endpoint URL is …/webhook/<token>/."),
+    )
+    signing_secret = forms.CharField(
+        label=_("Signing secret"),
+        required=False,
+        help_text=_(
+            "Optional. If set, requests must include an X-Automation-Signature header containing "
+            "the hex HMAC-SHA256 of the raw request body, keyed with this secret."
+        ),
+    )
+
+    def verify_request(self, request, config: dict[str, Any]) -> bool:
+        """Verify the request's authenticity (beyond the URL token).
+
+        :returns: True if the request may fire the trigger.
+        """
+        secret = (config or {}).get("signing_secret")
+        if not secret:
+            return True
+        provided = request.headers.get(self.signature_header, "")
+        expected = hmac.new(secret.encode(), request.body, hashlib.sha256).hexdigest()
+        return hmac.compare_digest(provided, expected)
+
+    def parse_payload(self, request, config: dict[str, Any]) -> list[dict[str, Any]]:
+        """Parse the request body into data rows.
+
+        The default accepts a JSON object (one row) or a JSON array of
+        objects (multiple rows).
+
+        :raises ValueError: If the payload is malformed.
+        """
+        try:
+            data = json.loads(request.body.decode() or "null")
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise ValueError(f"Invalid JSON payload: {exc}") from exc
+        if isinstance(data, dict):
+            return [data]
+        if isinstance(data, list) and all(isinstance(row, dict) for row in data):
+            return data
+        raise ValueError("Expected a JSON object or an array of objects.")
+
+
+class GenericWebhookTrigger(WebhookTrigger):
+    id = "webhook"
+    name = _("Webhook")
+    description = _("Starts when an HTTP POST request is received on the trigger's webhook URL.")
+    icon = "bi-broadcast-pin"
+    data_schema = {}
+
+
+# ---------------------------------------------------------------------------
 # Example concrete trigger definitions
 # ---------------------------------------------------------------------------
 
@@ -152,14 +242,26 @@ class ClickTrigger(Trigger):
     }
 
 
-# Mail Trigger schema: expects recipient, subject and status data
-class MailTrigger(Trigger):
+# Mail Trigger: webhook-based mail ingestion (example WebhookTrigger implementation)
+class MailTrigger(WebhookTrigger):
+    """Mail ingestion via webhook — the example :class:`WebhookTrigger`.
+
+    Point your mail provider's inbound/event webhook at this trigger's URL.
+    The payload is normalized from common provider field aliases (``to`` /
+    ``To`` / ``recipient``, ``TextBody`` / ``text`` / ``body_text``, ...)
+    into the trigger's data schema, and the configured recipient/subject/
+    status filters decide whether the automation actually starts. For a
+    provider whose payload differs structurally, subclass and override
+    :meth:`normalize_row` (or :meth:`parse_payload`) and register the new
+    trigger type.
+    """
+
     id = "mail"
     name = _("Mail")
-    description = _("Starts when an email is sent or its status updates.")
+    description = _("Starts when an email is received or its status updates (via webhook).")
     icon = "bi-envelope-at"
 
-    # Configuration form fields
+    # Configuration form fields (in addition to the inherited webhook fields)
     recipient_filter = forms.EmailField(
         label=_("Recipient filter"),
         required=False,
@@ -174,6 +276,7 @@ class MailTrigger(Trigger):
         label=_("Status filter"),
         choices=[
             ("", _("Any")),
+            ("received", _("Received")),
             ("queued", _("Queued")),
             ("sent", _("Sent")),
             ("bounced", _("Bounced")),
@@ -190,13 +293,68 @@ class MailTrigger(Trigger):
         "properties": {
             "message_id": {"type": "string", "minLength": 1},
             "recipient": {"type": "string", "format": "email"},
+            "sender": {"type": "string"},
             "subject": {"type": "string"},
+            "body_text": {"type": "string"},
             "timestamp": {"type": "string", "format": "date-time"},
-            "status": {"type": "string", "enum": ["queued", "sent", "bounced", "opened"]},
+            "status": {"type": "string", "enum": ["received", "queued", "sent", "bounced", "opened"]},
             "provider": {"type": "string"},
         },
         "additionalProperties": True,
     }
+
+    #: Accepted field aliases (first match wins), covering common providers.
+    field_aliases = {
+        "message_id": ("message_id", "Message-Id", "MessageID", "message-id"),
+        "recipient": ("recipient", "to", "To", "ToFull"),
+        "sender": ("sender", "from", "From", "FromFull"),
+        "subject": ("subject", "Subject"),
+        "body_text": ("body_text", "text", "TextBody", "body-plain", "body"),
+        "status": ("status", "event", "RecordType"),
+        "timestamp": ("timestamp", "date", "Date"),
+    }
+
+    def normalize_row(self, row: dict[str, Any]) -> dict[str, Any]:
+        """Normalize a provider payload row to the trigger's data schema.
+
+        Original keys are preserved (the schema allows additional
+        properties); normalized keys take precedence.
+        """
+        normalized = dict(row)
+        for target, aliases in self.field_aliases.items():
+            for alias in aliases:
+                value = row.get(alias)
+                if value not in (None, ""):
+                    normalized[target] = value
+                    break
+        normalized.setdefault("status", "received")
+        if isinstance(normalized.get("status"), str):
+            normalized["status"] = normalized["status"].lower()
+        if not normalized.get("timestamp"):
+            normalized["timestamp"] = now().isoformat()
+        return normalized
+
+    def matches_filters(self, row: dict[str, Any], config: dict[str, Any]) -> bool:
+        """Apply the trigger's configured mail filters to a normalized row."""
+        config = config or {}
+        recipient_filter = config.get("recipient_filter")
+        if recipient_filter and str(row.get("recipient", "")).lower() != recipient_filter.lower():
+            return False
+        subject_contains = config.get("subject_contains")
+        if subject_contains and subject_contains.lower() not in str(row.get("subject", "")).lower():
+            return False
+        status_filter = config.get("status_filter")
+        if status_filter and row.get("status") != status_filter:
+            return False
+        return True
+
+    def parse_payload(self, request, config: dict[str, Any]) -> list[dict[str, Any]]:
+        rows = super().parse_payload(request, config)
+        return [
+            normalized
+            for normalized in (self.normalize_row(row) for row in rows)
+            if self.matches_filters(normalized, config)
+        ]
 
 
 # Timer Trigger schema: expects scheduled time and optional recurrence config
@@ -371,11 +529,15 @@ trigger_registry.register(MailTrigger)
 trigger_registry.register(TimerTrigger)
 trigger_registry.register(CodeTrigger)
 trigger_registry.register(FormSubmissionTrigger)
+trigger_registry.register(GenericWebhookTrigger)
 
 __all__ = [
     "Trigger",
     "TriggerRegistry",
     "trigger_registry",
+    "generate_webhook_token",
+    "WebhookTrigger",
+    "GenericWebhookTrigger",
     "ClickTrigger",
     "MailTrigger",
     "TimerTrigger",

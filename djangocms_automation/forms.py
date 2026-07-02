@@ -78,6 +78,14 @@ class AutomationTriggerAdminForm(forms.ModelForm):
                             value = value.isoformat()
                         config[field_name] = value
 
+        # Webhook triggers always need a token; generate one if left empty.
+        if trigger_type:
+            from .triggers import WebhookTrigger, generate_webhook_token
+
+            trigger_class = trigger_registry.get(trigger_type)
+            if trigger_class and issubclass(trigger_class, WebhookTrigger) and not config.get("token"):
+                config["token"] = generate_webhook_token()
+
         # Store config in cleaned_data so it can be saved
         cleaned_data["_config"] = config
         return cleaned_data
