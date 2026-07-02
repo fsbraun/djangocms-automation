@@ -14,7 +14,7 @@ from __future__ import annotations
 from django import forms
 from django.utils.translation import gettext_lazy as _
 
-from .models import AutomationTrigger
+from .models import AutomationTrigger, ConditionalPluginModel
 from .triggers import trigger_registry
 from . import widgets
 
@@ -100,7 +100,7 @@ class ConditionalPluginForm(forms.ModelForm):
     """Custom form for ConditionalPlugin with ConditionBuilderWidget for condition field."""
 
     class Meta:
-        model = AutomationTrigger
+        model = ConditionalPluginModel
         fields = "__all__"
         widgets = {
             "condition": widgets.ConditionBuilderWidget,

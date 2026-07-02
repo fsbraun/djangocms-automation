@@ -93,20 +93,17 @@ def _parse_string(expr: str) -> str:
 
 
 def _get_from_context(segment: str, current: Any) -> Any:
-    # Numeric segment for list/tuple index
-    if segment.isdigit():
+    # JSON-only traversal: dict keys and list/tuple indices. Object
+    # attribute access is deliberately not supported (automation data is
+    # JSON, and attribute traversal is the unsafe path).
+    if segment.isdigit() and isinstance(current, (list, tuple)):
         idx = int(segment)
-        if isinstance(current, (list, tuple)):
-            try:
-                return current[idx]
-            except IndexError as e:
-                raise ExpressionError(f"Index {idx} out of range") from e
-    # Dict key
+        try:
+            return current[idx]
+        except IndexError as e:
+            raise ExpressionError(f"Index {idx} out of range") from e
     if isinstance(current, dict) and segment in current:
         return current[segment]
-    # Object attribute
-    if hasattr(current, segment):
-        return getattr(current, segment)
     raise ExpressionError(f"Segment '{segment}' not found")
 
 

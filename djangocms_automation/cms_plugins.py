@@ -1,3 +1,4 @@
+from django import forms as django_forms
 from django.utils.translation import gettext as _
 
 from cms.plugin_base import CMSPluginBase
@@ -6,6 +7,7 @@ from cms.plugin_pool import plugin_pool
 from . import forms, models
 from .constants import Module
 from .utilities.expressions import validate_expression
+from .utilities.templates import validate_template
 
 
 automation_plugins = []
@@ -14,14 +16,21 @@ modifier_plugins = []
 
 
 def register_automation_plugin(cls):
-    """Decorator to register an automation plugin with common settings."""
+    """Decorator to register an automation plugin with common settings.
+
+    Plugins are classified via their ``automation_category`` attribute
+    (``"action"``, ``"modifier"``, or ``None`` for flow plugins). For
+    backwards compatibility, plugins without the attribute fall back to the
+    old name convention ("Action"/"Modifier" in the class name).
+    """
     plugin_pool.register_plugin(cls)
     automation_plugins.append(cls.__name__)
-    if "Action" in cls.__name__:
-        # Convention: Action plugins have "Action" in their class name
+    category = getattr(cls, "automation_category", ...)
+    if category is ...:
+        category = "action" if "Action" in cls.__name__ else "modifier" if "Modifier" in cls.__name__ else None
+    if category == "action":
         action_plugins.append(cls.__name__)
-    if "Modifier" in cls.__name__:
-        # Convention: Modifier plugins have "Modifier" in their class name
+    elif category == "modifier":
         modifier_plugins.append(cls.__name__)
     return cls
 
@@ -129,9 +138,23 @@ class AutomationPath(AutomationPlugin):
 
 
 @register_automation_plugin
-class AutomationAction(AutomationPlugin):
+class ActionPlugin(AutomationPlugin):
+    """Base CMS plugin for all action plugins.
+
+    Renamed from ``AutomationAction`` (see migration 0007) to resolve the
+    collision with the runtime model
+    :class:`djangocms_automation.instances.AutomationAction`.
+
+    Subclasses declare a ``data_form`` (a plain form whose declared fields
+    define the action's inputs). Each field is rendered as an expression
+    input — or a template textarea for ``Textarea`` widgets — and the
+    entered values are persisted in the plugin model's ``config`` JSON
+    field, from which the action resolves its inputs at runtime.
+    """
+
     name = _("Example action")
     module = Module.ACTION
+    automation_category = "action"
 
     model = models.BaseActionPluginModel
 
@@ -156,20 +179,41 @@ class AutomationAction(AutomationPlugin):
         return super().get_form(request, obj=obj, **kwargs)
 
     def get_data_form_fields(self, request, obj=None):
-        """Return data_form if defined, else a basic form."""
-        from django import forms
+        """Build the dynamic config fields from the declared data_form.
 
+        Values are seeded from the plugin's stored ``config``. Fields
+        declared with a ``Textarea`` widget are treated as templates
+        (``{{ path }}`` substitution); all others as expressions.
+        """
+        if not self.data_form:
+            return {}
+        config = (obj.config or {}) if obj is not None else {}
+        fields = {}
+        for f_name, declared in self.data_form.declared_fields.items():
+            is_template = isinstance(declared.widget, django_forms.Textarea)
+            fields[f_name] = django_forms.CharField(
+                label=declared.label or f_name,
+                help_text=declared.help_text,
+                initial=config.get(f_name, f_name if not is_template else ""),
+                required=declared.required,
+                validators=[validate_template if is_template else validate_expression],
+                widget=(
+                    django_forms.Textarea(attrs={"rows": 4})
+                    if is_template
+                    else django_forms.TextInput(attrs={"code": ""})
+                ),
+            )
+        return fields
+
+    def save_model(self, request, obj, form, change):
+        """Persist the dynamic data_form values into the config JSON field."""
         if self.data_form:
-            return {
-                f_name: forms.CharField(
-                    initial=f_name,
-                    required=True,
-                    validators=[validate_expression],
-                    widget=forms.TextInput(attrs={"code": ""}),
-                )
+            obj.config = {
+                f_name: form.cleaned_data.get(f_name, "")
                 for f_name in self.data_form.declared_fields.keys()
+                if f_name in form.cleaned_data
             }
-        return {}
+        super().save_model(request, obj, form, change)
 
     def get_fieldsets(self, request, obj=None):
         """Return fieldsets including data_form fields if defined."""
@@ -197,7 +241,7 @@ class AutomationAction(AutomationPlugin):
 
 
 @register_automation_plugin
-class MailAction(AutomationAction):
+class MailAction(ActionPlugin):
     name = _("Send Email")
     module = Module.ACTION
     icon = "bi-envelope-at"

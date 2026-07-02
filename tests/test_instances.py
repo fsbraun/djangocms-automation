@@ -83,16 +83,15 @@ def test_automation_action_hours_since_created(automation_content):
 @pytest.mark.django_db
 def test_automation_action_get_previous_tasks_joined_list(automation_content):
     inst = AutomationInstance.objects.create(automation_content=automation_content)
-    a1 = AutomationAction.objects.create(automation_instance=inst, plugin_ptr=uuid.uuid4())
-    a2 = AutomationAction.objects.create(automation_instance=inst, plugin_ptr=uuid.uuid4())
     current = AutomationAction.objects.create(
         automation_instance=inst,
         plugin_ptr=uuid.uuid4(),
         message="Joined",
-        result=[a1.id, a2.id],
     )
-    prev_qs = current.get_previous_tasks()
-    assert set(prev_qs.values_list("id", flat=True)) == {a1.id, a2.id}
+    a1 = AutomationAction.objects.create(automation_instance=inst, plugin_ptr=uuid.uuid4(), parent=current)
+    a2 = AutomationAction.objects.create(automation_instance=inst, plugin_ptr=uuid.uuid4(), parent=current)
+    prev_list = current.get_previous_tasks()
+    assert {a.id for a in prev_list} == {a1.id, a2.id}
 
 
 @pytest.mark.django_db

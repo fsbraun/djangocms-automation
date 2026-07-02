@@ -41,13 +41,19 @@ class AutomationInstance(models.Model):
         on_delete=models.CASCADE,
         verbose_name=_("Automation Content"),
     )
+    status = models.CharField(
+        max_length=20,
+        choices=STATES,
+        default=RUNNING,
+        verbose_name=_("Status"),
+    )
     initial_data = models.JSONField(
         verbose_name=_("Initial Data"),
-        default=dict,
+        default=list,
     )
     data = models.JSONField(
         verbose_name=_("Data"),
-        default=dict,
+        default=list,
     )
     key = models.CharField(
         verbose_name=_("Unique hash"),
@@ -59,6 +65,11 @@ class AutomationInstance(models.Model):
     )
     updated = models.DateTimeField(
         auto_now=True,
+    )
+    finished = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name=_("Finished"),
     )
 
     def save(self, *args, **kwargs):
@@ -82,7 +93,7 @@ class AutomationInstance(models.Model):
         :returns: Tuple of (number deleted, dict with deletion counts per model).
         :rtype: tuple
         """
-        automations = cls.objects.filter(finished=True, updated__lt=now() - datetime.timedelta(days=days))
+        automations = cls.objects.filter(finished__isnull=False, updated__lt=now() - datetime.timedelta(days=days))
         return automations.delete()
 
     def __str__(self):
@@ -125,16 +136,12 @@ class AutomationAction(models.Model):
     )
     plugin_ptr = models.UUIDField(
         blank=True,
-        verbose_name=_("Status"),
+        verbose_name=_("Plugin UUID"),
     )
     paused_until = models.DateTimeField(
         null=True,
         blank=True,
         verbose_name=_("Paused until"),
-    )
-    locked = models.IntegerField(
-        default=0,
-        verbose_name=_("Locked"),
     )
     requires_interaction = models.BooleanField(default=False, verbose_name=_("Requires interaction"))
     interaction_user = models.ForeignKey(
@@ -189,12 +196,14 @@ class AutomationAction(models.Model):
     def get_previous_tasks(self) -> list["AutomationAction"]:
         """Retrieve the previous action(s) in the execution chain.
 
-        :returns: List of previous AutomationAction instances. For joined actions,
-            returns all merged predecessors; otherwise returns the single previous action.
+        :returns: List of previous AutomationAction instances. For join
+            points (actions that fanned out into branches), returns the
+            branch actions; otherwise returns the single previous action.
         :rtype: list[AutomationAction]
         """
-        if self.message == "Joined" and self.result:
-            return self.__class__.objects.filter(id__in=self.result)
+        children = list(self.children.all())
+        if children:
+            return children
         return [self.previous] if self.previous else []
 
     @classmethod

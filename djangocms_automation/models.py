@@ -6,9 +6,18 @@ from django.utils.translation import gettext_lazy as _
 from cms.models import CMSPlugin, Placeholder
 from cms.models.fields import PlaceholderRelationField
 
-from .instances import AutomationInstance, AutomationAction, RUNNING, PENDING, COMPLETED  # noqa F401
+from .instances import (  # noqa F401
+    AutomationInstance,
+    AutomationAction,
+    RUNNING,
+    PENDING,
+    WAITING,
+    COMPLETED,
+    FAILED,
+)
 from .services import service_registry
 from .triggers import trigger_registry
+from .utilities.conditions import evaluate as evaluate_condition
 
 
 class AutomationContent(models.Model):
@@ -262,7 +271,14 @@ class AutomationPluginModel(CMSPlugin):
 
 
 class ConditionalPluginModel(AutomationPluginModel):
-    """Plugin model for conditional branching based on evaluated expressions."""
+    """Plugin model for conditional branching based on evaluated expressions.
+
+    On first execution the condition is evaluated against the automation
+    data and an action for the first plugin of the matching "Yes"/"No"
+    branch is created (the conditional itself goes ``WAITING``). Once the
+    branch chain finishes, the conditional completes with the branch's
+    output and the flow resumes after the conditional block.
+    """
 
     question = models.CharField(
         max_length=255,
@@ -310,6 +326,77 @@ class ConditionalPluginModel(AutomationPluginModel):
             messages.append(self.multiple_channels)
         return messages
 
+    def _get_branch(self, condition_result: bool):
+        """Get the branch container plugin for the condition outcome."""
+        plugin_type = "ThenPlugin" if condition_result else "ElsePlugin"
+        for child in self.child_plugin_instances or []:
+            if child.plugin_type == plugin_type:
+                return child
+        return None
+
+    def execute(
+        self,
+        action: AutomationAction,
+        data: list,
+        single_step: bool = False,
+        plugin_dict: dict | None = None,
+    ) -> tuple[str, dict | list]:
+        """Evaluate the condition and route into the matching branch.
+
+        :returns: ``(WAITING, {"condition": ...})`` while the chosen branch
+            executes, ``(COMPLETED, data)`` for a missing/empty branch
+            (pass-through), and ``(COMPLETED, branch_output)`` once the
+            branch chain has finished.
+        """
+        children = action.children.all()
+        if not children.exists():
+            condition_result = bool(evaluate_condition(self.condition, data))
+            action._condition_result = condition_result
+            branch = self._get_branch(condition_result)
+            if branch is None or not branch.child_plugin_instances:
+                # Missing or empty branch: nothing to do, pass data through.
+                return COMPLETED, data
+            return WAITING, {"condition": condition_result}
+        if children.filter(state=FAILED).exists():
+            return FAILED, {"error": "Conditional branch failed"}
+        if children.filter(finished__isnull=True).exists():
+            return WAITING, {}
+        # Branch finished: complete with the branch end's output.
+        condition_result = (action.result or {}).get("condition") if isinstance(action.result, dict) else None
+        branch = self._get_branch(bool(condition_result))
+        output = data
+        if branch and branch.child_plugin_instances:
+            end_plugin = branch.child_plugin_instances[-1]
+            if not hasattr(end_plugin, "uuid"):
+                end_plugin, _unused = end_plugin.get_plugin_instance()
+            end_action = children.filter(plugin_ptr=end_plugin.uuid).order_by("-created").first()
+            if end_action is not None and end_action.result is not None:
+                output = end_action.result
+        return COMPLETED, output
+
+    def get_next_actions(self, action: AutomationAction) -> list[AutomationAction]:
+        """Create the branch's first action while waiting; else continue flow."""
+        if action.state == WAITING and not action.children.exists():
+            condition_result = getattr(action, "_condition_result", None)
+            if condition_result is None and isinstance(action.result, dict):
+                condition_result = action.result.get("condition")
+            branch = self._get_branch(bool(condition_result))
+            if branch and branch.child_plugin_instances:
+                first_plugin = branch.child_plugin_instances[0]
+                if not hasattr(first_plugin, "uuid"):
+                    first_plugin, _unused = first_plugin.get_plugin_instance()
+                return [
+                    AutomationAction.objects.create(
+                        previous=action,
+                        parent=action,
+                        automation_instance=action.automation_instance,
+                        plugin_ptr=first_plugin.uuid,
+                        finished=None,
+                    )
+                ]
+            return []
+        return super().get_next_actions(action)
+
 
 class SplitPluginModel(AutomationPluginModel):
     """Plugin model for parallel execution of multiple workflow paths."""
@@ -333,6 +420,24 @@ class SplitPluginModel(AutomationPluginModel):
             return [self.no_paths]
         return []
 
+    def _paths(self) -> list:
+        """Get the non-empty AutomationPath children of this split."""
+        return [
+            child
+            for child in (self.child_plugin_instances or [])
+            if child.plugin_type == "AutomationPath" and child.child_plugin_instances
+        ]
+
+    def _branch_end_uuids(self) -> list:
+        """Get the plugin uuids of the last plugin in each path."""
+        uuids = []
+        for path in self._paths():
+            end_plugin = path.child_plugin_instances[-1]
+            if not hasattr(end_plugin, "uuid"):
+                end_plugin, _unused = end_plugin.get_plugin_instance()
+            uuids.append(end_plugin.uuid)
+        return uuids
+
     def get_next_actions(self, action: AutomationAction) -> list[AutomationAction]:
         """Create parallel actions for each path in the split.
 
@@ -341,57 +446,154 @@ class SplitPluginModel(AutomationPluginModel):
         :returns: List of actions for parallel path execution.
         :rtype: list[AutomationAction]
         """
-        if action.state == RUNNING and not action.children.exists():
+        if action.state == WAITING and not action.children.exists():
             next_actions = []
-            for child in self.child_plugin_instances:
-                if child.plugin_type == "AutomationPath" and child.child_plugin_instances:
-                    # Downcast to get the actual plugin instance with uuid
-                    child_instance, _ = child.child_plugin_instances[0].get_plugin_instance()
-                    next_actions.append(
-                        AutomationAction.objects.create(
-                            previous=action,
-                            parent=action,
-                            automation_instance=action.automation_instance,
-                            plugin_ptr=child_instance.uuid,
-                            finished=None,
-                        )
+            for path in self._paths():
+                # Downcast to get the actual plugin instance with uuid
+                child_instance, _unused = path.child_plugin_instances[0].get_plugin_instance()
+                next_actions.append(
+                    AutomationAction.objects.create(
+                        previous=action,
+                        parent=action,
+                        automation_instance=action.automation_instance,
+                        plugin_ptr=child_instance.uuid,
+                        finished=None,
                     )
+                )
             return next_actions
         return super().get_next_actions(action)
 
     def execute(
         self,
         action: AutomationAction,
-        data: dict,
+        data: list,
         single_step: bool = False,
         plugin_dict: dict[CMSPlugin] | None = None,
-    ) -> tuple[str, dict]:
-        """Execute the split plugin, waiting for all paths to complete.
+    ) -> tuple[str, dict | list]:
+        """Execute the split: fan out, then join once all paths finished.
 
-        :param action: The automation action being executed.
-        :type action: AutomationAction
-        :param data: Current automation data dictionary.
-        :type data: dict
-        :param single_step: If True, execute only this step.
-        :type single_step: bool
-        :param plugin_dict: Optional mapping of plugin instances.
-        :type plugin_dict: dict[CMSPlugin] | None
-        :returns: Tuple of (state, result_data).
-        :rtype: tuple[str, dict]
+        First execution returns ``WAITING`` (the engine then creates one
+        action per path via :meth:`get_next_actions`). When a branch chain
+        ends, the engine wakes this action again: any failed branch fails
+        the split; once all branches finished, the split completes with the
+        concatenated output rows of all branch ends (the join point).
+
+        :returns: Tuple of (state, output).
         """
-        path_ends = [
-            child.child_plugin_instances[-1] for child in self.child_plugin_instances if child.child_plugin_instances
-        ]
-        path_ends = AutomationAction.objects.filter(
-            plugin_ptr__in=[p.uuid for p in path_ends], automation_instance=action.automation_instance
-        )
-        completed = all(path.finished for path in path_ends)
-        if path_ends and completed:
-            return COMPLETED, {}
-        return RUNNING, {}
+        from .engine import normalize_rows
+
+        children = action.children.all()
+        if not children.exists():
+            if not self._paths():
+                # Nothing to fan out to: pass data through.
+                return COMPLETED, data
+            return WAITING, {}
+        if children.filter(state=FAILED).exists():
+            return FAILED, {"error": "One or more split branches failed"}
+        if children.filter(finished__isnull=True).exists():
+            # A branch is still running; keep waiting.
+            return WAITING, {}
+        # Join: merge the outputs of all branch end actions.
+        action.message = "Joined"
+        merged: list = []
+        end_actions = children.filter(plugin_ptr__in=self._branch_end_uuids())
+        for end_action in end_actions:
+            merged.extend(normalize_rows(end_action.result))
+        return COMPLETED, merged
 
 
 class BaseActionPluginModel(AutomationPluginModel):
-    """Base model for action plugins that perform tasks."""
+    """Base model for action plugins that perform tasks.
 
-    pass
+    Concrete action behavior is implemented in proxy subclasses (see
+    ``djangocms_automation.actions``) which override :meth:`perform`.
+    Configuration entered through the plugin's ``data_form`` is persisted
+    in :attr:`config` as a mapping of field name to expression/template.
+    """
+
+    config = models.JSONField(
+        default=dict,
+        blank=True,
+        verbose_name=_("Configuration"),
+        help_text=_("Field values (expressions or templates) entered in the plugin form."),
+    )
+
+    def _template_fields(self) -> set[str]:
+        """Get the config field names that hold templates (Textarea widgets).
+
+        Fields declared with a ``Textarea`` widget in the plugin's
+        ``data_form`` are rendered with ``safe_render`` (``{{ path }}``
+        substitution); all other fields are resolved as expressions.
+        """
+        from django import forms as django_forms
+        from cms.plugin_pool import plugin_pool
+
+        try:
+            plugin_cls = plugin_pool.get_plugin(self.plugin_type)
+        except KeyError:
+            return set()
+        data_form = getattr(plugin_cls, "data_form", None)
+        if not data_form:
+            return set()
+        return {
+            name
+            for name, field in data_form.declared_fields.items()
+            if isinstance(field.widget, django_forms.Textarea)
+        }
+
+    def resolve_inputs(self, row: dict | None, rows: list) -> dict:
+        """Resolve all configured inputs against a data row.
+
+        Expression fields are resolved with
+        :func:`~djangocms_automation.utilities.expressions.resolve_expression`;
+        template fields (Textarea widgets in the ``data_form``) are rendered
+        with :func:`~djangocms_automation.utilities.templates.safe_render`.
+        The context is the given row with the full row list available as
+        ``data``.
+
+        :param row: The current data row (or None).
+        :param rows: All data rows.
+        :returns: Mapping of config field name to resolved value.
+        """
+        from .utilities.expressions import resolve_expression
+        from .utilities.templates import safe_render
+
+        context = {**(row or {}), "data": rows}
+        template_fields = self._template_fields()
+        resolved = {}
+        for key, value in (self.config or {}).items():
+            if value is None or value == "":
+                resolved[key] = None
+            elif key in template_fields:
+                resolved[key] = safe_render(str(value), context)
+            else:
+                resolved[key] = resolve_expression(str(value), context)
+        return resolved
+
+    def execute(
+        self,
+        action: AutomationAction,
+        data: list,
+        single_step: bool = False,
+        plugin_dict: dict | None = None,
+    ) -> tuple[str, list]:
+        """Run :meth:`perform` and complete with its output.
+
+        Exceptions propagate to the engine, which records the action (and
+        instance) as failed; :class:`~djangocms_automation.engine.ActionPause`
+        pauses the action instead.
+        """
+        return COMPLETED, self.perform(action, data or [])
+
+    def perform(self, action: AutomationAction, rows: list) -> list:
+        """Perform the action's side effect and return the output rows.
+
+        The default implementation passes the data through unchanged.
+        Concrete actions (see :mod:`djangocms_automation.actions`) override
+        this.
+
+        :param action: The automation action being executed.
+        :param rows: The incoming data rows.
+        :returns: The outgoing data rows.
+        """
+        return rows
