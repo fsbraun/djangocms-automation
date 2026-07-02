@@ -1,8 +1,8 @@
-Installing djangocms-automation
-===============================
-
 Installation
-------------
+============
+
+Downloading the package
+-----------------------
 
 Install the package from GitHub using pip:
 
