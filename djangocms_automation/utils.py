@@ -10,8 +10,8 @@ class ThreadBackend(BaseTaskBackend):
     Properly manages Django database connections to prevent leaks.
     """
 
-    def __init__(self, options):
-        super().__init__(options)
+    def __init__(self, alias, params):
+        super().__init__(alias, params)
         self._results = {}
         self._lock = threading.Lock()
 

@@ -134,3 +134,42 @@ def test_conditional_missing_branch_passes_through(run_setup, settings):
     instance.refresh_from_db()
     assert instance.status == COMPLETED
     assert instance.data == [{"score": 1}]
+
+
+@pytest.mark.django_db
+def test_conditional_failing_branch_fails_conditional_and_instance(run_setup, settings):
+    """A failure inside the chosen branch fails the conditional and the run."""
+    from djangocms_automation.actions.mail import MailActionPluginModel
+    from djangocms_automation.instances import FAILED
+
+    trigger, placeholder = run_setup
+    conditional = add_plugin(
+        placeholder=placeholder,
+        plugin_type="AutomationIf",
+        language=settings.LANGUAGE_CODE,
+        condition=CONDITION,
+    )
+    then_branch = add_plugin(
+        placeholder=placeholder, plugin_type="ThenPlugin", language=settings.LANGUAGE_CODE, target=conditional
+    )
+    failing = add_plugin(
+        placeholder=placeholder, plugin_type="MailAction", language=settings.LANGUAGE_CODE, target=then_branch
+    )
+    failing_model = MailActionPluginModel.objects.get(pk=failing.pk)
+    failing_model.config = {"subject": "'s'", "body": "b", "recipient_email": "missing"}
+    failing_model.save()
+
+    trigger.trigger_execution(data=[{"score": 99}], start=True)  # condition true -> Then branch
+
+    instance = trigger.automation_content.automationinstance_set.first()
+    actions = AutomationAction.objects.filter(automation_instance=instance)
+    conditional_model = ConditionalPluginModel.objects.get(pk=conditional.pk)
+    conditional_action = actions.get(plugin_ptr=conditional_model.uuid)
+    branch_action = actions.exclude(pk=conditional_action.pk).get()
+
+    assert branch_action.state == FAILED
+    assert conditional_action.state == FAILED
+    assert conditional_action.message == "Branch failed"
+    instance.refresh_from_db()
+    assert instance.status == FAILED
+    assert instance.finished is not None

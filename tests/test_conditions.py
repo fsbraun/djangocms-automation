@@ -89,3 +89,36 @@ def test_json_string_condition():
 def test_empty_data():
     condition = {"logic": "and", "conditions": [{"field": "status", "operator": "==", "value": "'active'"}]}
     assert evaluate(condition, []) is False
+
+
+@pytest.mark.parametrize(
+    "field, operator, value, expected",
+    [
+        # unknown operator is safely falsy
+        ("status", "regex", "'a.*'", False),
+        # missing operator defaults to equality
+        ("status", None, "'active'", True),
+        # string ordering fallback (both sides non-numeric)
+        ("name", "<", "'Bob'", True),
+        # booleans follow Python equality (True == 1); for ordering they
+        # fall back to string comparison ("True" > "0")
+        ("flag", "==", "1", True),
+        ("flag", ">", "0", True),
+        # membership against a non-list, non-string value
+        ("count", "in", "5", True),
+        # field expression is None
+        (None, "==", "'x'", False),
+    ],
+)
+def test_operator_edges(field, operator, value, expected):
+    data = [{"status": "active", "count": 5, "name": "Alice", "flag": True}]
+    cond = {"field": field, "value": value}
+    if operator is not None:
+        cond["operator"] = operator
+    condition = {"logic": "and", "conditions": [cond]}
+    assert evaluate(condition, data) is expected
+
+
+def test_non_dict_first_row_uses_empty_context():
+    condition = {"logic": "and", "conditions": [{"field": "data.0", "operator": "==", "value": "'x'"}]}
+    assert evaluate(condition, ["x"]) is True

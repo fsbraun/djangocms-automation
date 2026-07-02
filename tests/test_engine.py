@@ -21,7 +21,33 @@ from djangocms_automation.instances import (
     AutomationAction,
     AutomationInstance,
 )
-from djangocms_automation.models import Automation, AutomationContent, AutomationTrigger
+from djangocms_automation.models import (
+    Automation,
+    AutomationContent,
+    AutomationTrigger,
+    BaseActionPluginModel,
+)
+
+from cms.plugin_base import CMSPluginBase
+from cms.plugin_pool import plugin_pool
+
+
+class FailingActionPluginModel(BaseActionPluginModel):
+    """Action whose execute reports FAILED via the state (not an exception)."""
+
+    class Meta:
+        proxy = True
+        app_label = "djangocms_automation"
+
+    def execute(self, action, data, single_step=False, plugin_dict=None):
+        return FAILED, {"error": "explicit failure"}
+
+
+@plugin_pool.register_plugin
+class FailingStatePlugin(CMSPluginBase):
+    model = FailingActionPluginModel
+    name = "Failing State Plugin"
+    render_template = "djangocms_automation/plugins/action.html"
 
 
 @pytest.fixture
@@ -223,3 +249,131 @@ def test_recurring_timer_steps_forward(run_setup, settings):
     assert fired_total == 4  # start, +1h, +2h, +3h — then caught up
     trigger.refresh_from_db()
     assert trigger.config["fired_count"] == 4
+
+
+@pytest.mark.django_db
+def test_execute_returning_failed_state_fails_run(run_setup, settings):
+    """A plugin may report failure via its return state instead of raising."""
+    trigger, placeholder = run_setup
+    add_plugin(placeholder=placeholder, plugin_type="FailingStatePlugin", language=settings.LANGUAGE_CODE)
+
+    trigger.trigger_execution(data=[{}], start=True)
+
+    instance = trigger.automation_content.automationinstance_set.first()
+    action = AutomationAction.objects.get(automation_instance=instance)
+    assert action.state == FAILED
+    assert action.result["error"] == "explicit failure"
+    assert action.finished is not None
+    instance.refresh_from_db()
+    assert instance.status == FAILED
+
+
+@pytest.mark.django_db
+def test_notify_parent_noop_when_parent_not_waiting(automation_content):
+    instance = AutomationInstance.objects.create(automation_content=automation_content)
+    parent = AutomationAction.objects.create(automation_instance=instance, plugin_ptr=uuid.uuid4(), state=RUNNING)
+    child = AutomationAction.objects.create(automation_instance=instance, plugin_ptr=uuid.uuid4(), parent=parent)
+    # Parent is RUNNING (not WAITING): the wake flip must not fire.
+    assert engine.notify_parent(child) is False
+    parent.refresh_from_db()
+    assert parent.state == RUNNING
+
+
+@pytest.mark.django_db
+def test_resume_action_rejects_non_interactive_and_double_resume(run_setup, admin_user, settings):
+    trigger, placeholder = run_setup
+    add_plugin(placeholder=placeholder, plugin_type="ActionPlugin", language=settings.LANGUAGE_CODE)
+    trigger.trigger_execution(data=[{}], start=True)
+    instance = trigger.automation_content.automationinstance_set.first()
+    action = AutomationAction.objects.get(automation_instance=instance)
+
+    # Completed / non-interactive action cannot be resumed.
+    with pytest.raises(ValueError, match="not awaiting"):
+        engine.resume_action(action.pk, admin_user)
+
+    # Interactive flag set but state not WAITING -> stale claim is rejected.
+    stale = AutomationAction.objects.create(
+        automation_instance=instance,
+        plugin_ptr=uuid.uuid4(),
+        requires_interaction=True,
+        state=RUNNING,
+    )
+    with pytest.raises(ValueError, match="no longer waiting"):
+        engine.resume_action(stale.pk, admin_user)
+
+
+# ---------------------------------------------------------------------------
+# Timer scheduling edge cases
+# ---------------------------------------------------------------------------
+
+
+def _dt(iso):
+    return datetime.datetime.fromisoformat(iso)
+
+
+def test_add_months_clamps_day():
+    assert engine._add_months(_dt("2026-01-31T10:00:00+00:00"), 1) == _dt("2026-02-28T10:00:00+00:00")
+    assert engine._add_months(_dt("2024-01-31T10:00:00+00:00"), 1) == _dt("2024-02-29T10:00:00+00:00")  # leap
+    assert engine._add_months(_dt("2026-11-30T10:00:00+00:00"), 3) == _dt("2027-02-28T10:00:00+00:00")
+
+
+def test_next_timer_fire_edges():
+    ts = _dt("2026-07-02T12:00:00+00:00")
+
+    # No/invalid scheduled_at -> never fires.
+    assert engine._next_timer_fire({}, ts) is None
+    assert engine._next_timer_fire({"scheduled_at": "garbage"}, ts) is None
+
+    # Naive datetimes are treated as UTC.
+    assert engine._next_timer_fire({"scheduled_at": "2026-07-02T11:00:00"}, ts) == _dt("2026-07-02T11:00:00+00:00")
+
+    # Not yet due.
+    assert engine._next_timer_fire({"scheduled_at": "2026-07-02T13:00:00+00:00"}, ts) is None
+
+    base = {
+        "scheduled_at": "2026-07-02T09:00:00+00:00",
+        "last_fired": "2026-07-02T09:00:00+00:00",
+    }
+    # One-shot already fired.
+    assert engine._next_timer_fire(base, ts) is None
+    # Unknown frequency -> never.
+    assert engine._next_timer_fire({**base, "recurrence_frequency": "fortnightly"}, ts) is None
+    # Count limit reached.
+    assert (
+        engine._next_timer_fire(
+            {**base, "recurrence_frequency": "hourly", "recurrence_count": 1, "fired_count": 1}, ts
+        )
+        is None
+    )
+    # End date passed.
+    assert (
+        engine._next_timer_fire(
+            {**base, "recurrence_frequency": "hourly", "recurrence_end_date": "2026-07-02T09:30:00+00:00"}, ts
+        )
+        is None
+    )
+    # Monthly stepping.
+    monthly = {
+        "scheduled_at": "2026-05-31T09:00:00+00:00",
+        "last_fired": "2026-05-31T09:00:00+00:00",
+        "recurrence_frequency": "monthly",
+    }
+    assert engine._next_timer_fire(monthly, ts) == _dt("2026-06-30T09:00:00+00:00")
+    # Interval > 1.
+    hourly2 = {**base, "recurrence_frequency": "hourly", "recurrence_interval": 2}
+    assert engine._next_timer_fire(hourly2, ts) == _dt("2026-07-02T11:00:00+00:00")
+
+
+@pytest.mark.django_db
+def test_fire_due_timers_skips_inactive_automation(run_setup, settings):
+    trigger, placeholder = run_setup
+    add_plugin(placeholder=placeholder, plugin_type="ActionPlugin", language=settings.LANGUAGE_CODE)
+    trigger.type = "timer"
+    trigger.config = {"scheduled_at": (now() - datetime.timedelta(minutes=5)).isoformat()}
+    trigger.save()
+    automation = trigger.automation_content.automation
+    automation.is_active = False
+    automation.save()
+
+    assert engine.fire_due_timers() == 0
+    assert trigger.automation_content.automationinstance_set.count() == 0

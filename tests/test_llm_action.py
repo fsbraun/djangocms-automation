@@ -318,3 +318,60 @@ def test_llm_action_gives_up_after_max_retries(run_setup, llm_settings):
 
     assert action.state == FAILED
     assert "giving up" in action.result["error"].lower()
+
+
+# ---------------------------------------------------------------------------
+# LLMActionForm validation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_llm_form_valid_and_default_model(llm_settings):
+    from djangocms_automation.actions.llm_action import LLMActionForm
+
+    llm_settings.AUTOMATION_LLM_DEFAULT = "openai/gpt-4.1"
+    form = LLMActionForm(
+        data={
+            "model": "anthropic/claude-opus-4-8",
+            "system_prompt": "Be brief.",
+            "prompt": "Summarize {{ text }}",
+            "output_schema": '{"type": "object", "additionalProperties": false}',
+        }
+    )
+    assert form.fields["model"].initial == "openai/gpt-4.1"
+    assert form.is_valid(), form.errors
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "schema, error_fragment",
+    [
+        ("{not json", "Invalid JSON"),
+        ('["a", "b"]', "must be a JSON object"),
+        ('{"type": "object"}', "additionalProperties"),
+    ],
+)
+def test_llm_form_rejects_bad_schema(llm_settings, schema, error_fragment):
+    from djangocms_automation.actions.llm_action import LLMActionForm
+
+    form = LLMActionForm(data={"model": "anthropic/claude-opus-4-8", "prompt": "p", "output_schema": schema})
+    assert not form.is_valid()
+    assert error_fragment in str(form.errors["output_schema"])
+
+
+@pytest.mark.django_db
+def test_llm_form_rejects_unlisted_model(llm_settings):
+    from djangocms_automation.actions.llm_action import LLMActionForm
+
+    form = LLMActionForm(data={"model": "anthropic/claude-haiku-4-5", "prompt": "p"})
+    assert not form.is_valid()
+    assert "model" in form.errors
+
+
+@pytest.mark.django_db
+def test_llm_form_rejects_malformed_prompt_template(llm_settings):
+    from djangocms_automation.actions.llm_action import LLMActionForm
+
+    form = LLMActionForm(data={"model": "anthropic/claude-opus-4-8", "prompt": "Broken {{ unclosed"})
+    assert not form.is_valid()
+    assert "prompt" in form.errors
