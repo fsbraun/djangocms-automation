@@ -200,14 +200,14 @@ class ActionPlugin(AutomationPlugin):
             import copy
 
             fields = {}
-            for f_name, declared in self.data_form.declared_fields.items():
+            for f_name, declared in self.data_form.base_fields.items():
                 field = copy.deepcopy(declared)
                 if f_name in config:
                     field.initial = config[f_name]
                 fields[f_name] = field
             return fields
         fields = {}
-        for f_name, declared in self.data_form.declared_fields.items():
+        for f_name, declared in self.data_form.base_fields.items():
             is_template = isinstance(declared.widget, django_forms.Textarea)
             fields[f_name] = django_forms.CharField(
                 label=declared.label or f_name,
