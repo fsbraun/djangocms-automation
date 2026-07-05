@@ -536,9 +536,7 @@ class BaseActionPluginModel(AutomationPluginModel):
         if not data_form:
             return set()
         return {
-            name
-            for name, field in data_form.declared_fields.items()
-            if isinstance(field.widget, django_forms.Textarea)
+            name for name, field in data_form.base_fields.items() if isinstance(field.widget, django_forms.Textarea)
         }
 
     def resolve_inputs(self, row: dict | None, rows: list) -> dict:

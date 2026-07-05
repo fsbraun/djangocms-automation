@@ -228,7 +228,7 @@ class ActionPlugin(AutomationPlugin):
         if self.data_form:
             obj.config = {
                 f_name: form.cleaned_data.get(f_name, "")
-                for f_name in self.data_form.declared_fields.keys()
+                for f_name in self.data_form.base_fields.keys()
                 if f_name in form.cleaned_data
             }
         super().save_model(request, obj, form, change)
@@ -237,7 +237,7 @@ class ActionPlugin(AutomationPlugin):
         """Return fieldsets including data_form fields if defined."""
         fieldsets = super().get_fieldsets(request, obj)
         if self.data_form:
-            data_fields = list(self.data_form.declared_fields.keys())
+            data_fields = list(self.data_form.base_fields.keys())
             fieldsets = fieldsets + [
                 (
                     _("Inputs"),

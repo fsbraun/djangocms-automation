@@ -50,15 +50,18 @@ class WebhookView(View):
                 return JsonResponse({"error": "Invalid signature."}, status=403)
             try:
                 rows = handler.parse_payload(request, trigger.config)
-            except ValueError as exc:
-                return JsonResponse({"error": str(exc)}, status=400)
+            except ValueError:
+                return JsonResponse({"error": "Could not parse the request payload."}, status=400)
             if not rows:
                 filtered += 1
                 continue
             for row in rows:
                 if not handler.validate_payload(row, raise_errors=False):
                     return JsonResponse({"error": "Payload does not match the trigger's data schema."}, status=400)
-            trigger.trigger_execution(data=rows, start=True)
+            try:
+                trigger.trigger_execution(data=rows, start=True)
+            except Exception:
+                return JsonResponse({"error": "Automation execution failed."}, status=500)
             fired += 1
 
         if not matched:

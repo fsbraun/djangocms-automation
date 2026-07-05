@@ -134,13 +134,37 @@ def build_plugin_map(automation_content_id: int) -> dict[uuid_module.UUID, CMSPl
     return {plugin.uuid: plugin for plugin in plugins if hasattr(plugin, "uuid")}
 
 
+def _is_immediate_backend() -> bool:
+    """Check whether the configured task backend is the ImmediateBackend.
+
+    The ``ImmediateBackend`` runs tasks synchronously in-process inside the
+    current transaction, so ``transaction.on_commit`` callbacks never fire.
+    We detect it via ``settings.TASKS`` rather than inspecting the
+    ``ConnectionProxy`` that wraps the actual backend at runtime.
+    """
+    from django.conf import settings
+
+    backend = settings.TASKS.get("default", {}).get("BACKEND", "")
+    return backend.endswith(".ImmediateBackend")
+
+
 def enqueue_action(action_id: int, data=None, single_step: bool = False) -> None:
-    """Enqueue an action for execution via the task backend."""
-    # TODO: wrap in transaction.on_commit once the test harness captures
-    # on-commit callbacks (ImmediateBackend runs inside the test transaction).
+    """Enqueue an action for execution via the task backend.
+
+    The enqueue is deferred until the current database transaction commits
+    to avoid running tasks against uncommitted (or rolled-back) state.
+    The ``ImmediateBackend`` (used in tests) is detected at runtime and
+    bypasses the deferral since it runs synchronously in-process, where
+    on-commit callbacks would never fire.
+    """
     from .tasks import execute_action
 
-    execute_action.enqueue(action_id, data=data, single_step=single_step)
+    _enqueue = lambda: execute_action.enqueue(action_id, data=data, single_step=single_step)  # noqa: E731
+
+    if _is_immediate_backend():
+        _enqueue()
+    else:
+        transaction.on_commit(_enqueue)
 
 
 def claim_action(action_id: int, allow_states: tuple[str, ...] = (PENDING,)) -> AutomationAction | None:

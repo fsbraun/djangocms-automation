@@ -27,7 +27,7 @@ classifiers = [
 ]
 dynamic = [ "version" ]
 dependencies = [
-  "django>=4.2",
+  "django>=6",
   "django-cms>=4.1",
   "jsonschema>=4.22",
 ]
