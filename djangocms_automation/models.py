@@ -111,25 +111,42 @@ class AutomationTrigger(models.Model):
         """
         return trigger_registry.get(self.type)
 
-    def trigger_execution(self, data: dict | None = None, start: bool = True) -> None:
+    def trigger_execution(
+        self, data: dict | None = None, start: bool = True, idempotency_key: str | None = None
+    ) -> None:
         """Create and optionally start an automation instance.
 
         :param data: Initial data dictionary for the automation.
-        :type data: dict | None
         :param start: Whether to immediately enqueue the action for execution.
             Defaults to True.
-        :type start: bool
+        :param idempotency_key: Optional caller-supplied key. When provided,
+            only one instance per (automation content × key) is created —
+            duplicate calls become no-ops. Use this to safely retry webhook
+            deliveries without double-execution.
         """
+        from django.db import IntegrityError
+
+        if idempotency_key:
+            if AutomationInstance.objects.filter(
+                automation_content=self.automation_content,
+                idempotency_key=idempotency_key,
+            ).exists():
+                return  # Already executed for this key — idempotent no-op.
+
         placeholder = Placeholder.objects.get_for_obj(self.automation_content).get(slot=self.slot)
         plugin = placeholder.get_plugins().first()
         plugin, _ = plugin.get_plugin_instance()
 
         with transaction.atomic():
-            instance = AutomationInstance.objects.create(
-                automation_content=self.automation_content,
-                data=data or [],
-                initial_data=data or [],
-            )
+            try:
+                instance = AutomationInstance.objects.create(
+                    automation_content=self.automation_content,
+                    data=data or [],
+                    initial_data=data or [],
+                    idempotency_key=idempotency_key,
+                )
+            except IntegrityError:
+                return  # Race lost — another request created an instance for this key.
             action = AutomationAction.objects.create(
                 previous=None,
                 parent=None,
@@ -138,9 +155,9 @@ class AutomationTrigger(models.Model):
                 finished=None,
             )
         if start:
-            from .tasks import execute_action
+            from .engine import enqueue_action
 
-            execute_action.enqueue(action.pk, data=data)
+            enqueue_action(action.pk, data=data)
 
     def __str__(self):
         type = trigger_registry.get(self.type)

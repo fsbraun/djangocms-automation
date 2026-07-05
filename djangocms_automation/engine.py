@@ -148,6 +148,38 @@ def _is_immediate_backend() -> bool:
     return backend.endswith(".ImmediateBackend")
 
 
+def _fail_enqueue(action_id: int, exc: BaseException) -> None:
+    """Mark an action as FAILED because its task could not be enqueued.
+
+    Called when the task backend rejects an enqueue (broker unavailable,
+    serialization failure, etc.). The error is recorded in the action's
+    ``result`` field and failure propagates to ancestors and the instance.
+    """
+    from .instances import AutomationAction
+
+    action = AutomationAction.objects.filter(pk=action_id).first()
+    if action is None or action.finished is not None:
+        return  # Already gone — nothing to fail.
+    action.state = FAILED
+    action.finished = now()
+    action.message = f"Task enqueue failed: {exc}"[:MAX_FIELD_LENGTH]
+    action.result = {"error": "Task enqueue failed", "detail": str(exc)}
+    action.save()
+    propagate_failure(action)
+
+
+def _safe_enqueue(enqueue_fn, action_id: int) -> None:
+    """Call the enqueue function, failing the action on error.
+
+    Used as a ``transaction.on_commit`` callback so that enqueue failures
+    inside deferred callbacks are still recorded rather than lost.
+    """
+    try:
+        enqueue_fn()
+    except Exception as exc:  # noqa: BLE001 — must not leak into the commit hook
+        _fail_enqueue(action_id, exc)
+
+
 def enqueue_action(action_id: int, data=None, single_step: bool = False) -> None:
     """Enqueue an action for execution via the task backend.
 
@@ -156,15 +188,22 @@ def enqueue_action(action_id: int, data=None, single_step: bool = False) -> None
     The ``ImmediateBackend`` (used in tests) is detected at runtime and
     bypasses the deferral since it runs synchronously in-process, where
     on-commit callbacks would never fire.
+
+    If the task backend rejects the enqueue (e.g. broker unavailable), the
+    action is marked FAILED with the rejection reason stored in its result.
     """
     from .tasks import execute_action
 
-    _enqueue = lambda: execute_action.enqueue(action_id, data=data, single_step=single_step)  # noqa: E731
+    def _do_enqueue():
+        execute_action.enqueue(action_id, data=data, single_step=single_step)
 
     if _is_immediate_backend():
-        _enqueue()
+        try:
+            _do_enqueue()
+        except Exception as exc:
+            _fail_enqueue(action_id, exc)
     else:
-        transaction.on_commit(_enqueue)
+        transaction.on_commit(lambda: _safe_enqueue(_do_enqueue, action_id))
 
 
 def claim_action(action_id: int, allow_states: tuple[str, ...] = (PENDING,)) -> AutomationAction | None:

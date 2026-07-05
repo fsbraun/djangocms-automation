@@ -71,6 +71,17 @@ class AutomationInstance(models.Model):
         blank=True,
         verbose_name=_("Finished"),
     )
+    idempotency_key = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        verbose_name=_("Idempotency key"),
+        help_text=_(
+            "Caller-supplied key that prevents duplicate execution of the same "
+            "event. An instance with a non-null key is unique per automation "
+            "content."
+        ),
+    )
 
     def save(self, *args, **kwargs):
         self.key = self.get_key()
@@ -102,6 +113,13 @@ class AutomationInstance(models.Model):
     class Meta:
         verbose_name = _("Execution Instance")
         verbose_name_plural = _("Execution Instances")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["automation_content", "idempotency_key"],
+                name="unique_idempotency_per_content",
+                condition=models.Q(idempotency_key__isnull=False),
+            ),
+        ]
 
 
 class AutomationAction(models.Model):

@@ -36,6 +36,7 @@ class WebhookView(View):
             automation_content__automation__is_active=True,
         ).select_related("automation_content")
 
+        idempotency_key = request.headers.get("X-Idempotency-Key")
         matched = False
         fired = 0
         filtered = 0
@@ -59,7 +60,7 @@ class WebhookView(View):
                 if not handler.validate_payload(row, raise_errors=False):
                     return JsonResponse({"error": "Payload does not match the trigger's data schema."}, status=400)
             try:
-                trigger.trigger_execution(data=rows, start=True)
+                trigger.trigger_execution(data=rows, start=True, idempotency_key=idempotency_key)
             except Exception:
                 return JsonResponse({"error": "Automation execution failed."}, status=500)
             fired += 1
