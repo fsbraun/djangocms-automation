@@ -87,6 +87,44 @@ def test_heartbeat_requires_current_lease(action):
     assert claimed.heartbeat_at >= previous_heartbeat
 
 
+def test_heartbeat_rejects_action_without_lease(action):
+    assert action.state == PENDING
+    assert action.lease_id is None
+    assert heartbeat_action(action.pk, None) is False
+
+    action.refresh_from_db()
+    assert action.heartbeat_at is None
+
+
+def test_heartbeat_rejects_non_running_action(action):
+    claimed = transition_action(action.pk, RUNNING, allowed_from=(PENDING,))
+    lease_id = claimed.lease_id
+    completed = transition_action(claimed.pk, COMPLETED, allowed_from=(RUNNING,))
+
+    assert completed.state == COMPLETED
+    assert heartbeat_action(completed.pk, lease_id) is False
+
+
+def test_heartbeat_rejects_stale_lease_after_requeue(action):
+    first_claim = transition_action(action.pk, RUNNING, allowed_from=(PENDING,))
+    old_lease = first_claim.lease_id
+    requeued = transition_action(first_claim.pk, PENDING, allowed_from=(RUNNING,))
+    second_claim = transition_action(requeued.pk, RUNNING, allowed_from=(PENDING,))
+
+    assert second_claim.lease_id != old_lease
+    assert heartbeat_action(second_claim.pk, old_lease) is False
+    assert heartbeat_action(second_claim.pk, second_claim.lease_id) is True
+
+
+def test_omitted_result_preserves_existing_value(action):
+    action.result = {"condition": True}
+    action.save(update_fields=["result"])
+    claimed = transition_action(action.pk, RUNNING, allowed_from=(PENDING,))
+    waiting = transition_action(claimed.pk, "WAITING", allowed_from=(RUNNING,))
+
+    assert waiting.result == {"condition": True}
+
+
 def test_transition_persists_supported_action_fields(action):
     claimed = transition_action(action.pk, RUNNING, allowed_from=(PENDING,))
     waiting = transition_action(

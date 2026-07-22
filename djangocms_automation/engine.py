@@ -349,19 +349,21 @@ def run_action(action_id: int, data=None, single_step: bool = False) -> None:
         fail_action(action, message)
         return
 
-    transitioned = transition_action(
-        action.pk,
-        state,
-        allowed_from=(RUNNING,),
-        result=output,
-        message=action.message if action.message else None,
-        field_updates={
+    transition_kwargs = {
+        "allowed_from": (RUNNING,),
+        "message": action.message if action.message else None,
+        "field_updates": {
             "requires_interaction": action.requires_interaction,
             "interaction_permissions": action.interaction_permissions,
             "interaction_user_id": action.interaction_user_id,
             "interaction_group_id": action.interaction_group_id,
         },
-    )
+    }
+    # Preserve existing branch/retry metadata when a plugin has no output.
+    # This matches the engine's behavior before transitions were introduced.
+    if output:
+        transition_kwargs["result"] = output
+    transitioned = transition_action(action.pk, state, **transition_kwargs)
     if transitioned is None:
         return
     action = transitioned
