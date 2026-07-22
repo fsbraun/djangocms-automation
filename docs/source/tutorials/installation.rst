@@ -1,8 +1,8 @@
-Installing djangocms-automation
-===============================
-
 Installation
-------------
+============
+
+Downloading the package
+-----------------------
 
 Install the package from GitHub using pip:
 
@@ -29,6 +29,16 @@ Configuration
 
     python manage.py migrate djangocms_automation
 
+3. (Optional) Include the package URLs to enable inbound webhooks
+   (see :doc:`../howto/webhooks`):
+
+.. code-block:: python
+
+    urlpatterns = [
+        # ...
+        path("automation/", include("djangocms_automation.urls")),
+    ]
+
 Running Automations
 -------------------
 
@@ -38,12 +48,13 @@ task to process pending automations.
 Using a cron job
 ^^^^^^^^^^^^^^^^
 
-Add a cron job to run the pending automations periodically. For example, to run
-every minute:
+Add a cron job to run the ``runautomations`` management command periodically.
+It revives paused/pending actions **and** fires due timer triggers. For
+example, to run every minute:
 
 .. code-block:: bash
 
-    * * * * * cd /path/to/your/project && /path/to/venv/bin/python manage.py shell -c "from djangocms_automation.tasks import execute_pending_automations; execute_pending_automations()"
+    * * * * * cd /path/to/your/project && /path/to/venv/bin/python manage.py runautomations
 
 Using Django-Q2
 ^^^^^^^^^^^^^^^
@@ -55,7 +66,8 @@ If you're using `Django-Q2 <https://django-q2.readthedocs.io/>`_, you can schedu
     from django_q.tasks import schedule
 
     schedule(
-        "djangocms_automation.tasks.execute_pending_automations",
+        "django.core.management.call_command",
+        "runautomations",
         schedule_type="I",  # Interval
         minutes=1,
     )
@@ -81,8 +93,8 @@ Create a periodic task in your `Celery <https://docs.celeryq.dev/>`_ configurati
 
     @app.task
     def run_pending_automations():
-        from djangocms_automation.tasks import execute_pending_automations
-        execute_pending_automations()
+        from django.core.management import call_command
+        call_command("runautomations")
 
 Using Django Background Tasks
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -96,6 +108,36 @@ settings:
     TASKS = {
         "default": {
             "BACKEND": "django.tasks.backends.ImmediateBackend",
-            # Or use a database backend for production
         }
     }
+
+The immediate backend runs the automation inside the request/response cycle.
+It is useful for tests, but a slow action will also make the request slow.
+
+For local development, or for non-critical best-effort work, the package also
+provides a bounded in-process thread backend:
+
+.. code-block:: python
+
+    TASKS = {
+        "default": {
+            "BACKEND": "djangocms_automation.utils.ThreadBackend",
+            "OPTIONS": {
+                "MAX_WORKERS": 4,
+            },
+        }
+    }
+
+``ThreadBackend`` returns from enqueueing promptly and executes the task in a
+worker thread after the surrounding database transaction commits. It is not a
+durable task queue: queued tasks and results exist only in the web process's
+memory, are not shared between multiple processes, and are lost if that process
+is restarted or terminated. It provides no retry or crash recovery. Do not use
+it for production automation where losing an email, database update, webhook,
+or paid external API call would be unacceptable.
+
+For production, configure a durable Django task backend with persistent queue
+storage and separate workers. The exact backend and worker command depend on
+the task backend package you select. Independently of that worker, continue to
+run ``python manage.py runautomations`` periodically so paused actions and timer
+triggers are revived.

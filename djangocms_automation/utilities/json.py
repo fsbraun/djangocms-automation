@@ -57,3 +57,35 @@ def cleaned_data_to_json_serializable(cleaned_data: dict[str, Any]) -> dict[str,
         else:
             out[key] = str(value)
     return out
+
+
+def model_to_row(instance: models.Model, fields: list[str] | None = None) -> dict[str, Any]:
+    """Serialize a model instance into a JSON-safe data row.
+
+    The primary key is always included as ``pk``. Datetimes become ISO
+    strings, foreign keys become ``<name>_id``, and unknown complex values
+    fall back to ``str()``.
+
+    :param instance: The model instance to serialize.
+    :param fields: Field names to include; defaults to all concrete fields.
+    :returns: JSON-serializable dict row.
+    """
+    meta = instance._meta
+    if fields:
+        model_fields = [meta.get_field(name) for name in fields]
+    else:
+        model_fields = [f for f in meta.concrete_fields]
+
+    row: dict[str, Any] = {"pk": instance.pk}
+    for field in model_fields:
+        if field.is_relation:
+            row[f"{field.name}_id"] = getattr(instance, field.attname)
+            continue
+        value = getattr(instance, field.name)
+        if isinstance(value, (datetime, date, time)):
+            row[field.name] = value.isoformat()
+        elif isinstance(value, (str, int, float, bool)) or value is None:
+            row[field.name] = value
+        else:
+            row[field.name] = str(value)
+    return row

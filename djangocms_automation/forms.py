@@ -14,7 +14,7 @@ from __future__ import annotations
 from django import forms
 from django.utils.translation import gettext_lazy as _
 
-from .models import AutomationTrigger
+from .models import AutomationTrigger, ConditionalPluginModel
 from .triggers import trigger_registry
 from . import widgets
 
@@ -78,6 +78,14 @@ class AutomationTriggerAdminForm(forms.ModelForm):
                             value = value.isoformat()
                         config[field_name] = value
 
+        # Webhook triggers always need a token; generate one if left empty.
+        if trigger_type:
+            from .triggers import WebhookTrigger, generate_webhook_token
+
+            trigger_class = trigger_registry.get(trigger_type)
+            if trigger_class and issubclass(trigger_class, WebhookTrigger) and not config.get("token"):
+                config["token"] = generate_webhook_token()
+
         # Store config in cleaned_data so it can be saved
         cleaned_data["_config"] = config
         return cleaned_data
@@ -100,7 +108,7 @@ class ConditionalPluginForm(forms.ModelForm):
     """Custom form for ConditionalPlugin with ConditionBuilderWidget for condition field."""
 
     class Meta:
-        model = AutomationTrigger
+        model = ConditionalPluginModel
         fields = "__all__"
         widgets = {
             "condition": widgets.ConditionBuilderWidget,
@@ -108,7 +116,12 @@ class ConditionalPluginForm(forms.ModelForm):
 
 
 class MailActionDataForm(forms.Form):
-    """Data form for MailAction plugin with email-specific fields."""
+    """Data form for MailAction plugin with email-specific fields.
+
+    ``subject``, ``recipient_email`` and ``from_email`` are expressions
+    (literal or data path); ``body`` is a template (Textarea widget) with
+    ``{{ dotted.path }}`` substitution.
+    """
 
     subject = forms.CharField(label=_("Email Subject"), max_length=255, required=True)
     body = forms.CharField(
@@ -117,3 +130,8 @@ class MailActionDataForm(forms.Form):
         required=True,
     )
     recipient_email = forms.EmailField(label=_("Recipient Email"), required=True)
+    from_email = forms.EmailField(
+        label=_("Sender Email"),
+        required=False,
+        help_text=_("Optional. Defaults to the site's DEFAULT_FROM_EMAIL."),
+    )

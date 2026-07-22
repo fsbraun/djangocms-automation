@@ -1,13 +1,73 @@
 from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
-from django.http import HttpResponseRedirect
+from django.http import Http404, HttpResponseRedirect, JsonResponse
+from django.utils.decorators import method_decorator
+from django.views import View
+from django.views.decorators.csrf import csrf_exempt
 from django.views.generic import DetailView
 
 from cms.models import Placeholder
 from cms.utils import get_language_from_request
 from cms.toolbar.utils import get_object_edit_url, get_object_preview_url
 
-from .models import AutomationContent
+from .models import AutomationContent, AutomationTrigger
+from .triggers import WebhookTrigger
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class WebhookView(View):
+    """Inbound webhook receiver for webhook-based triggers.
+
+    ``POST .../webhook/<token>/`` fires every active trigger whose config
+    carries the token and whose type is a :class:`WebhookTrigger` subclass.
+    The trigger definition authenticates the request (optional HMAC
+    signature), parses/filters the payload into data rows, and the rows are
+    validated against the trigger's data schema before execution.
+
+    Responses: 200 ``{"triggered": N, "filtered": M}``; 404 unknown token;
+    403 failed signature; 400 malformed or schema-invalid payload.
+    """
+
+    http_method_names = ["post"]
+
+    def post(self, request, token):
+        triggers = AutomationTrigger.objects.filter(
+            config__token=token,
+            automation_content__automation__is_active=True,
+        ).select_related("automation_content")
+
+        idempotency_key = request.headers.get("X-Idempotency-Key")
+        matched = False
+        fired = 0
+        filtered = 0
+        for trigger in triggers:
+            definition = trigger.get_definition()
+            if definition is None or not issubclass(definition, WebhookTrigger):
+                continue
+            matched = True
+            handler = definition()
+
+            if not handler.verify_request(request, trigger.config):
+                return JsonResponse({"error": "Invalid signature."}, status=403)
+            try:
+                rows = handler.parse_payload(request, trigger.config)
+            except ValueError:
+                return JsonResponse({"error": "Could not parse the request payload."}, status=400)
+            if not rows:
+                filtered += 1
+                continue
+            for row in rows:
+                if not handler.validate_payload(row, raise_errors=False):
+                    return JsonResponse({"error": "Payload does not match the trigger's data schema."}, status=400)
+            try:
+                trigger.trigger_execution(data=rows, start=True, idempotency_key=idempotency_key)
+            except Exception:
+                return JsonResponse({"error": "Automation execution failed."}, status=500)
+            fired += 1
+
+        if not matched:
+            raise Http404("No active webhook trigger for this token.")
+        return JsonResponse({"triggered": fired, "filtered": filtered})
 
 
 class AutomationView(DetailView):
