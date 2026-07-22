@@ -25,6 +25,11 @@ def thread_identity():
     return threading.get_ident()
 
 
+@task(takes_context=True)
+def context_result_id(context):
+    return context.task_result.id
+
+
 @pytest.fixture
 def backend():
     instance = ThreadBackend("threaded", {"QUEUES": [], "OPTIONS": {"MAX_WORKERS": 2}})
@@ -64,6 +69,21 @@ def test_enqueue_records_failure_as_task_error(backend):
     assert "kapow" in result.errors[0].traceback
     with pytest.raises(ValueError, match="Task failed"):
         result.return_value
+
+
+def test_task_context_receives_its_result(backend):
+    result = backend.enqueue(context_result_id, (), {})
+    assert _wait_for(backend, result).return_value == result.id
+
+
+def test_submission_failure_is_propagated_and_result_removed(backend, monkeypatch):
+    def reject(*args, **kwargs):
+        raise RuntimeError("executor stopped")
+
+    monkeypatch.setattr(backend._executor, "submit", reject)
+    with pytest.raises(RuntimeError, match="executor stopped"):
+        backend.enqueue(add, (2, 3), {})
+    assert backend._results == {}
 
 
 def test_get_result_unknown_id(backend):

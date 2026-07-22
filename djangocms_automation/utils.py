@@ -84,9 +84,8 @@ class ThreadBackend(BaseTaskBackend):
                 return_value = task_result.task.call(*task_result.args, **task_result.kwargs)
             with self._lock:
                 object.__setattr__(task_result, "_return_value", normalize_json(return_value))
+                object.__setattr__(task_result, "finished_at", timezone.now())
                 object.__setattr__(task_result, "status", TaskResultStatus.SUCCESSFUL)
-        except KeyboardInterrupt:
-            raise
         except BaseException as exc:
             exception_type = type(exc)
             with self._lock:
@@ -96,11 +95,12 @@ class ThreadBackend(BaseTaskBackend):
                         traceback="".join(format_exception(exc)),
                     )
                 )
-                object.__setattr__(task_result, "status", TaskResultStatus.FAILED)
-        finally:
-            with self._lock:
                 object.__setattr__(task_result, "finished_at", timezone.now())
+                object.__setattr__(task_result, "status", TaskResultStatus.FAILED)
             task_finished.send(type(self), task_result=task_result)
+        else:
+            task_finished.send(type(self), task_result=task_result)
+        finally:
             # Connections are thread-local. Close every configured alias, not
             # only the default connection, before returning the worker thread
             # to the pool.

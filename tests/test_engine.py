@@ -102,6 +102,37 @@ def test_claim_action_is_idempotent(automation_content):
 
 
 @pytest.mark.django_db
+def test_failed_enqueue_fails_action_and_instance(automation_content):
+    instance = AutomationInstance.objects.create(automation_content=automation_content)
+    action = AutomationAction.objects.create(automation_instance=instance, plugin_ptr=uuid.uuid4())
+
+    engine._safe_enqueue(lambda: (_ for _ in ()).throw(RuntimeError("broker unavailable")), action.pk)
+
+    action.refresh_from_db()
+    instance.refresh_from_db()
+    assert action.state == FAILED
+    assert action.result == {"error": "Task enqueue failed", "detail": "broker unavailable"}
+    assert instance.status == FAILED
+
+
+@pytest.mark.django_db
+def test_failed_enqueue_ignores_missing_or_finished_action(automation_content):
+    engine._fail_enqueue(999_999, RuntimeError("ignored"))
+
+    instance = AutomationInstance.objects.create(automation_content=automation_content)
+    action = AutomationAction.objects.create(
+        automation_instance=instance,
+        plugin_ptr=uuid.uuid4(),
+        state=COMPLETED,
+        finished=now(),
+    )
+    engine._fail_enqueue(action.pk, RuntimeError("ignored"))
+
+    action.refresh_from_db()
+    assert action.state == COMPLETED
+
+
+@pytest.mark.django_db
 def test_missing_plugin_fails_action_not_crash(run_setup):
     trigger, placeholder = run_setup
     instance = AutomationInstance.objects.create(automation_content=trigger.automation_content)
