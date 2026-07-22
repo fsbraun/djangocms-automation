@@ -12,6 +12,14 @@ from .instances import COMPLETED, FAILED, RUNNING, AutomationAction, AutomationA
 
 TERMINAL_STATES = frozenset({COMPLETED, FAILED})
 _UNSET = object()
+MUTABLE_ACTION_FIELDS = frozenset(
+    {
+        "interaction_group_id",
+        "interaction_permissions",
+        "interaction_user_id",
+        "requires_interaction",
+    }
+)
 
 
 def transition_action(
@@ -23,6 +31,8 @@ def transition_action(
     message: str | None = None,
     error: BaseException | None = None,
     metadata: dict | None = None,
+    unfinished_only: bool = False,
+    field_updates: dict | None = None,
 ) -> AutomationAction | None:
     """Atomically move an action to a new state and record an audit event.
 
@@ -32,7 +42,11 @@ def transition_action(
     allowed = set(allowed_from) if allowed_from is not None else None
     with transaction.atomic():
         action = AutomationAction.objects.select_for_update().filter(pk=action_id).first()
-        if action is None or (allowed is not None and action.state not in allowed):
+        if (
+            action is None
+            or (unfinished_only and action.finished is not None)
+            or (allowed is not None and action.state not in allowed)
+        ):
             return None
 
         from_state = action.state
@@ -77,6 +91,11 @@ def transition_action(
             action.error_type = f"{error_class.__module__}.{error_class.__qualname__}"
             action.error_detail = str(error)
             update_fields.update({"error_type", "error_detail"})
+        for field, value in (field_updates or {}).items():
+            if field not in MUTABLE_ACTION_FIELDS:
+                raise ValueError(f"Unsupported action transition field: {field}")
+            setattr(action, field, value)
+            update_fields.add(field)
 
         action.save(update_fields=update_fields)
         AutomationActionEvent.objects.create(

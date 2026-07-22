@@ -4,7 +4,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("djangocms_automation", "0005_automationaction_parent_splitpluginmodel_comment_and_more"),
+        ("djangocms_automation", "0009_add_idempotency_key"),
     ]
 
     operations = [

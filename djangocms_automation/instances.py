@@ -195,10 +195,6 @@ class AutomationAction(models.Model):
         editable=False,
         verbose_name=_("Execution lease"),
     )
-    locked = models.IntegerField(
-        default=0,
-        verbose_name=_("Locked"),
-    )
     requires_interaction = models.BooleanField(default=False, verbose_name=_("Requires interaction"))
     interaction_user = models.ForeignKey(
         User,

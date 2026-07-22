@@ -85,3 +85,24 @@ def test_heartbeat_requires_current_lease(action):
     assert heartbeat_action(claimed.pk, claimed.lease_id) is True
     claimed.refresh_from_db()
     assert claimed.heartbeat_at >= previous_heartbeat
+
+
+def test_transition_persists_supported_action_fields(action):
+    claimed = transition_action(action.pk, RUNNING, allowed_from=(PENDING,))
+    waiting = transition_action(
+        claimed.pk,
+        "WAITING",
+        allowed_from=(RUNNING,),
+        field_updates={
+            "requires_interaction": True,
+            "interaction_permissions": ["orders.approve_order"],
+        },
+    )
+
+    assert waiting.requires_interaction is True
+    assert waiting.interaction_permissions == ["orders.approve_order"]
+
+
+def test_transition_rejects_unsupported_field_updates(action):
+    with pytest.raises(ValueError, match="Unsupported action transition field"):
+        transition_action(action.pk, RUNNING, field_updates={"plugin_ptr": uuid.uuid4()})

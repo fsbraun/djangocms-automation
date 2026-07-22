@@ -51,6 +51,7 @@ from .instances import (
     AutomationAction,
     AutomationInstance,
 )
+from .transitions import transition_action
 
 __all__ = [
     "ActionPause",
@@ -160,11 +161,16 @@ def _fail_enqueue(action_id: int, exc: BaseException) -> None:
     action = AutomationAction.objects.filter(pk=action_id).first()
     if action is None or action.finished is not None:
         return  # Already gone — nothing to fail.
-    action.state = FAILED
-    action.finished = now()
-    action.message = f"Task enqueue failed: {exc}"[:MAX_FIELD_LENGTH]
-    action.result = {"error": "Task enqueue failed", "detail": str(exc)}
-    action.save()
+    action = transition_action(
+        action_id,
+        FAILED,
+        result={"error": "Task enqueue failed", "detail": str(exc)},
+        message=f"Task enqueue failed: {exc}"[:MAX_FIELD_LENGTH],
+        error=exc,
+        unfinished_only=True,
+    )
+    if action is None:
+        return
     propagate_failure(action)
 
 
@@ -212,11 +218,13 @@ def claim_action(action_id: int, allow_states: tuple[str, ...] = (PENDING,)) -> 
     :returns: The claimed action, or ``None`` if it was already claimed,
         finished, or in a non-claimable state (making double enqueues no-ops).
     """
-    with transaction.atomic():
-        updated = AutomationAction.objects.filter(pk=action_id, state__in=allow_states, finished__isnull=True).update(
-            state=RUNNING
-        )
-    if not updated:
+    action = transition_action(
+        action_id,
+        RUNNING,
+        allowed_from=allow_states,
+        unfinished_only=True,
+    )
+    if action is None:
         return None
     return AutomationAction.objects.select_related(
         "automation_instance", "automation_instance__automation_content"
@@ -225,15 +233,18 @@ def claim_action(action_id: int, allow_states: tuple[str, ...] = (PENDING,)) -> 
 
 def fail_action(action: AutomationAction, message: str, *, exc: BaseException | None = None) -> None:
     """Mark an action as failed and propagate the failure."""
-    action.state = FAILED
-    action.message = message[:MAX_FIELD_LENGTH]
     result = {"error": message}
     if exc is not None:
         result["traceback"] = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-    action.result = result
-    action.finished = now()
-    action.save()
-    propagate_failure(action)
+    failed = transition_action(
+        action.pk,
+        FAILED,
+        result=result,
+        message=message[:MAX_FIELD_LENGTH],
+        error=exc,
+    )
+    if failed is not None:
+        propagate_failure(failed)
 
 
 def propagate_failure(action: AutomationAction) -> None:
@@ -296,11 +307,17 @@ def _wake_if_children_done(action: AutomationAction) -> None:
 
 def pause_action(action: AutomationAction, until: datetime.datetime, message: str = "") -> None:
     """Pause an action until a given time (revived by ``revive_pending``)."""
-    action.state = PENDING
+    action = transition_action(
+        action.pk,
+        PENDING,
+        allowed_from=(PENDING, RUNNING),
+        result=action.result,
+        message=message[:MAX_FIELD_LENGTH] if message else None,
+    )
+    if action is None:
+        return
     action.paused_until = until
-    if message:
-        action.message = message[:MAX_FIELD_LENGTH]
-    action.save()
+    action.save(update_fields=["paused_until"])
 
 
 def run_action(action_id: int, data=None, single_step: bool = False) -> None:
@@ -332,12 +349,22 @@ def run_action(action_id: int, data=None, single_step: bool = False) -> None:
         fail_action(action, message)
         return
 
-    action.state = state
-    if output:
-        action.result = output
-    if state == COMPLETED:
-        action.finished = now()
-    action.save()
+    transitioned = transition_action(
+        action.pk,
+        state,
+        allowed_from=(RUNNING,),
+        result=output,
+        message=action.message if action.message else None,
+        field_updates={
+            "requires_interaction": action.requires_interaction,
+            "interaction_permissions": action.interaction_permissions,
+            "interaction_user_id": action.interaction_user_id,
+            "interaction_group_id": action.interaction_group_id,
+        },
+    )
+    if transitioned is None:
+        return
+    action = transitioned
 
     if single_step:
         return
