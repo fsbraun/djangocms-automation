@@ -29,6 +29,12 @@ Configuration
 
     python manage.py migrate djangocms_automation
 
+Release upgrades that include execution-attempt tracking apply migration
+``0010_action_attempts_and_events``. It adds attempt and lease fields to
+existing actions and creates their transition-event table. Existing actions
+start with an attempt count of zero; the next successful claim creates their
+first recorded attempt. No data backfill is required.
+
 3. (Optional) Include the package URLs to enable inbound webhooks
    (see :doc:`../howto/webhooks`):
 
@@ -135,6 +141,10 @@ memory, are not shared between multiple processes, and are lost if that process
 is restarted or terminated. It provides no retry or crash recovery. Do not use
 it for production automation where losing an email, database update, webhook,
 or paid external API call would be unacceptable.
+
+The database now records task attempts and transition events, but this does not
+make an in-memory backend durable. The current release does not automatically
+retry failed actions or recover a task lost when its process exits.
 
 For production, configure a durable Django task backend with persistent queue
 storage and separate workers. The exact backend and worker command depend on
