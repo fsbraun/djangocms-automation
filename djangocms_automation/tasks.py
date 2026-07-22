@@ -9,8 +9,9 @@ import traceback
 from cms.models import CMSPlugin, Placeholder
 from cms.utils.plugins import downcast_plugins, get_plugins_as_layered_tree
 
-from .instances import AutomationAction, PENDING, RUNNING, COMPLETED, FAILED
+from .instances import FAILED, PENDING, RUNNING, WAITING, AutomationAction
 from .models import AutomationContent
+from .transitions import transition_action
 
 
 def run_pending_automations(timestamp: datetime.datetime | None = None):
@@ -73,32 +74,34 @@ def create_datastructure_for_automation(automation_action: AutomationAction) -> 
 @task
 def execute_action(action_id: int, data: dict, single_step: bool = False):
     """Execute a single AutomationAction by its ID."""
-    action = AutomationAction.objects.select_related("automation_instance").get(pk=action_id)
-    action.state = RUNNING
-    action.save(update_fields=["state"])
+    action = transition_action(action_id, RUNNING, allowed_from=(PENDING, WAITING))
+    if action is None:
+        return
     plugin_dict = create_datastructure_for_automation(action)
     action._plugin = plugin_dict.get(action.plugin_ptr)
+    plugin = action._plugin
 
     try:
         next_action = None
-        status, output = action._plugin.execute(action, data=data, single_step=single_step, plugin_dict=plugin_dict)
+        status, output = plugin.execute(action, data=data, single_step=single_step, plugin_dict=plugin_dict)
     except Exception as e:
         tb_str = "".join(traceback.format_exception(type(e), e, e.__traceback__))
-        action.state = FAILED
-        action.result = {"error": str(e), "traceback": tb_str}
-        action.finished = now()
-        action.save()
+        transition_action(
+            action.pk,
+            FAILED,
+            allowed_from=(RUNNING,),
+            result={"error": str(e), "traceback": tb_str},
+            error=e,
+        )
         return
 
-    action.state = status
-    if output:
-        action.result = output
+    action = transition_action(action.pk, status, allowed_from=(RUNNING,), result=output)
+    if action is None:
+        return
 
-    if status == COMPLETED:
-        action.finished = now()
-    action.save()
-
-    next_actions = action._plugin.get_next_actions(action)
+    next_actions = plugin.get_next_actions(action)
+    if status == RUNNING:
+        transition_action(action.pk, WAITING, allowed_from=(RUNNING,))
     if next_actions and not single_step:
         for next_action in next_actions:
             execute_action.enqueue(next_action.pk, data=output)

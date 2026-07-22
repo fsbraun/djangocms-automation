@@ -123,9 +123,14 @@ def test_run_automation_through_chain(automation_content, admin_user, settings):
     # Verify all actions were executed successfully
     for action in all_actions:
         assert action.state == COMPLETED
+        assert action.attempt_count == 1
         assert action.finished is not None
         assert "input" in action.result
         assert "plugin_id" in action.result
+        assert list(action.events.values_list("from_state", "to_state")) == [
+            ("PENDING", "RUNNING"),
+            ("RUNNING", "COMPLETED"),
+        ]
 
 
 @pytest.mark.django_db

@@ -9,7 +9,7 @@ from cms.admin.utils import ChangeListActionsMixin, GrouperModelAdmin
 
 from .forms import AutomationTriggerAdminForm
 from .models import Automation, AutomationContent, APIKey, AutomationTrigger
-from .instances import AutomationInstance, AutomationAction, RUNNING, PENDING, FAILED
+from .instances import AutomationAction, AutomationActionEvent, AutomationInstance, FAILED, PENDING, RUNNING
 from .triggers import trigger_registry
 
 
@@ -46,14 +46,26 @@ class AutomationActionInline(admin.TabularInline):
     extra = 0
     fields = (
         "state",
+        "attempt_count",
+        "max_attempts",
         "message",
         "requires_interaction",
         "interaction_user",
         "interaction_group",
         "created",
+        "started",
+        "heartbeat_at",
         "finished",
     )
-    readonly_fields = ("state", "message", "created", "finished")
+    readonly_fields = (
+        "state",
+        "attempt_count",
+        "message",
+        "created",
+        "started",
+        "heartbeat_at",
+        "finished",
+    )
     can_delete = False
 
 
@@ -108,6 +120,31 @@ class AutomationInstanceAdmin(admin.ModelAdmin):
             .prefetch_related("automationaction_set")
             .select_related("automation_content", "automation_content__automation")
         )
+
+
+@admin.register(AutomationActionEvent)
+class AutomationActionEventAdmin(admin.ModelAdmin):
+    list_display = ("action", "from_state", "to_state", "attempt", "created")
+    list_filter = ("from_state", "to_state", "created")
+    search_fields = ("action__id", "action__automation_instance__key")
+    readonly_fields = (
+        "action",
+        "from_state",
+        "to_state",
+        "attempt",
+        "lease_id",
+        "metadata",
+        "created",
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 class APIKeyAdminForm(forms.ModelForm):
