@@ -48,6 +48,19 @@ Automations are executed via background tasks. Set up a periodic task that reviv
 
 Alternatively, schedule `call_command("runautomations")` with [Django-Q2](https://django-q2.readthedocs.io/), [Celery](https://docs.celeryq.dev/), or Django 6.0+ background tasks.
 
+For local development, `djangocms_automation.utils.ThreadBackend` can execute tasks outside the request thread with a bounded in-process thread pool:
+
+```python
+TASKS = {
+    "default": {
+        "BACKEND": "djangocms_automation.utils.ThreadBackend",
+        "OPTIONS": {"MAX_WORKERS": 4},
+    }
+}
+```
+
+This backend is non-durable: work and results are process-local and are lost on restart or termination. It has no retry or crash recovery and should only be used for development or non-critical best-effort work. Use a persistent queue backend with separate workers for production automations that must run reliably.
+
 ### Built-in actions
 
 - **Send Email** — one email per data row via Django's email framework.

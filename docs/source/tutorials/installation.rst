@@ -108,6 +108,36 @@ settings:
     TASKS = {
         "default": {
             "BACKEND": "django.tasks.backends.ImmediateBackend",
-            # Or use a database backend for production
         }
     }
+
+The immediate backend runs the automation inside the request/response cycle.
+It is useful for tests, but a slow action will also make the request slow.
+
+For local development, or for non-critical best-effort work, the package also
+provides a bounded in-process thread backend:
+
+.. code-block:: python
+
+    TASKS = {
+        "default": {
+            "BACKEND": "djangocms_automation.utils.ThreadBackend",
+            "OPTIONS": {
+                "MAX_WORKERS": 4,
+            },
+        }
+    }
+
+``ThreadBackend`` returns from enqueueing promptly and executes the task in a
+worker thread after the surrounding database transaction commits. It is not a
+durable task queue: queued tasks and results exist only in the web process's
+memory, are not shared between multiple processes, and are lost if that process
+is restarted or terminated. It provides no retry or crash recovery. Do not use
+it for production automation where losing an email, database update, webhook,
+or paid external API call would be unacceptable.
+
+For production, configure a durable Django task backend with persistent queue
+storage and separate workers. The exact backend and worker command depend on
+the task backend package you select. Independently of that worker, continue to
+run ``python manage.py runautomations`` periodically so paused actions and timer
+triggers are revived.
