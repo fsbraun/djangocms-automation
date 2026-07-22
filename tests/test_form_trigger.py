@@ -132,3 +132,95 @@ class TestFormBuilderAutomationAction:
 
         assert hasattr(FormAutomationAction, "execute")
         assert callable(FormAutomationAction.execute)
+
+
+@pytest.mark.django_db
+class TestFormBuilderActionExecute:
+    """Exercise the form action's execute() path end-to-end."""
+
+    def test_execute_triggers_automation_with_serialized_data(self, settings, admin_user):
+        from unittest import mock
+
+        from django.contrib.contenttypes.models import ContentType
+        from django.test import RequestFactory
+
+        from cms.api import add_plugin
+        from cms.models import Placeholder
+
+        from djangocms_automation.instances import COMPLETED, AutomationAction
+        from djangocms_automation.models import Automation, AutomationContent, AutomationTrigger
+        from djangocms_automation.triggers import AutomationAction as FormAutomationAction
+
+        settings.TASKS = {"default": {"BACKEND": "django.tasks.backends.immediate.ImmediateBackend"}}
+
+        automation = Automation.objects.create(name="Form Exec", is_active=True)
+        content = AutomationContent.objects.with_user(admin_user).create(
+            automation=automation, description="form exec"
+        )
+        trigger = AutomationTrigger.objects.create(
+            automation_content=content, slot="start", type="form_submission", position=0
+        )
+        placeholder = Placeholder.objects.get_or_create(
+            content_type=ContentType.objects.get_for_model(AutomationContent),
+            object_id=content.pk,
+            slot="start",
+        )[0]
+        add_plugin(placeholder=placeholder, plugin_type="ActionPlugin", language=settings.LANGUAGE_CODE)
+
+        form = mock.Mock()
+        form.cleaned_data = {"name": "Alice", "email": "alice@example.com"}
+        request = RequestFactory().post("/")
+        request.user = admin_user
+
+        action = FormAutomationAction.__new__(FormAutomationAction)  # skip form __init__
+        with mock.patch.object(FormAutomationAction, "get_parameter", return_value={"pk": automation.pk}):
+            action.execute(form, request)
+
+        instance = content.automationinstance_set.first()
+        assert instance is not None
+        assert instance.initial_data == [
+            {"data": {"name": "Alice", "email": "alice@example.com"}, "user_id": admin_user.pk}
+        ]
+        run_action = AutomationAction.objects.get(automation_instance=instance)
+        assert run_action.state == COMPLETED
+        assert trigger.automation_content == content
+
+    def test_execute_anonymous_user_records_null_user(self, settings, admin_user):
+        from unittest import mock
+
+        from django.contrib.auth.models import AnonymousUser
+        from django.contrib.contenttypes.models import ContentType
+        from django.test import RequestFactory
+
+        from cms.models import Placeholder
+
+        from djangocms_automation.models import Automation, AutomationContent, AutomationTrigger
+        from djangocms_automation.triggers import AutomationAction as FormAutomationAction
+
+        settings.TASKS = {"default": {"BACKEND": "django.tasks.backends.immediate.ImmediateBackend"}}
+
+        automation = Automation.objects.create(name="Form Anon", is_active=True)
+        content = AutomationContent.objects.with_user(admin_user).create(
+            automation=automation, description="form anon"
+        )
+        AutomationTrigger.objects.create(automation_content=content, slot="start", type="form_submission", position=0)
+        placeholder = Placeholder.objects.get_or_create(
+            content_type=ContentType.objects.get_for_model(AutomationContent),
+            object_id=content.pk,
+            slot="start",
+        )[0]
+        from cms.api import add_plugin
+
+        add_plugin(placeholder=placeholder, plugin_type="ActionPlugin", language=settings.LANGUAGE_CODE)
+
+        form = mock.Mock()
+        form.cleaned_data = {"name": "Guest"}
+        request = RequestFactory().post("/")
+        request.user = AnonymousUser()
+
+        action = FormAutomationAction.__new__(FormAutomationAction)
+        with mock.patch.object(FormAutomationAction, "get_parameter", return_value={"pk": automation.pk}):
+            action.execute(form, request)
+
+        instance = content.automationinstance_set.first()
+        assert instance.initial_data[0]["user_id"] is None

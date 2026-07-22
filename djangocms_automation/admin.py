@@ -1,12 +1,16 @@
 import json
 
 from django import forms
-from django.contrib import admin
+from django.contrib import admin, messages
+from django.http import HttpResponseRedirect
+from django.template.response import TemplateResponse
+from django.urls import path, reverse
 from django.utils.html import format_html, mark_safe
 from django.utils.translation import gettext_lazy as _
 
 from cms.admin.utils import ChangeListActionsMixin, GrouperModelAdmin
 
+from . import engine
 from .forms import AutomationTriggerAdminForm
 from .models import Automation, AutomationContent, APIKey, AutomationTrigger
 from .instances import AutomationAction, AutomationActionEvent, AutomationInstance, FAILED, PENDING, RUNNING
@@ -120,6 +124,45 @@ class AutomationInstanceAdmin(admin.ModelAdmin):
             .prefetch_related("automationaction_set")
             .select_related("automation_content", "automation_content__automation")
         )
+
+    def get_urls(self):
+        custom = [
+            path(
+                "open-tasks/",
+                self.admin_site.admin_view(self.open_tasks_view),
+                name="djangocms_automation_open_tasks",
+            ),
+            path(
+                "open-tasks/<int:action_id>/resume/",
+                self.admin_site.admin_view(self.resume_action_view),
+                name="djangocms_automation_resume_action",
+            ),
+        ]
+        return custom + super().get_urls()
+
+    def open_tasks_view(self, request):
+        """List actions waiting for interaction by the current user."""
+        tasks = AutomationAction.get_open_tasks(request.user)
+        context = {
+            **self.admin_site.each_context(request),
+            "title": _("Open tasks"),
+            "tasks": tasks,
+            "opts": self.model._meta,
+        }
+        return TemplateResponse(request, "djangocms_automation/admin/open_tasks.html", context)
+
+    def resume_action_view(self, request, action_id):
+        """Resume a waiting action for the current user."""
+        redirect_url = reverse("admin:djangocms_automation_open_tasks")
+        if request.method != "POST":
+            return HttpResponseRedirect(redirect_url)
+        try:
+            engine.resume_action(action_id, request.user)
+        except (AutomationAction.DoesNotExist, ValueError, PermissionError) as exc:
+            self.message_user(request, str(exc), level=messages.ERROR)
+        else:
+            self.message_user(request, _("Task resumed."), level=messages.SUCCESS)
+        return HttpResponseRedirect(redirect_url)
 
 
 @admin.register(AutomationActionEvent)

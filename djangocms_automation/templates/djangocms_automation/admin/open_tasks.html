@@ -1,0 +1,35 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block content %}
+<h1>{% trans "Open tasks" %}</h1>
+{% if tasks %}
+<table>
+    <thead>
+        <tr>
+            <th>{% trans "Automation" %}</th>
+            <th>{% trans "Note" %}</th>
+            <th>{% trans "Created" %}</th>
+            <th></th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for task in tasks %}
+        <tr>
+            <td>{{ task.automation_instance.automation_content.automation.name }}</td>
+            <td>{% if task.result.note %}{{ task.result.note }}{% else %}&mdash;{% endif %}</td>
+            <td>{{ task.created }}</td>
+            <td>
+                <form method="post" action="{% url 'admin:djangocms_automation_resume_action' task.pk %}">
+                    {% csrf_token %}
+                    <button type="submit" class="button">{% trans "Resume" %}</button>
+                </form>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p>{% trans "No open tasks." %}</p>
+{% endif %}
+{% endblock %}

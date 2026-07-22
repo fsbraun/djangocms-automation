@@ -1,4 +1,6 @@
 name: Tests
+permissions:
+  contents: read
 
 on:
   push:
@@ -13,13 +15,13 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.12", "3.13", "3.14"]
-        django-version: ["6.0a1"]
+        django-version: ["6.0", "6.1a1"]
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v7
       with:
         python-version: ${{ matrix.python-version }}
 
@@ -35,7 +37,7 @@ jobs:
         pytest --cov=djangocms_automation --cov-report=xml --cov-report=term-missing
 
     - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v4
+      uses: codecov/codecov-action@v7
       with:
         file: ./coverage.xml
         flags: unittests

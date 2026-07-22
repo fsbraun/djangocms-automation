@@ -35,44 +35,22 @@ def run_pending_automations(timestamp: datetime.datetime | None = None):
             "automation"
         )
     )
+"""Task entry points for the automation engine.
 
+Keep this module thin: the task backend serializes tasks by module path, so
+``djangocms_automation.tasks.execute_action`` must remain stable. All
+orchestration logic lives in :mod:`djangocms_automation.engine`.
+"""
 
-def _link_tree(plugins: list[CMSPlugin]):
-    """
-    Recursively links a list of CMSPlugin instances into a doubly-linked list.
-    Each plugin in the list will have its `previous_plugin_instance` and `next_plugin_instance`
-    attributes set to point to its adjacent plugins. The function also recursively applies
-    the same linking to each plugin's child plugins.
-    Args:
-        plugins (list[CMSPlugin]): A list of CMSPlugin instances to link.
-    Returns:
-        None
-    """
-    previous_plugin = None
-    for plugin in plugins:
-        _link_tree(plugin.child_plugin_instances)
-        if previous_plugin:
-            previous_plugin.next_plugin_instance = plugin
-        plugin.previous_plugin_instance = previous_plugin
-        previous_plugin = plugin
-    if previous_plugin is not None:
-        previous_plugin.next_plugin_instance = None
+import datetime
 
+from django.tasks import task
 
-def create_datastructure_for_automation(automation_action: AutomationAction) -> dict[int, AutomationContent]:
-    placeholders = Placeholder.objects.filter(
-        content_type=ContentType.objects.get_for_model(AutomationContent),
-        object_id=automation_action.automation_instance.automation_content_id,
-    )
-    plugins = list(CMSPlugin.objects.filter(placeholder__in=placeholders, language=settings.LANGUAGE_CODE))
-    plugins = list(downcast_plugins(plugins, placeholders, select_placeholder=True))
-    root_plugins = get_plugins_as_layered_tree(plugins)
-    _link_tree(root_plugins)
-    return {plugin.uuid: plugin for plugin in plugins if hasattr(plugin, "uuid")}
+from . import engine
 
 
 @task
-def execute_action(action_id: int, data: dict, single_step: bool = False):
+def execute_action(action_id: int, data: dict | list | None = None, single_step: bool = False):
     """Execute a single AutomationAction by its ID."""
     action = transition_action(action_id, RUNNING, allowed_from=(PENDING, WAITING))
     if action is None:
@@ -120,3 +98,13 @@ def execute_pending_automations(timestamp: datetime.datetime | None = None):
     )
     for action in actions:
         execute_action.enqueue(action.pk)
+    engine.run_action(action_id, data=data, single_step=single_step)
+
+
+def execute_pending_automations(timestamp: datetime.datetime | None = None) -> int:
+    """Revive due pending/paused actions (cron entry point).
+
+    Prefer the ``runautomations`` management command, which also fires due
+    timer triggers.
+    """
+    return engine.revive_pending(timestamp)

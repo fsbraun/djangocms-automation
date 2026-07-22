@@ -104,8 +104,12 @@ def test_run_automation_through_chain(automation_content, admin_user, settings):
     # Get the created instance and verify actions were created and executed
     instance = automation_content.automationinstance_set.first()
     assert instance is not None
-    assert instance.data == {"init": True}
     assert instance.initial_data == {"init": True}
+    # instance.data holds the current pipeline data (last completed
+    # top-level action's output) and the instance is finished.
+    assert set(instance.data) == {"input", "plugin_id"}
+    assert instance.finished is not None
+    assert instance.status == COMPLETED
 
     # Check that actions were created through the chain
     all_actions = AutomationAction.objects.filter(automation_instance=instance).order_by("created")
