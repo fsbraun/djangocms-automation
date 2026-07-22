@@ -38,6 +38,11 @@ Run migrations:
 python manage.py migrate djangocms_automation
 ```
 
+Runtime actions record attempt counts, execution leases, structured terminal
+errors, and state-transition events. These records improve inspection and form
+the basis for future retry and crash recovery. Automatic general-purpose
+retries and expired-lease recovery are not implemented yet.
+
 ### Running Automations
 
 Automations are executed via background tasks. Set up a periodic task that revives paused actions and fires due timer triggers, for example using a cron job (every minute):

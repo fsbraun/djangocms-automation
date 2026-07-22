@@ -161,6 +161,40 @@ class AutomationAction(models.Model):
         blank=True,
         verbose_name=_("Paused until"),
     )
+    attempt_count = models.PositiveIntegerField(
+        default=0,
+        verbose_name=_("Attempt count"),
+    )
+    max_attempts = models.PositiveIntegerField(
+        default=1,
+        verbose_name=_("Maximum attempts"),
+    )
+    next_attempt_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name=_("Next attempt at"),
+    )
+    started = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name=_("Started"),
+    )
+    heartbeat_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name=_("Last heartbeat"),
+    )
+    timeout_seconds = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        verbose_name=_("Timeout in seconds"),
+    )
+    lease_id = models.UUIDField(
+        null=True,
+        blank=True,
+        editable=False,
+        verbose_name=_("Execution lease"),
+    )
     requires_interaction = models.BooleanField(default=False, verbose_name=_("Requires interaction"))
     interaction_user = models.ForeignKey(
         User,
@@ -195,6 +229,15 @@ class AutomationAction(models.Model):
         null=True,
         blank=True,
         default=dict,
+    )
+    error_type = models.CharField(
+        max_length=MAX_FIELD_LENGTH,
+        blank=True,
+        verbose_name=_("Error type"),
+    )
+    error_detail = models.TextField(
+        blank=True,
+        verbose_name=_("Error detail"),
     )
 
     @property
@@ -270,3 +313,48 @@ class AutomationAction(models.Model):
 
     def __repr__(self):
         return self.__str__()
+
+
+class AutomationActionEvent(models.Model):
+    """Immutable audit event for an action state transition."""
+
+    action = models.ForeignKey(
+        AutomationAction,
+        on_delete=models.CASCADE,
+        related_name="events",
+        verbose_name=_("Action"),
+    )
+    from_state = models.CharField(
+        max_length=20,
+        choices=STATES,
+        verbose_name=_("Previous state"),
+    )
+    to_state = models.CharField(
+        max_length=20,
+        choices=STATES,
+        verbose_name=_("New state"),
+    )
+    attempt = models.PositiveIntegerField(
+        default=0,
+        verbose_name=_("Attempt"),
+    )
+    lease_id = models.UUIDField(
+        null=True,
+        blank=True,
+        editable=False,
+        verbose_name=_("Execution lease"),
+    )
+    metadata = models.JSONField(
+        default=dict,
+        blank=True,
+        verbose_name=_("Metadata"),
+    )
+    created = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("created", "pk")
+        verbose_name = _("Action event")
+        verbose_name_plural = _("Action events")
+
+    def __str__(self):
+        return f"{self.action_id}: {self.from_state} → {self.to_state}"

@@ -56,19 +56,34 @@ Each action execution is represented by an :class:`~djangocms_automation.instanc
 instance which is persisted. Persisted state enables monitoring, resuming and auditing
 automation runs.
 
+An action also carries execution-attempt metadata: ``attempt_count``,
+``max_attempts``, ``started``, ``heartbeat_at``, ``next_attempt_at``,
+``timeout_seconds`` and a per-attempt ``lease_id``. Claiming an action creates a
+new lease and increments its attempt count. Normal claim, completion, failure,
+pause and wait transitions create immutable
+:class:`~djangocms_automation.instances.AutomationActionEvent` records. Failed
+actions additionally store a machine-readable ``error_type`` and an
+``error_detail`` summary alongside their existing result traceback.
+
+The attempt fields are the foundation for durable retries and crash recovery;
+automatic retry scheduling, heartbeat emission, expired-lease recovery and
+timeout enforcement are not implemented yet.
+
 Orchestration is owned by the execution engine
 (``djangocms_automation.engine``):
 
-- ``run_action`` atomically *claims* an action (``PENDING`` → ``RUNNING``,
-  so double enqueues are no-ops), builds the linked plugin tree, dispatches
-  ``plugin.execute()`` and handles the outcome.
+- ``run_action`` atomically *claims* an action (``PENDING`` → ``RUNNING``),
+  increments the attempt count, assigns a lease and records the transition.
+  Double enqueues are no-ops. It then builds the linked plugin tree,
+  dispatches ``plugin.execute()`` and handles the outcome.
 - Fan-out nodes (Split, Conditional) go ``WAITING`` while their branch
   chains run; when a branch ends, the engine wakes the parent exactly once
   (an atomic ``WAITING`` → ``PENDING`` flip). A completed Split *joins* its
   branches by concatenating their end outputs.
 - Failures are **fail-fast**: a failed action fails its waiting ancestors
   and marks the :class:`~djangocms_automation.instances.AutomationInstance`
-  as ``FAILED`` with a ``finished`` timestamp. No silent stops.
+  as ``FAILED`` with a ``finished`` timestamp. The failed action records its
+  exception type, detail and transition event. No silent stops.
 - Actions can pause themselves (``ActionPause``) until a given time —
   e.g. for rate-limit backoff — and are revived by the ``runautomations``
   management command.
@@ -138,4 +153,3 @@ utilities (expression resolution, ``{{ path }}`` templates, the condition
 evaluator and JSON serialization helpers) are provided in
 ``djangocms_automation.utilities`` — see :doc:`../reference/utilities` for
 usage notes and edge cases.
-
