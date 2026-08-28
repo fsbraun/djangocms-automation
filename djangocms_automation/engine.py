@@ -277,7 +277,9 @@ def effective_max_attempts(action: AutomationAction, policy) -> int:
     return max(action.max_attempts or 1, policy.max_attempts)
 
 
-def schedule_retry(action: AutomationAction, exc: BaseException, policy) -> AutomationAction | None:
+def schedule_retry(
+    action: AutomationAction, exc: BaseException, policy, require_lease=None
+) -> AutomationAction | None:
     """Reschedule a failed action for a later attempt.
 
     The action returns to ``PENDING`` with ``next_attempt_at`` set; the
@@ -296,6 +298,7 @@ def schedule_retry(action: AutomationAction, exc: BaseException, policy) -> Auto
         error=exc,
         metadata={"retry_in_seconds": round(delay, 3)},
         field_updates={"next_attempt_at": due, "paused_until": due},
+        require_lease=require_lease,
     )
     if retried is not None:
         logger.info(
@@ -329,7 +332,9 @@ def dead_letter(action: AutomationAction) -> None:
         logger.exception("automation.signal.failed", extra={"automation_action_id": action.pk})
 
 
-def fail_action(action: AutomationAction, message: str, *, exc: BaseException | None = None) -> None:
+def fail_action(
+    action: AutomationAction, message: str, *, exc: BaseException | None = None, require_lease=None
+) -> None:
     """Fail an action, retrying first if its policy allows.
 
     A retryable failure with attempts remaining reschedules instead of failing,
@@ -340,7 +345,9 @@ def fail_action(action: AutomationAction, message: str, *, exc: BaseException | 
     policy = get_retry_policy(action)
     if exc is not None and action.state == RUNNING:
         max_attempts = effective_max_attempts(action, policy)
-        if policy.should_retry(exc, action.attempt_count, max_attempts) and schedule_retry(action, exc, policy):
+        if policy.should_retry(exc, action.attempt_count, max_attempts) and schedule_retry(
+            action, exc, policy, require_lease=require_lease
+        ):
             return
 
     result = {"error": message}
@@ -352,6 +359,7 @@ def fail_action(action: AutomationAction, message: str, *, exc: BaseException | 
         result=result,
         message=message[:MAX_FIELD_LENGTH],
         error=exc,
+        require_lease=require_lease,
     )
     if failed is None:
         return
@@ -457,7 +465,7 @@ def _wake_if_children_done(action: AutomationAction) -> None:
             enqueue_action(action.pk)
 
 
-def pause_action(action: AutomationAction, until: datetime.datetime, message: str = "") -> None:
+def pause_action(action: AutomationAction, until: datetime.datetime, message: str = "", require_lease=None) -> None:
     """Pause an action until a given time (revived by ``revive_pending``).
 
     A pause is a deliberate reschedule, not a failure, so it is marked as a
@@ -472,6 +480,7 @@ def pause_action(action: AutomationAction, until: datetime.datetime, message: st
         message=message[:MAX_FIELD_LENGTH] if message else None,
         continuation=True,
         field_updates={"paused_until": until},
+        require_lease=require_lease,
     )
 
 
@@ -629,13 +638,20 @@ def run_action(action_id: int, data=None, single_step: bool = False) -> None:
     if action is None:
         return
 
+    # Everything this worker writes from here on is fenced to the lease it just
+    # took. If the lease expires and another worker claims the action, this
+    # worker's late writes are discarded instead of landing on the new attempt.
+    lease = action.lease_id
+
     if action.automation_instance.status == CANCELED:
         # The run was canceled between enqueue and claim: stop without side effects.
-        transition_action(action.pk, CANCELED, allowed_from=(RUNNING,), message="Instance canceled")
+        transition_action(
+            action.pk, CANCELED, allowed_from=(RUNNING,), message="Instance canceled", require_lease=lease
+        )
         return
 
     if plugin is None:
-        fail_action(action, "Plugin no longer exists in the automation")
+        fail_action(action, "Plugin no longer exists in the automation", require_lease=lease)
         return
     action._plugin = plugin
 
@@ -643,19 +659,20 @@ def run_action(action_id: int, data=None, single_step: bool = False) -> None:
         with _Heartbeat(action.pk, action.lease_id, _heartbeat_interval()):
             state, output = plugin.execute(action, rows, single_step=single_step, plugin_dict=plugin_map)
     except ActionPause as pause:
-        pause_action(action, until=pause.until, message=pause.message)
+        pause_action(action, until=pause.until, message=pause.message, require_lease=lease)
         return
     except Exception as exc:  # noqa: BLE001 - any action error fails the run
-        fail_action(action, str(exc), exc=exc)
+        fail_action(action, str(exc), exc=exc, require_lease=lease)
         return
 
     if state == FAILED:
         message = output.get("error", "Action failed") if isinstance(output, dict) else "Action failed"
-        fail_action(action, message)
+        fail_action(action, message, require_lease=lease)
         return
 
     transition_kwargs = {
         "allowed_from": (RUNNING,),
+        "require_lease": lease,
         "message": action.message if action.message else None,
         "field_updates": {
             "requires_interaction": action.requires_interaction,
@@ -789,6 +806,28 @@ def cancel_instance(instance_id: int, message: str = "Canceled") -> int:
     return canceled
 
 
+def _recovery_policy(action: AutomationAction, plugin_maps: dict):
+    """Resolve the retry policy of a stranded action's plugin.
+
+    The scheduler has no plugin instance to hand, so it rebuilds the tree the
+    action belongs to. Falls back to the default policy when the plugin has been
+    removed from the automation since the action was created — the action is
+    about to fail for that reason anyway.
+    """
+    content_id = action.automation_instance.automation_content_id
+    if content_id not in plugin_maps:
+        try:
+            plugin_maps[content_id] = build_plugin_map(content_id)
+        except Exception:
+            logger.exception("automation.recovery.plugin_map_failed", extra={"automation_action_id": action.pk})
+            plugin_maps[content_id] = {}
+    plugin = plugin_maps[content_id].get(action.plugin_ptr)
+    if plugin is None:
+        return DEFAULT_RETRY_POLICY
+    action._plugin = plugin
+    return get_retry_policy(action)
+
+
 def recover_expired_leases(timestamp: datetime.datetime | None = None, limit: int = 500) -> int:
     """Recover actions whose worker died or which ran past their timeout.
 
@@ -807,20 +846,30 @@ def recover_expired_leases(timestamp: datetime.datetime | None = None, limit: in
     # Actions carrying their own timeout are always considered: the timeout may
     # be far shorter than the lease window, so a stale-heartbeat filter alone
     # would miss an action that is running long but heartbeating happily.
-    candidates = AutomationAction.objects.filter(
-        state=RUNNING,
-        finished__isnull=True,
-    ).filter(
-        Q(heartbeat_at__lte=horizon)
-        | Q(heartbeat_at__isnull=True, started__lte=horizon)
-        | Q(timeout_seconds__isnull=False)
-    )[:limit]
+    candidates = (
+        AutomationAction.objects.select_related("automation_instance")
+        .filter(
+            state=RUNNING,
+            finished__isnull=True,
+        )
+        .filter(
+            Q(heartbeat_at__lte=horizon)
+            | Q(heartbeat_at__isnull=True, started__lte=horizon)
+            | Q(timeout_seconds__isnull=False)
+        )[:limit]
+    )
 
     recovered = 0
+    # Resolving a plugin means building its whole plugin tree, so cache the maps
+    # by automation content: a batch of stranded actions usually shares a few.
+    plugin_maps: dict[int, dict] = {}
     for action in list(candidates):
         if not action.is_lease_expired(timestamp):
             continue
-        policy = DEFAULT_RETRY_POLICY
+        # Use the plugin's own retry policy, not just the persisted attempt
+        # budget: its backoff, multiplier, cap and jitter shape how a recovered
+        # action is rescheduled, and a crash is no reason to ignore them.
+        policy = _recovery_policy(action, plugin_maps)
         max_attempts = effective_max_attempts(action, policy)
         timed_out = bool(
             action.timeout_seconds

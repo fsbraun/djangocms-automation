@@ -86,6 +86,7 @@ def transition_action(
     unfinished_only: bool = False,
     field_updates: dict | None = None,
     continuation: bool = False,
+    require_lease: uuid.UUID | None = None,
 ) -> AutomationAction | None:
     """Atomically move an action to a new state and record an audit event.
 
@@ -95,6 +96,14 @@ def transition_action(
     :param continuation: Mark the next claim as resuming work rather than
         re-attempting it. Set when waking a waiting node or reviving a paused
         action — neither is a failure, so neither may consume the retry budget.
+    :param require_lease: Fence the transition to one execution attempt. Every
+        worker-originated transition must pass the lease it claimed with,
+        because state alone cannot tell two attempts apart: if worker A's lease
+        expires, the scheduler recovers the action and worker B claims it, the
+        action is ``RUNNING`` again — so an unfenced A, finishing late, would
+        complete or fail *B's* attempt. A lease mismatch returns ``None`` and A's
+        work is discarded, which is the correct outcome: it no longer owns the
+        action.
     """
     allowed = set(allowed_from) if allowed_from is not None else None
     with transaction.atomic():
@@ -103,6 +112,7 @@ def transition_action(
             action is None
             or (unfinished_only and action.finished is not None)
             or (allowed is not None and action.state not in allowed)
+            or (require_lease is not None and action.lease_id != require_lease)
         ):
             return None
 

@@ -38,6 +38,7 @@ from djangocms_automation.models import (
     BaseActionPluginModel,
 )
 from djangocms_automation.retry import PermanentError, RetryableError, RetryPolicy
+from djangocms_automation.transitions import transition_action
 
 #: Execution counters keyed by plugin name, reset by the ``counters`` fixture.
 CALLS: dict[str, int] = {}
@@ -1311,3 +1312,121 @@ def test_replaying_a_conditional_branch_lets_the_conditional_complete(run_setup,
     instance = AutomationInstance.objects.get(pk=child.automation_instance_id)
     assert parent.state == COMPLETED, "the reopened conditional must complete, not fail again"
     assert instance.status == COMPLETED, "the instance must not stay failed"
+
+
+# --------------------------------------------------------------------------
+# Lease fencing: a late worker must not write to someone else's attempt
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_a_stale_worker_cannot_complete_another_attempt(run_setup, settings):
+    """State alone cannot tell two attempts apart.
+
+    Worker A claims, its lease expires, the scheduler recovers the action and
+    worker B claims it. The action is ``RUNNING`` again — so an unfenced A,
+    finishing late, would complete *B's* attempt.
+    """
+    trigger, placeholder = run_setup
+    action = run(trigger, placeholder, "SlowPlugin", settings)
+
+    stale_lease = uuid.uuid4()
+    current_lease = uuid.uuid4()
+    AutomationAction.objects.filter(pk=action.pk).update(state=RUNNING, finished=None, lease_id=current_lease)
+
+    # Worker A, holding the expired lease, tries to finish.
+    assert transition_action(action.pk, COMPLETED, allowed_from=(RUNNING,), require_lease=stale_lease) is None
+
+    action.refresh_from_db()
+    assert action.state == RUNNING, "B's attempt must be untouched"
+    assert action.lease_id == current_lease
+
+
+@pytest.mark.django_db
+def test_the_current_worker_can_complete_its_own_attempt(run_setup, settings):
+    """The fence must not block the worker that actually owns the lease."""
+    trigger, placeholder = run_setup
+    action = run(trigger, placeholder, "SlowPlugin", settings)
+    lease = uuid.uuid4()
+    AutomationAction.objects.filter(pk=action.pk).update(state=RUNNING, finished=None, lease_id=lease)
+
+    assert transition_action(action.pk, COMPLETED, allowed_from=(RUNNING,), require_lease=lease) is not None
+    action.refresh_from_db()
+    assert action.state == COMPLETED
+
+
+@pytest.mark.django_db
+def test_a_stale_worker_cannot_fail_another_attempt(run_setup, settings):
+    """Failure is as damaging as success: it propagates and kills the run."""
+    trigger, placeholder = run_setup
+    action = run(trigger, placeholder, "SlowPlugin", settings)
+    current_lease = uuid.uuid4()
+    AutomationAction.objects.filter(pk=action.pk).update(state=RUNNING, finished=None, lease_id=current_lease)
+    AutomationInstance.objects.filter(pk=action.automation_instance_id).update(status=RUNNING, finished=None)
+    action.refresh_from_db()
+
+    engine.fail_action(action, "late failure from a stale worker", require_lease=uuid.uuid4())
+
+    action.refresh_from_db()
+    assert action.state == RUNNING, "the running attempt must survive"
+    assert action.automation_instance.status == RUNNING, "failure must not have propagated"
+
+
+@pytest.mark.django_db
+def test_a_stale_worker_cannot_pause_another_attempt(run_setup, settings):
+    trigger, placeholder = run_setup
+    action = run(trigger, placeholder, "SlowPlugin", settings)
+    current_lease = uuid.uuid4()
+    AutomationAction.objects.filter(pk=action.pk).update(state=RUNNING, finished=None, lease_id=current_lease)
+    action.refresh_from_db()
+
+    engine.pause_action(action, until=now(), message="late pause", require_lease=uuid.uuid4())
+
+    action.refresh_from_db()
+    assert action.state == RUNNING
+
+
+@pytest.mark.django_db
+def test_recovery_is_not_fenced_by_a_lease(run_setup, settings):
+    """The scheduler recovers actions precisely because their owner is gone."""
+    trigger, placeholder = run_setup
+    action = run(trigger, placeholder, "SlowPlugin", settings)
+    stale = now() - datetime.timedelta(hours=1)
+    AutomationAction.objects.filter(pk=action.pk).update(
+        state=RUNNING, finished=None, started=stale, heartbeat_at=stale, lease_id=uuid.uuid4()
+    )
+    AutomationInstance.objects.filter(pk=action.automation_instance_id).update(status=RUNNING, finished=None)
+
+    assert engine.recover_expired_leases() == 1
+
+
+# --------------------------------------------------------------------------
+# Recovery must reschedule using the plugin's own backoff
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_recovery_uses_the_plugins_backoff(run_setup, settings):
+    """Persisting the attempt budget is not enough: the plugin's backoff,
+    multiplier, cap and jitter decide *when* a recovered action runs again."""
+    trigger, placeholder = run_setup
+    add_plugin(placeholder=placeholder, plugin_type="ThreeAttemptPlugin", language=settings.LANGUAGE_CODE)
+    trigger.trigger_execution(data=[{"seed": 1}])
+
+    action = AutomationAction.objects.latest("id")
+    stale = now() - datetime.timedelta(hours=1)
+    AutomationAction.objects.filter(pk=action.pk).update(
+        state=RUNNING, finished=None, started=stale, heartbeat_at=stale, attempt_count=1
+    )
+    AutomationInstance.objects.filter(pk=action.automation_instance_id).update(status=RUNNING, finished=None)
+
+    assert engine.recover_expired_leases() == 1
+    action.refresh_from_db()
+
+    # ThreeAttemptModel declares backoff_seconds=0, jitter=0, so the retry is
+    # due immediately. Under the default policy it would be ~30s away.
+    assert action.state == PENDING
+    assert action.next_attempt_at is not None
+    assert (action.next_attempt_at - now()).total_seconds() < 5, (
+        "recovery ignored the plugin's backoff and used the default"
+    )
