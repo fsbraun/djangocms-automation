@@ -8,3 +8,4 @@ Design rationale, background information and conceptual explanation of the
    :maxdepth: 1
 
    architecture
+   admin
