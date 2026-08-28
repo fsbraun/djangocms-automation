@@ -1646,3 +1646,106 @@ def test_an_impossible_instance_transition_raises(run_setup, settings):
 
     with pytest.raises(InvalidTransition, match="COMPLETED -> COMPLETED"):
         transition_instance(action.automation_instance_id, COMPLETED)
+
+
+# --------------------------------------------------------------------------
+# An outcome and its continuation are one unit
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_a_failed_continuation_rolls_back_the_outcome(run_setup, settings, monkeypatch):
+    """Recording an outcome and scheduling what follows must commit together.
+
+    Split across two commits, a worker dying in between leaves a finished action
+    with nothing queued behind it: no unfinished action for recovery to find,
+    and no successor to make progress. Rolled back together, the action stays
+    ``RUNNING`` and lease recovery reclaims it like any abandoned attempt.
+    """
+    trigger, placeholder = run_setup
+    add_plugin(placeholder=placeholder, plugin_type="SlowPlugin", language=settings.LANGUAGE_CODE)
+
+    def explode(self, action):
+        raise RuntimeError("crash between the outcome and its continuation")
+
+    monkeypatch.setattr(BaseActionPluginModel, "get_next_actions", explode)
+
+    # The task backend records the failure rather than re-raising it, so the
+    # crash is observed through what it left behind.
+    trigger.trigger_execution(data=[{"seed": 1}])
+
+    action = AutomationAction.objects.latest("id")
+    assert action.state == RUNNING, "the outcome must not survive a lost continuation"
+    assert action.finished is None
+
+
+@pytest.mark.django_db
+def test_a_failed_propagation_rolls_back_the_failure(run_setup, settings, monkeypatch):
+    """The same for failure: a FAILED action with a live instance and no
+    dead-letter entry is worse than no record at all."""
+    trigger, placeholder = run_setup
+    add_plugin(placeholder=placeholder, plugin_type="UnknownFailurePlugin", language=settings.LANGUAGE_CODE)
+
+    def explode(action):
+        raise RuntimeError("crash before propagation")
+
+    monkeypatch.setattr(engine, "propagate_failure", explode)
+
+    trigger.trigger_execution(data=[{"seed": 1}])
+
+    action = AutomationAction.objects.latest("id")
+    assert action.state == RUNNING
+    assert action.dead_lettered is False
+
+
+# --------------------------------------------------------------------------
+# The stalled-instance backstop
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_a_run_with_nothing_left_to_do_is_closed(run_setup, settings):
+    """Nothing is coming for an instance whose actions have all finished."""
+    trigger, placeholder = run_setup
+    action = run(trigger, placeholder, "SlowPlugin", settings)
+    settled = now() - datetime.timedelta(hours=1)
+    AutomationAction.objects.filter(pk=action.pk).update(finished=settled)
+    AutomationInstance.objects.filter(pk=action.automation_instance_id).update(status=RUNNING, finished=None)
+
+    assert engine.reconcile_stalled_instances() == 1
+    instance = AutomationInstance.objects.get(pk=action.automation_instance_id)
+    assert instance.status == COMPLETED
+    assert instance.events.filter(to_status=COMPLETED).exists()
+
+
+@pytest.mark.django_db
+def test_a_stalled_run_that_ended_badly_is_failed_not_completed(run_setup, settings):
+    trigger, placeholder = run_setup
+    action = run(trigger, placeholder, "UnknownFailurePlugin", settings)
+    settled = now() - datetime.timedelta(hours=1)
+    AutomationAction.objects.filter(pk=action.pk).update(finished=settled)
+    AutomationInstance.objects.filter(pk=action.automation_instance_id).update(status=RUNNING, finished=None)
+
+    assert engine.reconcile_stalled_instances() == 1
+    assert AutomationInstance.objects.get(pk=action.automation_instance_id).status == FAILED
+
+
+@pytest.mark.django_db
+def test_reconciliation_leaves_live_runs_alone(run_setup, settings):
+    """A run with work still open, or one that just settled, must be untouched."""
+    trigger, placeholder = run_setup
+    action = run(trigger, placeholder, "FlakyPlugin", settings)  # left PENDING by its retry
+    AutomationInstance.objects.filter(pk=action.automation_instance_id).update(status=RUNNING, finished=None)
+
+    assert engine.reconcile_stalled_instances() == 0
+
+
+@pytest.mark.django_db
+def test_reconciliation_waits_out_the_grace_period(run_setup, settings):
+    """It must not race a continuation that is still committing."""
+    trigger, placeholder = run_setup
+    action = run(trigger, placeholder, "SlowPlugin", settings)
+    AutomationInstance.objects.filter(pk=action.automation_instance_id).update(status=RUNNING, finished=None)
+
+    # The action finished a moment ago, well inside the lease window.
+    assert engine.reconcile_stalled_instances() == 0

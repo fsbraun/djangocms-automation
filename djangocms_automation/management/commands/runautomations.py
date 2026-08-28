@@ -92,6 +92,7 @@ class Command(BaseCommand):
         if not options["no_recover"]:
             recovered = engine.recover_expired_leases()
             reconciled = engine.reconcile_waiting_joins()
+            reconciled += engine.reconcile_stalled_instances()
         fired = 0 if options["no_timers"] else engine.fire_due_timers(catch_up=options["catch_up"])
         revived = engine.revive_pending()
 

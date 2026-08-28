@@ -38,7 +38,7 @@ from cms.models import CMSPlugin, Placeholder
 from cms.utils.plugins import downcast_plugins, get_plugins_as_layered_tree
 from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
-from django.db import transaction
+from django.db import models, transaction
 from django.db.models import Q
 from django.utils.timezone import now
 
@@ -72,6 +72,7 @@ __all__ = [
     "notify_parent",
     "pause_action",
     "propagate_failure",
+    "reconcile_stalled_instances",
     "reconcile_waiting_joins",
     "recover_expired_leases",
     "replay_action",
@@ -173,18 +174,19 @@ def _fail_enqueue(action_id: int, exc: BaseException) -> None:
     action = AutomationAction.objects.filter(pk=action_id).first()
     if action is None or action.finished is not None:
         return  # Already gone — nothing to fail.
-    action = transition_action(
-        action_id,
-        FAILED,
-        result={"error": "Task enqueue failed", "detail": str(exc)},
-        message=f"Task enqueue failed: {exc}"[:MAX_FIELD_LENGTH],
-        error=exc,
-        unfinished_only=True,
-    )
-    if action is None:
-        return
-    dead_letter(action)
-    propagate_failure(action)
+    with transaction.atomic():
+        action = transition_action(
+            action_id,
+            FAILED,
+            result={"error": "Task enqueue failed", "detail": str(exc)},
+            message=f"Task enqueue failed: {exc}"[:MAX_FIELD_LENGTH],
+            error=exc,
+            unfinished_only=True,
+        )
+        if action is None:
+            return
+        dead_letter(action)
+        propagate_failure(action)
 
 
 def _safe_enqueue(enqueue_fn, action_id: int) -> None:
@@ -353,19 +355,23 @@ def fail_action(
     result = {"error": message}
     if exc is not None:
         result["traceback"] = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-    failed = transition_action(
-        action.pk,
-        FAILED,
-        result=result,
-        message=message[:MAX_FIELD_LENGTH],
-        error=exc,
-        require_lease=require_lease,
-    )
-    if failed is None:
-        return
-    failed._plugin = getattr(action, "_plugin", None)
-    dead_letter(failed)
-    propagate_failure(failed)
+    # As above: a failure that commits without its consequences leaves an action
+    # marked FAILED while the instance still looks alive and nothing appears in
+    # the dead-letter queue. The three belong in one commit.
+    with transaction.atomic():
+        failed = transition_action(
+            action.pk,
+            FAILED,
+            result=result,
+            message=message[:MAX_FIELD_LENGTH],
+            error=exc,
+            require_lease=require_lease,
+        )
+        if failed is None:
+            return
+        failed._plugin = getattr(action, "_plugin", None)
+        dead_letter(failed)
+        propagate_failure(failed)
 
 
 def propagate_failure(action: AutomationAction) -> None:
@@ -671,33 +677,43 @@ def run_action(action_id: int, data=None, single_step: bool = False) -> None:
     # This matches the engine's behavior before transitions were introduced.
     if output:
         transition_kwargs["result"] = output
-    transitioned = transition_action(action.pk, state, **transition_kwargs)
-    if transitioned is None:
-        return
-    action = transitioned
+    # Recording the outcome and scheduling what follows must be one unit. Split
+    # across two commits, a worker dying in between leaves an action that is
+    # finished with nothing queued behind it: the run stalls with no unfinished
+    # action for recovery to find and no successor to make progress. Committed
+    # together, a crash rolls both back, the action stays ``RUNNING``, and lease
+    # recovery reclaims it like any other abandoned attempt.
+    #
+    # ``enqueue_action`` already defers the dispatch itself to ``on_commit``, so
+    # nothing reaches a worker until the outcome is durable.
+    with transaction.atomic():
+        transitioned = transition_action(action.pk, state, **transition_kwargs)
+        if transitioned is None:
+            return
+        action = transitioned
 
-    if single_step:
-        return
+        if single_step:
+            return
 
-    next_actions = plugin.get_next_actions(action)
-    if next_actions:
-        # Fan-out states pass the incoming rows through; completed actions
-        # hand their output to the next action(s).
-        payload = output if state == COMPLETED else rows
-        for next_action in next_actions:
-            enqueue_action(next_action.pk, data=payload)
-        return
+        next_actions = plugin.get_next_actions(action)
+        if next_actions:
+            # Fan-out states pass the incoming rows through; completed actions
+            # hand their output to the next action(s).
+            payload = output if state == COMPLETED else rows
+            for next_action in next_actions:
+                enqueue_action(next_action.pk, data=payload)
+            return
 
-    if state == COMPLETED:
-        if action.parent_id:
-            notify_parent(action)
-        else:
-            instance = action.automation_instance
-            instance.data = output
-            instance.save()
-            maybe_finish_instance(instance)
-    elif state == WAITING:
-        _wake_if_children_done(action)
+        if state == COMPLETED:
+            if action.parent_id:
+                notify_parent(action)
+            else:
+                instance = action.automation_instance
+                instance.data = output
+                instance.save()
+                maybe_finish_instance(instance)
+        elif state == WAITING:
+            _wake_if_children_done(action)
 
 
 def resume_action(action_id: int, user, data: dict | None = None) -> AutomationAction:
@@ -720,35 +736,40 @@ def resume_action(action_id: int, user, data: dict | None = None) -> AutomationA
     if data:
         rows = rows + [data]
 
-    claimed = transition_action(
-        action.pk,
-        COMPLETED,
-        allowed_from=(WAITING,),
-        message="Resumed by user",
-        field_updates={"requires_interaction": False},
-        metadata={"resumed_by": getattr(user, "pk", None)},
-    )
-    if claimed is None:
-        raise ValueError("Action is no longer waiting.")
-    action = claimed
-
     plugin_map = build_plugin_map(action.automation_instance.automation_content_id)
     plugin = plugin_map.get(action.plugin_ptr)
-    if plugin is None:
-        fail_action(action, "Plugin no longer exists in the automation")
-        return action
 
-    next_actions = plugin.get_next_actions(action)
-    if next_actions:
-        for next_action in next_actions:
-            enqueue_action(next_action.pk, data=rows)
-    elif action.parent_id:
-        notify_parent(action)
-    else:
-        instance = action.automation_instance
-        instance.data = rows
-        instance.save()
-        maybe_finish_instance(instance)
+    # The resume and what follows it commit together, for the same reason as an
+    # action's outcome: a resume that lands without its continuation leaves a
+    # completed task and a run with nothing queued behind it.
+    with transaction.atomic():
+        claimed = transition_action(
+            action.pk,
+            COMPLETED,
+            allowed_from=(WAITING,),
+            message="Resumed by user",
+            field_updates={"requires_interaction": False},
+            metadata={"resumed_by": getattr(user, "pk", None)},
+        )
+        if claimed is None:
+            raise ValueError("Action is no longer waiting.")
+        action = claimed
+
+        if plugin is None:
+            fail_action(action, "Plugin no longer exists in the automation")
+            return action
+
+        next_actions = plugin.get_next_actions(action)
+        if next_actions:
+            for next_action in next_actions:
+                enqueue_action(next_action.pk, data=rows)
+        elif action.parent_id:
+            notify_parent(action)
+        else:
+            instance = action.automation_instance
+            instance.data = rows
+            instance.save()
+            maybe_finish_instance(instance)
     return action
 
 
@@ -997,6 +1018,57 @@ def _reopen_ancestors(action: AutomationAction, replacement_id: int) -> int:
             reopened += 1
         parent_id = parent.parent_id
     return reopened
+
+
+def reconcile_stalled_instances(timestamp: datetime.datetime | None = None, limit: int = 500) -> int:
+    """Close runs that have nothing left to do but were never finished.
+
+    The engine commits each action's outcome together with what follows it, so
+    this should find nothing. It exists for the paths that cannot take one
+    transaction — lease recovery deliberately propagates failure outside the row
+    lock — and as a backstop for anything unforeseen: an instance with no
+    unfinished actions has no worker coming for it and no successor to make
+    progress, so without this it would sit ``RUNNING`` forever.
+
+    A grace period keeps it from racing live work: an instance is only
+    considered once its most recent action has been finished for longer than the
+    lease window, by which time any in-flight continuation has committed or
+    rolled back.
+
+    :returns: The number of instances closed.
+    """
+    timestamp = timestamp or now()
+    grace = datetime.timedelta(seconds=float(getattr(settings, "AUTOMATION_LEASE_SECONDS", 300)))
+    settled_before = timestamp - grace
+
+    stalled = (
+        AutomationInstance.objects.filter(finished__isnull=True, status=RUNNING)
+        .exclude(automationaction__finished__isnull=True)
+        .annotate(last_finished=models.Max("automationaction__finished"))
+        .filter(last_finished__isnull=False, last_finished__lte=settled_before)
+        .distinct()[:limit]
+    )
+
+    closed = 0
+    for instance in list(stalled):
+        # A run whose actions ended badly is failed, not completed.
+        ended_badly = AutomationAction.objects.filter(
+            automation_instance=instance, state__in=(FAILED, CANCELED)
+        ).exists()
+        status = FAILED if ended_badly else COMPLETED
+        if transition_instance(
+            instance.pk,
+            status,
+            allowed_from=(RUNNING,),
+            unfinished_only=True,
+            metadata={"reconciled": "no unfinished actions remained"},
+        ):
+            closed += 1
+            logger.warning(
+                "automation.instance.reconciled",
+                extra={"automation_instance_id": instance.pk, "status": status},
+            )
+    return closed
 
 
 def replay_action(action_id: int) -> AutomationAction | None:
