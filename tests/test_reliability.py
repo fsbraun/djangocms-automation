@@ -1876,3 +1876,110 @@ def test_resuming_an_action_whose_plugin_vanished_fails_it(run_setup, settings, 
 
     assert resumed.state == FAILED, "it must not be left waiting and unresumable"
     assert AutomationAction.objects.get(pk=action.pk).state == FAILED
+
+
+@pytest.mark.django_db
+def test_only_one_scheduler_revives_an_action(run_setup, settings):
+    """Two schedulers that scanned the same due action must not both queue it.
+
+    The hold is written by a conditional UPDATE carrying the whole due
+    predicate, so it is a compare-and-set: the second scheduler's statement
+    matches nothing.
+    """
+    trigger, placeholder = run_setup
+    action = run(trigger, placeholder, "FlakyPlugin", settings)
+    settings.TASKS = {"default": {"BACKEND": "django.tasks.backends.dummy.DummyBackend"}}
+    AutomationAction.objects.filter(pk=action.pk).update(
+        state=PENDING, finished=None, next_attempt_at=None, paused_until=None
+    )
+
+    timestamp = now()
+    first = engine.revive_pending(timestamp)
+    second = engine.revive_pending(timestamp)  # a second scheduler, same tick
+
+    assert (first, second) == (1, 0)
+
+
+@pytest.mark.django_db
+def test_reviving_does_not_overwrite_a_later_hold(run_setup, settings):
+    """A blind write could pull an action's next attempt back into the past."""
+    trigger, placeholder = run_setup
+    action = run(trigger, placeholder, "FlakyPlugin", settings)
+    settings.TASKS = {"default": {"BACKEND": "django.tasks.backends.dummy.DummyBackend"}}
+    far_future = now() + datetime.timedelta(days=1)
+    AutomationAction.objects.filter(pk=action.pk).update(
+        state=PENDING, finished=None, next_attempt_at=None, paused_until=far_future
+    )
+
+    assert engine.revive_pending() == 0
+    action.refresh_from_db()
+    assert action.paused_until == far_future
+    assert action.next_attempt_at is None, "a paused action must not be stamped with a hold"
+
+
+@pytest.mark.django_db
+def test_skipped_occurrences_consume_the_recurrence_count(run_setup, settings):
+    """A finite schedule must end when its occurrences are used up.
+
+    Otherwise a timer limited to two could skip a week of stale slots and then
+    fire two fresh ones, long after it should have stopped.
+    """
+    trigger, placeholder = run_setup
+    add_plugin(placeholder=placeholder, plugin_type="ActionPlugin", language=settings.LANGUAGE_CODE)
+    settings.AUTOMATION_TIMER_MAX_AGE = 3600  # anything older than an hour is stale
+    trigger.type = "timer"
+    trigger.config = {
+        "scheduled_at": (now() - datetime.timedelta(hours=10)).isoformat(),
+        "recurrence_frequency": "hourly",
+        "recurrence_interval": 1,
+        "recurrence_count": 2,
+    }
+    trigger.save()
+
+    for _ in range(6):
+        engine.fire_due_timers(catch_up=3)
+
+    trigger.refresh_from_db()
+    assert trigger.config["occurrence_count"] >= 2
+    assert AutomationInstance.objects.count() == 0, "a spent schedule must not fire late"
+
+
+@pytest.mark.django_db
+def test_failing_a_vanished_plugin_twice_does_not_raise(run_setup, settings):
+    """Two concurrent resumes both pass the in-memory WAITING check.
+
+    ``resume_action`` re-reads the row, so a *sequential* second call gets a
+    clean "not awaiting interaction" error. The race is two requests that both
+    loaded while the action was still WAITING; without an atomic source guard
+    the loser reaches FAILED -> FAILED and raises InvalidTransition at the user.
+    """
+    trigger, placeholder = run_setup
+    action = run(trigger, placeholder, "SlowPlugin", settings)
+    AutomationAction.objects.filter(pk=action.pk).update(state=WAITING, finished=None, requires_interaction=True)
+    AutomationInstance.objects.filter(pk=action.automation_instance_id).update(status=RUNNING, finished=None)
+
+    first = AutomationAction.objects.get(pk=action.pk)
+    second = AutomationAction.objects.get(pk=action.pk)  # the other request's copy
+
+    engine.fail_action(first, "Plugin no longer exists in the automation", allowed_from=(WAITING,))
+    # The loser still believes it is WAITING; the guard must absorb that.
+    engine.fail_action(second, "Plugin no longer exists in the automation", allowed_from=(WAITING,))
+
+    action.refresh_from_db()
+    assert action.state == FAILED
+    assert action.events.filter(to_state=FAILED).count() == 1, "the failure was recorded twice"
+
+
+@pytest.mark.django_db
+def test_resuming_a_vanished_plugin_twice_reports_cleanly(run_setup, settings, admin_user):
+    """Through the public entry point the second caller gets a clear error."""
+    trigger, placeholder = run_setup
+    action = run(trigger, placeholder, "SlowPlugin", settings)
+    AutomationAction.objects.filter(pk=action.pk).update(
+        state=WAITING, finished=None, requires_interaction=True, plugin_ptr=uuid.uuid4()
+    )
+    AutomationInstance.objects.filter(pk=action.automation_instance_id).update(status=RUNNING, finished=None)
+
+    assert engine.resume_action(action.pk, admin_user).state == FAILED
+    with pytest.raises(ValueError, match="not awaiting"):
+        engine.resume_action(action.pk, admin_user)

@@ -341,7 +341,12 @@ def dead_letter(action: AutomationAction) -> None:
 
 
 def fail_action(
-    action: AutomationAction, message: str, *, exc: BaseException | None = None, require_lease=None
+    action: AutomationAction,
+    message: str,
+    *,
+    exc: BaseException | None = None,
+    require_lease=None,
+    allowed_from: tuple[str, ...] | None = None,
 ) -> None:
     """Fail an action, retrying first if its policy allows.
 
@@ -368,6 +373,7 @@ def fail_action(
         failed = transition_action(
             action.pk,
             FAILED,
+            allowed_from=allowed_from,
             result=result,
             message=message[:MAX_FIELD_LENGTH],
             error=exc,
@@ -755,7 +761,12 @@ def resume_action(action_id: int, user, data: dict | None = None) -> AutomationA
         # afterwards asks for COMPLETED -> FAILED, which the lifecycle forbids:
         # the whole transaction would roll back and leave the action waiting,
         # permanently unresumable.
-        fail_action(action, "Plugin no longer exists in the automation")
+        #
+        # ``allowed_from`` makes the source check atomic. The WAITING test above
+        # was made against an object loaded earlier; two concurrent resumes
+        # would both pass it, and the second would ask for FAILED -> FAILED and
+        # raise. Guarded, the loser simply finds nothing to do.
+        fail_action(action, "Plugin no longer exists in the automation", allowed_from=(WAITING,))
         action.refresh_from_db()
         return action
 
@@ -810,11 +821,20 @@ def revive_pending(timestamp: datetime.datetime | None = None) -> int:
     hold_until = timestamp + datetime.timedelta(seconds=float(getattr(settings, "AUTOMATION_LEASE_SECONDS", 300)))
     count = 0
     for action in list(actions):
-        held = AutomationAction.objects.filter(pk=action.pk, state=PENDING, finished__isnull=True).update(
-            next_attempt_at=hold_until
-        )
+        # Repeat the whole due predicate in the UPDATE, so the statement is a
+        # compare-and-set rather than a blind write. Two schedulers that scanned
+        # the same action both match on primary key and state; only one can
+        # match on "still due", and the loser must not enqueue — nor stamp its
+        # own hold over a later one another process has already set.
+        held = AutomationAction.objects.filter(
+            Q(paused_until=None) | Q(paused_until__lte=timestamp),
+            Q(next_attempt_at=None) | Q(next_attempt_at__lte=timestamp),
+            pk=action.pk,
+            state=PENDING,
+            finished__isnull=True,
+        ).update(next_attempt_at=hold_until)
         if not held:
-            continue  # Claimed or finished between the scan and here.
+            continue  # Claimed, finished, or revived by another scheduler.
         enqueue_action(action.pk)
         count += 1
     return count
@@ -1208,6 +1228,14 @@ def _parse_datetime(value) -> datetime.datetime | None:
     return parsed
 
 
+def _occurrences(config: dict) -> int:
+    """How many occurrences of a recurring timer have elapsed, fired or skipped."""
+    elapsed = config.get("occurrence_count")
+    if elapsed is None:
+        elapsed = config.get("fired_count", 0)
+    return int(elapsed)
+
+
 def _next_timer_fire(config: dict, timestamp: datetime.datetime) -> datetime.datetime | None:
     """Compute the next due fire time for a timer trigger config.
 
@@ -1226,8 +1254,16 @@ def _next_timer_fire(config: dict, timestamp: datetime.datetime) -> datetime.dat
         return None  # One-shot timer already fired.
     interval = int(config.get("recurrence_interval") or 1)
     count_limit = config.get("recurrence_count")
-    if count_limit and int(config.get("fired_count", 1)) >= int(count_limit):
-        return None
+    if count_limit:
+        # ``recurrence_count`` limits how many occurrences the schedule has, not
+        # how many happened to execute: an occurrence skipped for being stale
+        # still used one up. ``occurrence_count`` tracks that, falling back to
+        # ``fired_count`` for triggers configured before the two diverged.
+        elapsed = config.get("occurrence_count")
+        if elapsed is None:
+            elapsed = config.get("fired_count", 1)
+        if int(elapsed) >= int(count_limit):
+            return None
     if frequency == "monthly":
         next_fire = _add_months(last_fired, interval)
     else:
@@ -1284,8 +1320,14 @@ def fire_due_timers(timestamp: datetime.datetime | None = None, catch_up: int | 
                 break
             stale = max_age is not None and (timestamp - due).total_seconds() > float(max_age)
             if stale:
+                # Count it even though it did not run. ``recurrence_count``
+                # limits how many occurrences the schedule *has*, not how many
+                # happened to execute — otherwise a timer limited to two could
+                # skip a week of stale slots and then fire two fresh ones, long
+                # after its finite schedule should have ended.
                 skipped += 1
                 config["last_fired"] = due.isoformat()
+                config["occurrence_count"] = _occurrences(config) + 1
             else:
                 # Firing and recording the occurrence commit together, so a
                 # scheduler that dies between them cannot fire it twice. The
@@ -1299,6 +1341,7 @@ def fire_due_timers(timestamp: datetime.datetime | None = None, catch_up: int | 
                     )
                     config["last_fired"] = due.isoformat()
                     config["fired_count"] = int(config.get("fired_count", 0)) + 1
+                    config["occurrence_count"] = _occurrences(config) + 1
                     trigger.config = config
                     trigger.save(update_fields=["config"])
                 fired_here += 1
