@@ -441,13 +441,30 @@ class AutomationTriggerAdmin(ChangeListActionsMixin, admin.ModelAdmin):
         return base_fieldsets
 
     def get_form(self, request, obj=None, **kwargs):
-        """Customize form instance with request context."""
+        """Build a form class combining the admin form with the trigger's config fields.
+
+        The composed class is passed through ``kwargs`` rather than assigned to
+        ``self.form``. A ``ModelAdmin`` is instantiated once and shared by every
+        request, so assigning to it lets two concurrent requests for different
+        trigger types overwrite each other — one editing a timer could be served
+        the webhook's configuration fields.
+        """
         trigger_class, changed = self.get_trigger(request, obj)
         if trigger_class and not changed:
-            self.form = type("FormWithTriggerConfig", (AutomationTriggerAdminForm, trigger_class), {})
+            form_class = type("FormWithTriggerConfig", (AutomationTriggerAdminForm, trigger_class), {})
         else:
-            self.form = AutomationTriggerAdminForm
+            form_class = AutomationTriggerAdminForm
 
+        # Mirror ModelAdmin.get_form: a declared field that is read-only must not
+        # be rendered as an editable input. Django applies this to ``self.form``,
+        # which is no longer the class being used, so apply it here instead.
+        readonly = dict.fromkeys(
+            name for name in self.get_readonly_fields(request, obj) if name in form_class.declared_fields
+        )
+        if readonly:
+            form_class = type(form_class.__name__, (form_class,), readonly)
+
+        kwargs["form"] = form_class
         form = super().get_form(request, obj, **kwargs)
 
         # Add localized confirmation message as data attribute
