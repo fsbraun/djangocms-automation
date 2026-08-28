@@ -382,7 +382,10 @@ class ConditionalPluginModel(AutomationPluginModel):
             (pass-through), and ``(COMPLETED, branch_output)`` once the
             branch chain has finished.
         """
-        children = action.children.all()
+        # As for a split: a child that has been replayed is superseded by its
+        # replacement and must not be counted, or a replayed branch fails its
+        # parent forever.
+        children = action.children.filter(replays__isnull=True)
         if not children.exists():
             condition_result = bool(evaluate_condition(self.condition, data))
             action._condition_result = condition_result

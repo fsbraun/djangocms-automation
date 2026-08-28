@@ -8,6 +8,7 @@ between claim, execute, transition, and schedule.
 
 import datetime
 import threading
+import uuid
 
 import pytest
 from cms.api import add_plugin
@@ -1109,3 +1110,117 @@ def test_a_broken_dead_letter_receiver_does_not_block_propagation(run_setup, set
     assert action.state == FAILED
     assert action.dead_lettered is True
     assert action.automation_instance.status == FAILED, "failure must still have propagated"
+
+
+@pytest.mark.django_db
+def test_execution_policy_is_stored_with_the_claim(run_setup, settings):
+    """The retry budget must land in the same transaction as the claim.
+
+    A worker that dies between claiming and recording its policy would leave
+    recovery with nothing to work from, and the action would be dead-lettered on
+    its first expired lease even though its plugin allowed retries. Claiming is
+    therefore the moment the policy is written, not a step before it.
+    """
+    trigger, placeholder = run_setup
+    add_plugin(placeholder=placeholder, plugin_type="ThreeAttemptPlugin", language=settings.LANGUAGE_CODE)
+    trigger.trigger_execution(data=[{"seed": 1}])
+
+    action = AutomationAction.objects.latest("id")
+    claim = action.events.filter(to_state=RUNNING).earliest("created")
+    assert claim.attempt == 1
+
+    # The budget and input are on the row, and were not written later: the
+    # action has since failed and been rescheduled, so nothing else has run.
+    assert action.max_attempts == 3
+    assert action.input_data == [{"seed": 1}]
+
+
+@pytest.mark.django_db
+def test_a_transient_heartbeat_error_does_not_end_renewal(monkeypatch):
+    """One database blip must not leave a healthy action looking abandoned."""
+    calls = {"n": 0}
+
+    def flaky(action_id, lease_id):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("connection reset")
+        return True
+
+    monkeypatch.setattr("djangocms_automation.transitions.heartbeat_action", flaky)
+    beat = engine._Heartbeat(action_id=1, lease_id=uuid.uuid4(), interval=0.05)
+    with beat:
+        deadline = now() + datetime.timedelta(seconds=5)
+        while now() < deadline and calls["n"] < 3:
+            threading.Event().wait(0.05)
+
+    assert calls["n"] >= 3, "renewal stopped after the first failure"
+
+
+@pytest.mark.django_db
+def test_heartbeat_gives_up_after_repeated_failures(monkeypatch):
+    """It must not spin forever against a database that is genuinely gone."""
+    calls = {"n": 0}
+
+    def always_fails(action_id, lease_id):
+        calls["n"] += 1
+        raise RuntimeError("database is down")
+
+    monkeypatch.setattr("djangocms_automation.transitions.heartbeat_action", always_fails)
+    beat = engine._Heartbeat(action_id=1, lease_id=uuid.uuid4(), interval=0.05)
+    with beat:
+        deadline = now() + datetime.timedelta(seconds=5)
+        while now() < deadline and beat._thread.is_alive():
+            threading.Event().wait(0.05)
+
+    assert calls["n"] == engine._Heartbeat.max_consecutive_failures
+
+
+@pytest.mark.django_db
+def test_heartbeat_stops_when_the_lease_is_lost(monkeypatch):
+    """A lost lease means someone else owns the action; stop immediately."""
+    calls = {"n": 0}
+
+    def lease_lost(action_id, lease_id):
+        calls["n"] += 1
+        return False
+
+    monkeypatch.setattr("djangocms_automation.transitions.heartbeat_action", lease_lost)
+    beat = engine._Heartbeat(action_id=1, lease_id=uuid.uuid4(), interval=0.05)
+    with beat:
+        deadline = now() + datetime.timedelta(seconds=5)
+        while now() < deadline and beat._thread.is_alive():
+            threading.Event().wait(0.05)
+
+    assert calls["n"] == 1, "one refusal must stop renewal, and only one"
+
+
+@pytest.mark.django_db
+def test_replaying_a_conditional_branch_lets_the_conditional_complete(run_setup, settings):
+    """The conditional joins on its branch exactly as a split joins on its paths,
+    so it too must ignore a child that has been superseded by a replay."""
+    trigger, placeholder = run_setup
+    conditional = add_plugin(
+        placeholder=placeholder, plugin_type="AutomationIf", language=settings.LANGUAGE_CODE, condition={}
+    )
+    yes = add_plugin(
+        placeholder=placeholder, plugin_type="ThenPlugin", language=settings.LANGUAGE_CODE, target=conditional
+    )
+    add_plugin(placeholder=placeholder, plugin_type="ActionPlugin", language=settings.LANGUAGE_CODE, target=yes)
+    add_plugin(placeholder=placeholder, plugin_type="ElsePlugin", language=settings.LANGUAGE_CODE, target=conditional)
+    trigger.trigger_execution(data=[{"seed": 1}])
+
+    child = AutomationAction.objects.filter(parent__isnull=False).latest("id")
+    parent = child.parent
+    AutomationAction.objects.filter(pk=child.pk).update(
+        state=FAILED, finished=now(), dead_lettered=True, dead_lettered_at=now(), input_data=[{"seed": 1}]
+    )
+    AutomationAction.objects.filter(pk=parent.pk).update(state=FAILED, finished=now())
+    AutomationInstance.objects.filter(pk=child.automation_instance_id).update(status=FAILED, finished=now())
+
+    replacement = engine.replay_action(child.pk)
+    assert replacement is not None
+
+    parent.refresh_from_db()
+    instance = AutomationInstance.objects.get(pk=child.automation_instance_id)
+    assert parent.state == COMPLETED, "the reopened conditional must complete, not fail again"
+    assert instance.status == COMPLETED, "the instance must not stay failed"

@@ -35,6 +35,7 @@ MUTABLE_ACTION_FIELDS = frozenset(
         "next_attempt_at",
         "paused_until",
         "timeout_seconds",
+        "max_attempts",
         # Reopening a terminal action for replay has to clear its finish time,
         # or it stays invisible to the "any unfinished actions?" checks that
         # decide when an instance is complete.

@@ -225,9 +225,19 @@ def enqueue_action(action_id: int, data=None, single_step: bool = False) -> None
         transaction.on_commit(lambda: _safe_enqueue(_do_enqueue, action_id))
 
 
-def claim_action(action_id: int, allow_states: tuple[str, ...] = (PENDING,)) -> AutomationAction | None:
+def claim_action(
+    action_id: int,
+    allow_states: tuple[str, ...] = (PENDING,),
+    field_updates: dict | None = None,
+) -> AutomationAction | None:
     """Atomically claim an action for execution (``PENDING`` → ``RUNNING``).
 
+    :param field_updates: Written in the same transaction as the claim. The
+        execution policy — timeout, retry budget, the input this attempt was
+        given — must land with the claim rather than after it: a worker that
+        dies in between would otherwise leave recovery with no stored budget,
+        and the action would be dead-lettered on its first expired lease even
+        though its plugin allowed retries.
     :returns: The claimed action, or ``None`` if it was already claimed,
         finished, or in a non-claimable state (making double enqueues no-ops).
     """
@@ -236,6 +246,7 @@ def claim_action(action_id: int, allow_states: tuple[str, ...] = (PENDING,)) -> 
         RUNNING,
         allowed_from=allow_states,
         unfinished_only=True,
+        field_updates=field_updates,
     )
     if action is None:
         return None
@@ -493,16 +504,40 @@ class _Heartbeat:
         self._thread.start()
         return self
 
+    #: Consecutive failed refreshes tolerated before giving up. A blip must not
+    #: end renewal: the action keeps running either way, so a stale heartbeat
+    #: would let recovery treat a healthy action as abandoned and run it twice.
+    max_consecutive_failures = 5
+
     def _run(self):
         from .transitions import heartbeat_action
 
-        while not self._stop.wait(self.interval):
+        failures = 0
+        delay = self.interval
+        while not self._stop.wait(delay):
             try:
                 if not heartbeat_action(self.action_id, self.lease_id):
                     return  # Lease lost or action finished; stop quietly.
             except Exception:
-                logger.exception("automation.heartbeat.failed", extra={"automation_action_id": self.action_id})
-                return
+                failures += 1
+                logger.warning(
+                    "automation.heartbeat.failed",
+                    extra={"automation_action_id": self.action_id, "consecutive_failures": failures},
+                    exc_info=True,
+                )
+                if failures >= self.max_consecutive_failures:
+                    logger.error(
+                        "automation.heartbeat.abandoned",
+                        extra={"automation_action_id": self.action_id, "consecutive_failures": failures},
+                    )
+                    return
+                # Retry sooner than the normal interval, so a recovered
+                # connection refreshes well before the lease is considered lost.
+                # The floor only prevents a hot loop; the failure cap bounds it.
+                delay = max(0.05, self.interval / 2)
+                continue
+            failures = 0
+            delay = self.interval
 
     def __exit__(self, exc_type, exc, tb):
         self._stop.set()
@@ -527,7 +562,36 @@ def _resolve_timeout(plugin) -> int | None:
 
 def run_action(action_id: int, data=None, single_step: bool = False) -> None:
     """Execute a single automation action and schedule what follows."""
-    action = claim_action(action_id)
+    # Resolve the plugin *before* claiming, so the execution policy it implies
+    # can be written in the same transaction as the claim. Claiming first would
+    # leave a window in which a dying worker strands an action with no recorded
+    # timeout or retry budget for recovery to work from.
+    pending = (
+        AutomationAction.objects.select_related("automation_instance", "automation_instance__automation_content")
+        .filter(pk=action_id)
+        .first()
+    )
+    if pending is None:
+        return
+
+    plugin_map = build_plugin_map(pending.automation_instance.automation_content_id)
+    plugin = plugin_map.get(pending.plugin_ptr)
+    rows = normalize_rows(data if data is not None else pending.automation_instance.data)
+
+    claim_updates = None
+    if plugin is not None:
+        pending._plugin = plugin
+        claim_updates = {
+            # The input this attempt was given, so a dead-lettered action can be
+            # replayed with it rather than whatever the instance holds later.
+            "input_data": rows,
+            "timeout_seconds": _resolve_timeout(plugin),
+            # Lease recovery runs in the scheduler, which has no plugin instance
+            # to ask, so the budget has to be on the row.
+            "max_attempts": effective_max_attempts(pending, get_retry_policy(pending)),
+        }
+
+    action = claim_action(action_id, field_updates=claim_updates)
     if action is None:
         return
 
@@ -536,29 +600,10 @@ def run_action(action_id: int, data=None, single_step: bool = False) -> None:
         transition_action(action.pk, CANCELED, allowed_from=(RUNNING,), message="Instance canceled")
         return
 
-    plugin_map = build_plugin_map(action.automation_instance.automation_content_id)
-    plugin = plugin_map.get(action.plugin_ptr)
     if plugin is None:
         fail_action(action, "Plugin no longer exists in the automation")
         return
     action._plugin = plugin
-
-    rows = normalize_rows(data if data is not None else action.automation_instance.data)
-
-    # Record what this attempt was given, so a dead-lettered action can be
-    # replayed with its real input rather than whatever the instance holds now.
-    timeout = _resolve_timeout(plugin)
-    # Persist the plugin's retry budget too. Lease recovery runs in the
-    # scheduler, which has no plugin instance to ask, so a policy that only
-    # lived on the plugin would be lost the moment a worker died — an action
-    # allowed three attempts would be dead-lettered after its first crash.
-    max_attempts = effective_max_attempts(action, get_retry_policy(action))
-    AutomationAction.objects.filter(pk=action.pk).update(
-        input_data=rows, timeout_seconds=timeout, max_attempts=max_attempts
-    )
-    action.input_data = rows
-    action.timeout_seconds = timeout
-    action.max_attempts = max_attempts
 
     try:
         with _Heartbeat(action.pk, action.lease_id, _heartbeat_interval()):
