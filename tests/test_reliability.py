@@ -1983,3 +1983,51 @@ def test_resuming_a_vanished_plugin_twice_reports_cleanly(run_setup, settings, a
     assert engine.resume_action(action.pk, admin_user).state == FAILED
     with pytest.raises(ValueError, match="not awaiting"):
         engine.resume_action(action.pk, admin_user)
+
+
+@pytest.mark.django_db
+def test_a_finite_timer_fires_exactly_its_configured_count(run_setup, settings):
+    """``recurrence_count`` is the number of occurrences, not one fewer.
+
+    The two counters have to be read before either is written: ``_occurrences``
+    falls back to ``fired_count`` until an ``occurrence_count`` exists, so
+    reading it after the increment counts the same occurrence twice and a timer
+    set to two stops after one.
+    """
+    trigger, placeholder = run_setup
+    add_plugin(placeholder=placeholder, plugin_type="ActionPlugin", language=settings.LANGUAGE_CODE)
+    trigger.type = "timer"
+    trigger.config = {
+        "scheduled_at": (now() - datetime.timedelta(hours=5)).isoformat(),
+        "recurrence_frequency": "hourly",
+        "recurrence_interval": 1,
+        "recurrence_count": 2,
+    }
+    trigger.save()
+
+    for _ in range(6):
+        engine.fire_due_timers(catch_up=3)
+
+    trigger.refresh_from_db()
+    assert AutomationInstance.objects.count() == 2, "a timer set to two occurrences must fire twice"
+    assert trigger.config["fired_count"] == 2
+    assert trigger.config["occurrence_count"] == 2
+
+
+@pytest.mark.django_db
+def test_the_counters_stay_in_step_for_a_plain_recurring_timer(run_setup, settings):
+    """With nothing skipped, occurrences and fires are the same number."""
+    trigger, placeholder = run_setup
+    add_plugin(placeholder=placeholder, plugin_type="ActionPlugin", language=settings.LANGUAGE_CODE)
+    trigger.type = "timer"
+    trigger.config = {
+        "scheduled_at": (now() - datetime.timedelta(hours=3)).isoformat(),
+        "recurrence_frequency": "hourly",
+        "recurrence_interval": 1,
+    }
+    trigger.save()
+
+    engine.fire_due_timers(catch_up=1)
+    trigger.refresh_from_db()
+    assert trigger.config["fired_count"] == 1
+    assert trigger.config["occurrence_count"] == 1, "the first firing must count once, not twice"

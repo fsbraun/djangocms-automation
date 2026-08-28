@@ -1319,6 +1319,11 @@ def fire_due_timers(timestamp: datetime.datetime | None = None, catch_up: int | 
             if due is None:
                 break
             stale = max_age is not None and (timestamp - due).total_seconds() > float(max_age)
+            # Read the elapsed count before touching either counter.
+            # ``_occurrences`` falls back to ``fired_count`` when no
+            # ``occurrence_count`` has been written yet, so reading it after
+            # incrementing ``fired_count`` counts the same occurrence twice.
+            elapsed = _occurrences(config)
             if stale:
                 # Count it even though it did not run. ``recurrence_count``
                 # limits how many occurrences the schedule *has*, not how many
@@ -1327,7 +1332,7 @@ def fire_due_timers(timestamp: datetime.datetime | None = None, catch_up: int | 
                 # after its finite schedule should have ended.
                 skipped += 1
                 config["last_fired"] = due.isoformat()
-                config["occurrence_count"] = _occurrences(config) + 1
+                config["occurrence_count"] = elapsed + 1
             else:
                 # Firing and recording the occurrence commit together, so a
                 # scheduler that dies between them cannot fire it twice. The
@@ -1341,7 +1346,7 @@ def fire_due_timers(timestamp: datetime.datetime | None = None, catch_up: int | 
                     )
                     config["last_fired"] = due.isoformat()
                     config["fired_count"] = int(config.get("fired_count", 0)) + 1
-                    config["occurrence_count"] = _occurrences(config) + 1
+                    config["occurrence_count"] = elapsed + 1
                     trigger.config = config
                     trigger.save(update_fields=["config"])
                 fired_here += 1
