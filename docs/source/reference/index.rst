@@ -9,6 +9,7 @@ from docstrings using :mod:`sphinx.ext.autodoc` and :mod:`sphinx.ext.autosummary
    :glob:
 
    models
+   admin
    instances
    triggers
    engine

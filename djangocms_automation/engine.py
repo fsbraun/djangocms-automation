@@ -326,7 +326,7 @@ def fail_action(action: AutomationAction, message: str, *, exc: BaseException | 
     policy = get_retry_policy(action)
     if exc is not None and action.state == RUNNING:
         max_attempts = effective_max_attempts(action, policy)
-        if policy.is_retryable(exc) and action.attempt_count < max_attempts:
+        if policy.should_retry(exc, action.attempt_count, max_attempts):
             if schedule_retry(action, exc, policy) is not None:
                 return
 

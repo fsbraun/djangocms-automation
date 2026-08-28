@@ -295,3 +295,80 @@ def test_reference_digest_queries_then_mails(automation_content, durable, mailou
     assert len(mailoutbox) == 1
     assert "reader" in mailoutbox[0].body
     assert AutomationInstance.objects.latest("id").status == COMPLETED
+
+
+# --------------------------------------------------------------------------
+# Worker robustness
+# --------------------------------------------------------------------------
+
+
+def queue_a_task(task_path="djangocms_automation.tasks.execute_action", **kwargs):
+    """Put a raw row on the queue, bypassing the engine."""
+    from django.utils.crypto import get_random_string
+
+    return QueuedTask.objects.create(
+        result_id=get_random_string(32),
+        task_path=task_path,
+        queue_name="default",
+        args=kwargs.pop("args", []),
+        kwargs=kwargs.pop("kwargs", {}),
+        **kwargs,
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_failing_task_is_recorded_and_does_not_kill_the_worker(setup):
+    """One bad task must not take the worker down, and must leave a trace."""
+    queue_a_task(task_path="djangocms_automation.does_not_exist.nope")
+    trigger, _placeholder = setup
+    trigger.trigger_execution(data=[{"seed": 1}])  # a good task behind the bad one
+
+    call_command("runworker", "--once")
+
+    bad = QueuedTask.objects.get(task_path__endswith="nope")
+    assert bad.state == "FAILED"
+    assert bad.error, "the traceback must be persisted for inspection"
+    assert bad.finished_at is not None
+
+    good = QueuedTask.objects.exclude(pk=bad.pk).filter(state=SUCCESSFUL)
+    assert good.exists(), "the worker carried on after the failure"
+    assert AutomationAction.objects.latest("id").state == COMPLETED
+
+
+@pytest.mark.django_db(transaction=True)
+def test_max_tasks_stops_the_worker(setup):
+    """``--max-tasks`` lets a deployment recycle long-lived worker processes."""
+    for _ in range(3):
+        queue_a_task(task_path="djangocms_automation.does_not_exist.nope")
+
+    call_command("runworker", "--max-tasks", "1")
+
+    assert QueuedTask.objects.filter(state=READY).count() == 2
+    assert QueuedTask.objects.filter(state="FAILED").count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_worker_installs_a_graceful_shutdown_handler(setup):
+    """SIGINT/SIGTERM must ask the loop to stop rather than kill it mid-task."""
+    import signal
+
+    original = signal.getsignal(signal.SIGTERM)
+    try:
+        call_command("runworker", "--once")
+        handler = signal.getsignal(signal.SIGTERM)
+        assert callable(handler)
+        assert handler is not original, "the worker installed its own handler"
+
+        # The handler is idempotent: a second signal must not raise or re-announce.
+        handler(signal.SIGTERM, None)
+        handler(signal.SIGTERM, None)
+    finally:
+        signal.signal(signal.SIGTERM, original)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_worker_idles_when_the_queue_is_empty(setup):
+    """With nothing ready, ``--once`` exits instead of spinning."""
+    assert QueuedTask.objects.count() == 0
+    call_command("runworker", "--once", "--sleep", "0")
+    assert QueuedTask.objects.count() == 0

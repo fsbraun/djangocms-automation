@@ -806,3 +806,93 @@ def test_reconciliation_leaves_genuinely_waiting_joins_alone(run_setup, settings
     )
 
     assert engine.reconcile_waiting_joins() == 0
+
+
+# --------------------------------------------------------------------------
+# Coverage gaps: engine guards, retention flag, misconfiguration
+# --------------------------------------------------------------------------
+
+
+def test_should_retry_honours_a_per_action_limit():
+    """The engine resolves an effective limit; the policy must accept it."""
+    policy = RetryPolicy(max_attempts=2, backoff_seconds=0, jitter=0)
+    exc = RetryableError("transient")
+
+    assert policy.should_retry(exc, attempt_count=1) is True
+    assert policy.should_retry(exc, attempt_count=2) is False
+    assert policy.should_retry(exc, attempt_count=2, max_attempts=5) is True
+    assert policy.should_retry(PermanentError("no"), attempt_count=1, max_attempts=5) is False
+
+
+@pytest.mark.django_db
+def test_lost_wakeup_guard_wakes_a_parent_whose_children_all_finished(run_setup, settings):
+    """``_wake_if_children_done`` closes the window where every child finished
+    while the parent was still RUNNING, so no child found a WAITING row to wake."""
+    trigger, placeholder = run_setup
+    action = run(trigger, placeholder, "SlowPlugin", settings)
+    AutomationAction.objects.filter(pk=action.pk).update(state=WAITING, finished=None)
+    AutomationInstance.objects.filter(pk=action.automation_instance_id).update(status=RUNNING, finished=None)
+    AutomationAction.objects.create(
+        parent_id=action.pk,
+        automation_instance=action.automation_instance,
+        plugin_ptr=action.plugin_ptr,
+        state=COMPLETED,
+        finished=now(),
+    )
+    action.refresh_from_db()
+
+    engine._wake_if_children_done(action)
+
+    action.refresh_from_db()
+    assert action.state == COMPLETED, "the parent resumed and ran to completion"
+
+
+@pytest.mark.django_db
+def test_a_broken_instance_receiver_cannot_fail_a_run(run_setup, settings):
+    """As for action transitions, instance observability must never break a run."""
+    from djangocms_automation.signals import instance_finished
+
+    def broken(sender, **kwargs):
+        raise RuntimeError("metrics backend down")
+
+    instance_finished.connect(broken)
+    try:
+        action = run(trigger=run_setup[0], placeholder=run_setup[1], plugin_type="SlowPlugin", settings=settings)
+    finally:
+        instance_finished.disconnect(broken)
+
+    action.refresh_from_db()
+    assert action.state == COMPLETED
+    assert action.automation_instance.status == COMPLETED
+
+
+@pytest.mark.django_db
+def test_redact_flag_strips_payloads_but_keeps_the_run(run_setup, settings):
+    """``--redact`` is the retention level that keeps the audit trail."""
+    trigger, placeholder = run_setup
+    action = run(trigger, placeholder, "SlowPlugin", settings)
+    old = now() - datetime.timedelta(days=90)
+    AutomationInstance.objects.filter(pk=action.automation_instance_id).update(finished=old, updated=old)
+
+    call_command("runautomations", "--redact", "30", "--no-lock")
+
+    instance = AutomationInstance.objects.get(pk=action.automation_instance_id)
+    action.refresh_from_db()
+    assert instance.data == [] and instance.initial_data == []
+    assert action.input_data is None
+    assert action.state == COMPLETED
+    assert action.events.exists(), "the audit trail survives redaction"
+
+
+@pytest.mark.django_db
+def test_trigger_without_a_placeholder_reports_a_usable_error(automation_content, settings):
+    """A trigger pointing at a slot that has no placeholder at all."""
+    settings.TASKS = {"default": {"BACKEND": "django.tasks.backends.immediate.ImmediateBackend"}}
+    trigger = AutomationTrigger.objects.create(
+        automation_content=automation_content, slot="nonexistent", type="click", position=0
+    )
+
+    with pytest.raises(ValueError, match="no placeholder"):
+        trigger.trigger_execution(data=[{"seed": 1}])
+
+    assert AutomationInstance.objects.count() == 0

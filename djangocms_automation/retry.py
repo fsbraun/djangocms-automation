@@ -79,9 +79,14 @@ class RetryPolicy:
             return True
         return bool(self.retry_on) and isinstance(exc, tuple(self.retry_on))
 
-    def should_retry(self, exc: BaseException, attempt_count: int) -> bool:
-        """Check whether an action on attempt ``attempt_count`` may run again."""
-        return attempt_count < self.max_attempts and self.is_retryable(exc)
+    def should_retry(self, exc: BaseException, attempt_count: int, max_attempts: int | None = None) -> bool:
+        """Check whether an action on attempt ``attempt_count`` may run again.
+
+        :param max_attempts: Overrides the policy's own limit, for the
+            per-action override the engine resolves from the action row.
+        """
+        limit = self.max_attempts if max_attempts is None else max_attempts
+        return attempt_count < limit and self.is_retryable(exc)
 
     def next_delay(self, attempt_count: int, exc: BaseException | None = None) -> float:
         """Compute the delay in seconds before attempt ``attempt_count + 1``.
