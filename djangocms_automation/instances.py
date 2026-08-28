@@ -31,6 +31,51 @@ STATES = [
 #: States from which no further work is scheduled.
 TERMINAL = frozenset({COMPLETED, FAILED, CANCELED})
 
+#: The action lifecycle, as data.
+#:
+#: Every state change goes through
+#: :func:`~djangocms_automation.transitions.transition_action`, which rejects
+#: anything not listed here. Individual call sites still pass ``allowed_from``
+#: to say which source they expect; this table is the coarser statement of what
+#: is possible at all, so an impossible transition fails loudly at its origin
+#: instead of leaving a puzzling row behind. It is also the single place to read
+#: the lifecycle, and what the state diagram in the docs is generated from.
+ALLOWED_TRANSITIONS: dict[str, frozenset] = {
+    # Queued, or waiting for a retry or pause to fall due.
+    PENDING: frozenset(
+        {
+            PENDING,  # re-paused: a pending action's due time is pushed back
+            RUNNING,  # claimed by a worker
+            FAILED,  # the task could not be enqueued, or an ancestor failed
+            CANCELED,  # the run was canceled before it started
+        }
+    ),
+    # Claimed by a worker, under a lease.
+    RUNNING: frozenset(
+        {
+            COMPLETED,  # the plugin succeeded
+            WAITING,  # fanned out, or waiting for a human
+            FAILED,  # the plugin failed, or its lease expired with no attempts left
+            PENDING,  # paused, retried, or recovered for another attempt
+            CANCELED,  # the run was canceled while this action was in flight
+        }
+    ),
+    # Suspended until something else finishes.
+    WAITING: frozenset(
+        {
+            PENDING,  # woken by a child, the lost-wakeup guard, or reconciliation
+            COMPLETED,  # resumed by a permitted user
+            FAILED,  # a branch failed underneath it
+            CANCELED,  # the run was canceled
+        }
+    ),
+    COMPLETED: frozenset(),  # terminal
+    # Terminal, with one exception: replaying a branch action reopens its failed
+    # ancestors so the join can be woken again.
+    FAILED: frozenset({WAITING}),
+    CANCELED: frozenset(),  # terminal
+}
+
 #: States an execution can still leave under its own power.
 ACTIVE = frozenset({PENDING, RUNNING, WAITING})
 

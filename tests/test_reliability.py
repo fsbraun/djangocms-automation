@@ -38,7 +38,7 @@ from djangocms_automation.models import (
     BaseActionPluginModel,
 )
 from djangocms_automation.retry import PermanentError, RetryableError, RetryPolicy
-from djangocms_automation.transitions import transition_action
+from djangocms_automation.transitions import InvalidTransition, transition_action
 
 #: Execution counters keyed by plugin name, reset by the ``counters`` fixture.
 CALLS: dict[str, int] = {}
@@ -1490,3 +1490,64 @@ def test_recovery_skips_an_action_that_finished_after_the_scan(run_setup, settin
 
     action.refresh_from_db()
     assert action.state == COMPLETED
+
+
+# --------------------------------------------------------------------------
+# The transition table
+# --------------------------------------------------------------------------
+
+
+def test_every_state_appears_in_the_transition_table():
+    """A state missing from the table would silently reject every transition."""
+    from djangocms_automation.instances import ALLOWED_TRANSITIONS, STATES
+
+    assert {state for state, _label in STATES} == set(ALLOWED_TRANSITIONS)
+
+
+def test_the_table_only_names_real_states():
+    from djangocms_automation.instances import ALLOWED_TRANSITIONS, STATES
+
+    known = {state for state, _label in STATES}
+    for source, targets in ALLOWED_TRANSITIONS.items():
+        assert targets <= known, f"{source} points at a state that does not exist"
+
+
+def test_terminal_states_are_terminal():
+    """COMPLETED and CANCELED are ends. FAILED has exactly one way back, for replay."""
+    from djangocms_automation.instances import ALLOWED_TRANSITIONS
+
+    assert ALLOWED_TRANSITIONS[COMPLETED] == frozenset()
+    assert ALLOWED_TRANSITIONS[CANCELED] == frozenset()
+    assert ALLOWED_TRANSITIONS[FAILED] == frozenset({WAITING})
+
+
+@pytest.mark.django_db
+def test_an_impossible_transition_raises(run_setup, settings):
+    """A refused-but-legal transition returns None; an impossible one is a bug.
+
+    Completing a run and then 'completing' it again from COMPLETED is not a
+    race the engine should absorb quietly — it means a caller has misunderstood
+    the lifecycle, and should say so where it happened.
+    """
+    trigger, placeholder = run_setup
+    action = run(trigger, placeholder, "SlowPlugin", settings)
+    action.refresh_from_db()
+    assert action.state == COMPLETED
+
+    with pytest.raises(InvalidTransition, match="COMPLETED -> RUNNING"):
+        transition_action(action.pk, RUNNING)
+
+
+@pytest.mark.django_db
+def test_a_legal_transition_from_the_wrong_source_still_returns_none(run_setup, settings):
+    """The table must not turn ordinary races into exceptions.
+
+    ``PENDING -> RUNNING`` is legal in general, so claiming an action that is
+    already RUNNING stays a quiet no-op — which is what makes duplicate task
+    delivery harmless.
+    """
+    trigger, placeholder = run_setup
+    action = run(trigger, placeholder, "SlowPlugin", settings)
+    AutomationAction.objects.filter(pk=action.pk).update(state=RUNNING, finished=None)
+
+    assert transition_action(action.pk, RUNNING, allowed_from=(PENDING,)) is None

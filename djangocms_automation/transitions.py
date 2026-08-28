@@ -10,6 +10,7 @@ from django.db import transaction
 from django.utils.timezone import now
 
 from .instances import (
+    ALLOWED_TRANSITIONS,
     CANCELED,
     COMPLETED,
     FAILED,
@@ -22,6 +23,18 @@ from .signals import action_transitioned
 logger = logging.getLogger("djangocms_automation.engine")
 
 TERMINAL_STATES = frozenset({COMPLETED, FAILED, CANCELED})
+
+
+class InvalidTransition(ValueError):
+    """A state change that the action lifecycle does not permit.
+
+    Raised rather than returned as ``None``, because this is a programming
+    error, not a race: a refused-but-legal transition (wrong source state, lost
+    lease, already finished) is normal and returns ``None`` quietly. Reaching
+    here means the caller asked for something the lifecycle has no meaning for.
+    """
+
+
 _UNSET = object()
 MUTABLE_ACTION_FIELDS = frozenset(
     {
@@ -117,6 +130,9 @@ def transition_action(
             return None
 
         from_state = action.state
+        if to_state not in ALLOWED_TRANSITIONS.get(from_state, frozenset()):
+            raise InvalidTransition(f"{from_state} -> {to_state} is not a legal action transition")
+
         action.state = to_state
         update_fields = {"state"}
 

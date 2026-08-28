@@ -38,10 +38,28 @@ The action state machine is:
                          +--success-----------------------> COMPLETED
                          |
                          +--terminal failure-------------> FAILED
+                                                             |
+                                    reopened for replay <----+
+                                    (back to WAITING, so the
+                                     join can be woken again)
 
     Any unfinished action may be canceled ----------------> CANCELED
 
-``COMPLETED``, ``FAILED``, and ``CANCELED`` are terminal states. ``PENDING``
+This is not the authority, only a picture of it. The lifecycle is declared as
+data in :data:`~djangocms_automation.instances.ALLOWED_TRANSITIONS` and enforced
+on every state change: a transition the table does not list raises
+``InvalidTransition`` at the call site rather than quietly writing a state
+nothing can act on. Read that table when this diagram and the code disagree.
+
+Note the distinction it draws. A transition that is *legal but refused* — the
+wrong source state, a lost lease, an action already finished — returns ``None``
+quietly, because those are ordinary races and absorbing them is what makes
+duplicate delivery harmless. A transition that is *impossible* is a programming
+error and says so.
+
+``COMPLETED`` and ``CANCELED`` are terminal. ``FAILED`` is terminal in every
+path except replay, which reopens a failed ancestor so a replayed branch can
+report back to its join. ``PENDING``
 means that an action is available now or scheduled for later; ``RUNNING`` means
 that a worker owns an execution lease; and ``WAITING`` means that progress
 depends on child branches or human input rather than worker time.
