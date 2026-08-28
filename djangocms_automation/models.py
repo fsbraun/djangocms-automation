@@ -14,6 +14,7 @@ from .instances import (  # noqa F401
     WAITING,
     AutomationAction,
     AutomationInstance,
+    AutomationInstanceEvent,
     DeadLetter,
     SchedulerLock,
 )

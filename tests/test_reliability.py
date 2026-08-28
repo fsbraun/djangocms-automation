@@ -38,7 +38,7 @@ from djangocms_automation.models import (
     BaseActionPluginModel,
 )
 from djangocms_automation.retry import PermanentError, RetryableError, RetryPolicy
-from djangocms_automation.transitions import InvalidTransition, transition_action
+from djangocms_automation.transitions import InvalidTransition, transition_action, transition_instance
 
 #: Execution counters keyed by plugin name, reset by the ``counters`` fixture.
 CALLS: dict[str, int] = {}
@@ -1551,3 +1551,98 @@ def test_a_legal_transition_from_the_wrong_source_still_returns_none(run_setup, 
     AutomationAction.objects.filter(pk=action.pk).update(state=RUNNING, finished=None)
 
     assert transition_action(action.pk, RUNNING, allowed_from=(PENDING,)) is None
+
+
+# --------------------------------------------------------------------------
+# The instance lifecycle
+# --------------------------------------------------------------------------
+
+
+def test_instance_table_only_names_real_states():
+    from djangocms_automation.instances import ALLOWED_INSTANCE_TRANSITIONS, STATES
+
+    known = {state for state, _label in STATES}
+    assert set(ALLOWED_INSTANCE_TRANSITIONS) == known
+    for source, targets in ALLOWED_INSTANCE_TRANSITIONS.items():
+        assert targets <= known, f"{source} points at a status that does not exist"
+
+
+@pytest.mark.django_db
+def test_finishing_a_run_is_recorded(run_setup, settings):
+    """An instance status change now leaves the same kind of trace an action does."""
+    trigger, placeholder = run_setup
+    action = run(trigger, placeholder, "SlowPlugin", settings)
+    instance = AutomationInstance.objects.get(pk=action.automation_instance_id)
+
+    assert instance.status == COMPLETED
+    assert list(instance.events.values_list("from_status", "to_status")) == [(RUNNING, COMPLETED)]
+
+
+@pytest.mark.django_db
+def test_finishing_a_run_twice_is_idempotent(run_setup, settings):
+    """Concurrent finishes must not double-record or re-fire the signal."""
+    trigger, placeholder = run_setup
+    action = run(trigger, placeholder, "SlowPlugin", settings)
+
+    assert engine.finish_instance(action.automation_instance_id, FAILED) is False
+    instance = AutomationInstance.objects.get(pk=action.automation_instance_id)
+    assert instance.status == COMPLETED
+    assert instance.events.count() == 1
+
+
+@pytest.mark.django_db
+def test_cancelling_a_run_is_recorded(run_setup, settings):
+    trigger, placeholder = run_setup
+    action = run(trigger, placeholder, "FlakyPlugin", settings)
+
+    engine.cancel_instance(action.automation_instance_id)
+
+    instance = AutomationInstance.objects.get(pk=action.automation_instance_id)
+    event = instance.events.latest("created")
+    assert (event.from_status, event.to_status) == (RUNNING, CANCELED)
+    assert event.metadata["actions_canceled"] == 1
+
+
+@pytest.mark.django_db
+def test_replay_reopening_a_run_is_recorded(run_setup, settings):
+    """The one path that moves a run backwards out of a terminal status.
+
+    Previously invisible: the instance simply became RUNNING again with nothing
+    to say why.
+    """
+    trigger, placeholder = run_setup
+    action = run(trigger, placeholder, "UnknownFailurePlugin", settings)
+    instance = AutomationInstance.objects.get(pk=action.automation_instance_id)
+    assert instance.status == FAILED
+
+    replacement = engine.replay_action(action.pk)
+
+    instance.refresh_from_db()
+    reopen = instance.events.filter(to_status=RUNNING).latest("created")
+    assert reopen.from_status == FAILED
+    assert reopen.metadata["reopened_by_replay_of"] == action.pk
+    assert reopen.metadata["replacement_action"] == replacement.pk
+
+
+@pytest.mark.django_db
+def test_reopening_clears_the_finished_timestamp(run_setup, settings):
+    """A reopened run must be genuinely open, not merely relabelled."""
+    trigger, placeholder = run_setup
+    action = run(trigger, placeholder, "UnknownFailurePlugin", settings)
+    AutomationAction.objects.filter(pk=action.pk).update(input_data=[])
+
+    engine.replay_action(action.pk)
+
+    instance = AutomationInstance.objects.get(pk=action.automation_instance_id)
+    # It failed again immediately, but the reopen in between cleared `finished`.
+    assert instance.events.filter(to_status=RUNNING).exists()
+
+
+@pytest.mark.django_db
+def test_an_impossible_instance_transition_raises(run_setup, settings):
+    """Completing an already-completed run is a lifecycle error, not a race."""
+    trigger, placeholder = run_setup
+    action = run(trigger, placeholder, "SlowPlugin", settings)
+
+    with pytest.raises(InvalidTransition, match="COMPLETED -> COMPLETED"):
+        transition_instance(action.automation_instance_id, COMPLETED)

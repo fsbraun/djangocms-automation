@@ -19,6 +19,7 @@ from .instances import (
     AutomationAction,
     AutomationActionEvent,
     AutomationInstance,
+    AutomationInstanceEvent,
     DeadLetter,
     SchedulerLock,
 )
@@ -316,6 +317,26 @@ class SchedulerLockAdmin(admin.ModelAdmin):
     readonly_fields = ("name", "holder", "locked_until")
 
     def has_add_permission(self, request):
+        return False
+
+
+@admin.register(AutomationInstanceEvent)
+class AutomationInstanceEventAdmin(admin.ModelAdmin):
+    """How a run as a whole moved: started, finished, canceled, or reopened.
+
+    The counterpart to *Action events*. Read-only for the same reason: the value
+    of a history is that it cannot be edited.
+    """
+
+    list_display = ("instance", "from_status", "to_status", "created")
+    list_filter = ("from_status", "to_status", "created")
+    search_fields = ("instance__id", "instance__key")
+    readonly_fields = ("instance", "from_status", "to_status", "metadata", "created")
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
         return False
 
 

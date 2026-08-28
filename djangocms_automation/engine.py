@@ -55,8 +55,8 @@ from .instances import (
     SchedulerLock,
 )
 from .retry import DEFAULT_RETRY_POLICY
-from .signals import action_dead_lettered, instance_finished
-from .transitions import transition_action
+from .signals import action_dead_lettered
+from .transitions import transition_action, transition_instance
 
 logger = logging.getLogger("djangocms_automation.engine")
 
@@ -401,21 +401,7 @@ def finish_instance(instance_id: int, status: str) -> bool:
 
     :returns: True if this call finished the instance.
     """
-    finished = AutomationInstance.objects.filter(pk=instance_id, finished__isnull=True).update(
-        status=status, finished=now()
-    )
-    if not finished:
-        return False
-    instance = AutomationInstance.objects.filter(pk=instance_id).first()
-    logger.info(
-        "automation.instance.finished",
-        extra={"automation_instance_id": instance_id, "status": status},
-    )
-    try:
-        instance_finished.send(sender=AutomationInstance, instance=instance, status=status)
-    except Exception:
-        logger.exception("automation.signal.failed", extra={"automation_instance_id": instance_id})
-    return True
+    return transition_instance(instance_id, status, unfinished_only=True) is not None
 
 
 def maybe_finish_instance(instance: AutomationInstance) -> None:
@@ -1045,7 +1031,14 @@ def replay_action(action_id: int) -> AutomationAction | None:
             finished=None,
         )
         _reopen_ancestors(original, replacement.pk)
-        AutomationInstance.objects.filter(pk=original.automation_instance_id).update(status=RUNNING, finished=None)
+        # The only path that moves a run out of a terminal status, so it goes
+        # through the service like everything else — and leaves a record saying
+        # which replay reopened it.
+        transition_instance(
+            original.automation_instance_id,
+            RUNNING,
+            metadata={"reopened_by_replay_of": original.pk, "replacement_action": replacement.pk},
+        )
     logger.info(
         "automation.action.replayed",
         extra={"automation_action_id": replacement.pk, "replayed_from": original.pk},

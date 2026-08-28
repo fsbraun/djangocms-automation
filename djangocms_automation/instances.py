@@ -76,6 +76,25 @@ ALLOWED_TRANSITIONS: dict[str, frozenset] = {
     CANCELED: frozenset(),  # terminal
 }
 
+#: The instance lifecycle, as data. Same idea as :data:`ALLOWED_TRANSITIONS`,
+#: for the run as a whole rather than one step of it.
+#:
+#: An instance is coarser than an action: it starts ``RUNNING`` and ends in one
+#: of the three terminal statuses. The interesting edges are the ones going
+#: *back*, which only replay produces — it is the sole path that moves a run out
+#: of a terminal status, and therefore the one most worth guarding.
+ALLOWED_INSTANCE_TRANSITIONS: dict[str, frozenset] = {
+    RUNNING: frozenset({COMPLETED, FAILED, CANCELED}),
+    # Reopened by replaying one of the run's actions.
+    COMPLETED: frozenset({RUNNING}),
+    FAILED: frozenset({RUNNING}),
+    CANCELED: frozenset({RUNNING}),
+    # The engine never puts an instance in these, but the field allows them, so
+    # they are declared rather than left to raise on a value that type-checks.
+    PENDING: frozenset({RUNNING, COMPLETED, FAILED, CANCELED}),
+    WAITING: frozenset({RUNNING, COMPLETED, FAILED, CANCELED}),
+}
+
 #: States an execution can still leave under its own power.
 ACTIVE = frozenset({PENDING, RUNNING, WAITING})
 
@@ -197,12 +216,10 @@ class AutomationInstance(models.Model):
         for action_id in open_actions:
             if transition_action(action_id, CANCELED, message=message[:MAX_FIELD_LENGTH], unfinished_only=True):
                 canceled += 1
-        updated = type(self).objects.filter(pk=self.pk, finished__isnull=True).update(status=CANCELED, finished=now())
-        if updated:
-            self.refresh_from_db()
-            from .signals import instance_finished
+        from .transitions import transition_instance
 
-            instance_finished.send(sender=type(self), instance=self, status=CANCELED)
+        if transition_instance(self.pk, CANCELED, unfinished_only=True, metadata={"actions_canceled": canceled}):
+            self.refresh_from_db()
         return canceled
 
     def __str__(self):
@@ -586,3 +603,32 @@ class SchedulerLock(models.Model):
     def release(cls, name: str, token) -> bool:
         """Release the named lock if ``token`` still holds it."""
         return bool(cls.objects.filter(name=name, holder=token).update(holder=None, locked_until=None))
+
+
+class AutomationInstanceEvent(models.Model):
+    """Immutable audit event for an instance status change.
+
+    The action-level counterpart, :class:`AutomationActionEvent`, records how a
+    single step moved. This records how the run as a whole did — which was
+    previously only inferable from its actions, and not at all for a run
+    reopened by a replay.
+    """
+
+    instance = models.ForeignKey(
+        AutomationInstance,
+        on_delete=models.CASCADE,
+        related_name="events",
+        verbose_name=_("Instance"),
+    )
+    from_status = models.CharField(max_length=20, choices=STATES, verbose_name=_("From status"))
+    to_status = models.CharField(max_length=20, choices=STATES, verbose_name=_("To status"))
+    metadata = models.JSONField(default=dict, blank=True, verbose_name=_("Metadata"))
+    created = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = _("Instance event")
+        verbose_name_plural = _("Instance events")
+        ordering = ["created", "id"]
+
+    def __str__(self):
+        return f"<{self.instance_id}: {self.from_status} -> {self.to_status}>"

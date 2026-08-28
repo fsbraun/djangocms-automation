@@ -59,7 +59,17 @@ error and says so.
 
 ``COMPLETED`` and ``CANCELED`` are terminal. ``FAILED`` is terminal in every
 path except replay, which reopens a failed ancestor so a replayed branch can
-report back to its join. ``PENDING``
+report back to its join.
+
+The run itself has the same treatment, one level up. An instance starts
+``RUNNING`` and ends in one of the three terminal statuses, declared in
+:data:`~djangocms_automation.instances.ALLOWED_INSTANCE_TRANSITIONS` and applied
+by ``transition_instance``. The edges worth attention are the ones pointing
+*back*: replay is the only thing that moves a run out of a terminal status, and
+it now says so, recording which replay reopened the run and clearing
+``finished`` so the run is genuinely open rather than merely relabelled. Every
+instance status change leaves an
+:class:`~djangocms_automation.instances.AutomationInstanceEvent`. ``PENDING``
 means that an action is available now or scheduled for later; ``RUNNING`` means
 that a worker owns an execution lease; and ``WAITING`` means that progress
 depends on child branches or human input rather than worker time.

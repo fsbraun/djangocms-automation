@@ -1,7 +1,7 @@
 Understanding the automation admin
 ==================================
 
-The Django admin shows eight entries under **Automations**, and at first glance
+The Django admin shows nine entries under **Automations**, and at first glance
 they look like eight models to browse. They are not really that. They serve three
 separate *concerns*, and most confusion about the admin comes from reading one as
 another — treating a record of the past as something you can edit, or an
@@ -66,6 +66,13 @@ run behaves strangely, the question is almost always "what actually happened, in
 what order" — and an answer you could have edited is not an answer. The moment
 the history is mutable, it stops being able to settle an argument about what the
 system did. So the engine writes it and nothing else may.
+
+**Instance events** is the same log one level up: how the run as a whole moved.
+Started, finished, canceled — and reopened, which is the interesting one, because
+replaying a failed action is the only thing that takes a run back out of a
+terminal status. Until that log existed, a run's own status changes were only
+inferable from its actions, and a reopened run was indistinguishable from one
+that had simply never finished. It is read-only for the same reason.
 
 **Execution Instances** is the same data seen from the other end: one row per run,
 with its actions inline. It *does* have add and change forms, because it is an

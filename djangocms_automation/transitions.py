@@ -10,6 +10,7 @@ from django.db import transaction
 from django.utils.timezone import now
 
 from .instances import (
+    ALLOWED_INSTANCE_TRANSITIONS,
     ALLOWED_TRANSITIONS,
     CANCELED,
     COMPLETED,
@@ -17,8 +18,10 @@ from .instances import (
     RUNNING,
     AutomationAction,
     AutomationActionEvent,
+    AutomationInstance,
+    AutomationInstanceEvent,
 )
-from .signals import action_transitioned
+from .signals import action_transitioned, instance_finished
 
 logger = logging.getLogger("djangocms_automation.engine")
 
@@ -210,3 +213,75 @@ def heartbeat_action(action_id: int, lease_id: uuid.UUID) -> bool:
     return bool(
         AutomationAction.objects.filter(pk=action_id, state=RUNNING, lease_id=lease_id).update(heartbeat_at=now())
     )
+
+
+def transition_instance(
+    instance_id: int,
+    to_status: str,
+    *,
+    allowed_from: Iterable[str] | None = None,
+    unfinished_only: bool = False,
+    metadata: dict | None = None,
+) -> AutomationInstance | None:
+    """Atomically move an automation instance to a new status and record it.
+
+    The counterpart to :func:`transition_action`, and it exists for the same
+    reason: a status written from three different places is a lifecycle nobody
+    can read or audit. Every instance status change now goes through here, so
+    each one is guarded by :data:`~djangocms_automation.instances.ALLOWED_INSTANCE_TRANSITIONS`,
+    leaves an :class:`~djangocms_automation.instances.AutomationInstanceEvent`
+    behind, and fires exactly one ``instance_finished`` signal when the run ends.
+
+    Terminal statuses stamp ``finished``; moving back to ``RUNNING`` — which only
+    replay does — clears it, so a reopened run is genuinely open again rather
+    than merely relabelled.
+
+    :returns: The updated instance, or ``None`` if the change was refused, which
+        makes concurrent finishes idempotent in the same way as for actions.
+    :raises InvalidTransition: If the lifecycle has no such edge.
+    """
+    allowed = set(allowed_from) if allowed_from is not None else None
+    with transaction.atomic():
+        instance = AutomationInstance.objects.select_for_update().filter(pk=instance_id).first()
+        if (
+            instance is None
+            or (unfinished_only and instance.finished is not None)
+            or (allowed is not None and instance.status not in allowed)
+        ):
+            return None
+
+        from_status = instance.status
+        if to_status not in ALLOWED_INSTANCE_TRANSITIONS.get(from_status, frozenset()):
+            raise InvalidTransition(f"{from_status} -> {to_status} is not a legal instance transition")
+
+        instance.status = to_status
+        update_fields = {"status"}
+        if to_status in TERMINAL_STATES:
+            instance.finished = now()
+            update_fields.add("finished")
+        elif instance.finished is not None:
+            instance.finished = None
+            update_fields.add("finished")
+
+        instance.save(update_fields=update_fields)
+        AutomationInstanceEvent.objects.create(
+            instance=instance,
+            from_status=from_status,
+            to_status=to_status,
+            metadata=metadata or {},
+        )
+
+    logger.info(
+        "automation.instance.transition",
+        extra={
+            "automation_instance_id": instance.pk,
+            "from_status": from_status,
+            "to_status": to_status,
+        },
+    )
+    if to_status in TERMINAL_STATES:
+        try:
+            instance_finished.send(sender=AutomationInstance, instance=instance, status=to_status)
+        except Exception:
+            logger.exception("automation.signal.failed", extra={"automation_instance_id": instance.pk})
+    return instance
