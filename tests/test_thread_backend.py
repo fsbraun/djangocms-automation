@@ -68,7 +68,7 @@ def test_enqueue_records_failure_as_task_error(backend):
     assert result.errors[0].exception_class_path == "builtins.RuntimeError"
     assert "kapow" in result.errors[0].traceback
     with pytest.raises(ValueError, match="Task failed"):
-        result.return_value
+        _ = result.return_value
 
 
 def test_task_context_receives_its_result(backend):

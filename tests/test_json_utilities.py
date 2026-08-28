@@ -1,13 +1,13 @@
 """Tests for cleaned_data_to_json_serializable utility."""
 
 import re
-from datetime import date, time
+from datetime import time
 
 import pytest
 from django.utils.timezone import now
 
-from djangocms_automation.utilities.json import cleaned_data_to_json_serializable
 from djangocms_automation.models import Automation
+from djangocms_automation.utilities.json import cleaned_data_to_json_serializable
 
 
 @pytest.mark.django_db
@@ -26,7 +26,7 @@ def test_basic_types_and_none():
 @pytest.mark.django_db
 def test_datetime_date_time_conversion():
     dt = now()
-    d = date.today()
+    d = now().date()
     t = time(10, 5, 1)
     data = {"dt": dt, "d": d, "t": t}
     out = cleaned_data_to_json_serializable(data)

@@ -1,9 +1,9 @@
 djangocms-automation
 ====================
 
-[![Python](https://img.shields.io/badge/python-3.10%20%7C%203.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue)](https://www.python.org/)
-[![Django](https://img.shields.io/badge/django-6.0-green)](https://www.djangoproject.com/)
-[![django CMS](https://img.shields.io/badge/django%20CMS-5.0-cyan)](https://www.django-cms.org/)
+[![Python versions](https://img.shields.io/pypi/pyversions/djangocms-automation.svg)](https://pypi.org/project/djangocms-automation/)
+[![Django versions](https://img.shields.io/pypi/djversions/djangocms-automation.svg)](https://pypi.org/project/djangocms-automation/)
+[![django CMS versions](https://img.shields.io/pypi/frameworkversions/django-cms/djangocms-automation.svg)](https://pypi.org/project/djangocms-automation/)
 [![License](https://img.shields.io/github/license/fsbraun/djangocms-automation)](https://github.com/fsbraun/djangocms-automation/blob/main/LICENSE)
 
 This package extends django CMS with the ability to model and edit automation workflows directly in the Frontend Editor (inline editing). Workflows are composed from CMS plugins (e.g., Triggers, Conditions/If‑Then‑Else, Actions, End) and can be arranged on the page via drag & drop like regular content.
@@ -38,33 +38,61 @@ Run migrations:
 python manage.py migrate djangocms_automation
 ```
 
-Runtime actions record attempt counts, execution leases, structured terminal
-errors, and state-transition events. These records improve inspection and form
-the basis for future retry and crash recovery. Automatic general-purpose
-retries and expired-lease recovery are not implemented yet.
-
 ### Running Automations
 
-Automations are executed via background tasks. Set up a periodic task that revives paused actions and fires due timer triggers, for example using a cron job (every minute):
-
-```bash
-* * * * * cd /path/to/project && python manage.py runautomations
-```
-
-Alternatively, schedule `call_command("runautomations")` with [Django-Q2](https://django-q2.readthedocs.io/), [Celery](https://docs.celeryq.dev/), or Django 6.0+ background tasks.
-
-For local development, `djangocms_automation.utils.ThreadBackend` can execute tasks outside the request thread with a bounded in-process thread pool:
+A production deployment runs three processes: the **web** server enqueues work
+but never executes it, one or more **workers** execute it, and a **scheduler**
+fires timers, revives retries, and recovers work whose worker died.
 
 ```python
 TASKS = {
     "default": {
-        "BACKEND": "djangocms_automation.utils.ThreadBackend",
-        "OPTIONS": {"MAX_WORKERS": 4},
+        "BACKEND": "djangocms_automation.backends.DatabaseBackend",
+        "QUEUES": ["default"],
     }
 }
 ```
 
-This backend is non-durable: work and results are process-local and are lost on restart or termination. It has no retry or crash recovery and should only be used for development or non-critical best-effort work. Use a persistent queue backend with separate workers for production automations that must run reliably.
+```bash
+python manage.py runworker                 # one or more; add more for throughput
+
+* * * * * cd /path/to/project && python manage.py runautomations   # every minute
+```
+
+`DatabaseBackend` is durable: enqueued work is a database row claimed under a
+lease, so it survives a restart and a killed worker's task is released and
+retried. Django's built-in `ImmediateBackend` executes inline (fine for tests,
+not for production) and `djangocms_automation.utils.ThreadBackend` runs tasks in
+an in-process thread pool that is lost on exit — development only.
+
+**Reliability.** Actions carry attempt counts, execution leases, timeouts, and
+a full state-transition history. Failures are retried according to a per-plugin
+`RetryPolicy` with exponential backoff and jitter; retries are distinguished
+from re-entries, so a split or a paused action never consumes its retry budget.
+Actions that exhaust their attempts, or whose worker died with no attempts left,
+are dead-lettered and can be replayed from the admin without editing the
+database. Running executions can be canceled. The scheduler may run on several
+hosts — it takes a database lock, so exactly one tick happens at a time.
+
+See the [deployment guide](docs/source/howto/deployment.rst) for the full
+contract, settings, retention, and health signals.
+
+### Trying it out
+
+The repository ships a demo project running the full production shape against
+SQLite:
+
+```bash
+cd demo
+python manage.py migrate
+python manage.py seedautomations    # admin/admin, plus reference automations
+python manage.py runserver
+python manage.py runworker          # in a second shell
+```
+
+`seedautomations --scenario killed-worker` (and `timeout`,
+`enqueue-rejection`, `duplicate-webhook`, `timer-backlog`) injects failure
+conditions so recovery can be watched rather than only trusted.
 
 ### Built-in actions
 

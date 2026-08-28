@@ -9,11 +9,9 @@ import types
 from unittest import mock
 
 import pytest
-
-from django.contrib.contenttypes.models import ContentType
-
 from cms.api import add_plugin
 from cms.models import Placeholder
+from django.contrib.contenttypes.models import ContentType
 
 from djangocms_automation import llm
 from djangocms_automation.actions.llm_action import LLMActionPluginModel
@@ -124,9 +122,11 @@ def test_complete_maps_rate_limit(llm_settings, api_key):
     def completion(**kwargs):
         raise FakeRateLimitError()
 
-    with mock.patch.object(llm, "_get_litellm", return_value=make_fake_litellm(completion)):
-        with pytest.raises(llm.LLMRateLimited) as excinfo:
-            llm.complete(model="anthropic/claude-opus-4-8", prompt="p")
+    with (
+        mock.patch.object(llm, "_get_litellm", return_value=make_fake_litellm(completion)),
+        pytest.raises(llm.LLMRateLimited) as excinfo,
+    ):
+        llm.complete(model="anthropic/claude-opus-4-8", prompt="p")
     assert excinfo.value.retry_after == 30
 
 
@@ -135,9 +135,11 @@ def test_complete_maps_generic_errors(llm_settings, api_key):
     def completion(**kwargs):
         raise RuntimeError("boom")
 
-    with mock.patch.object(llm, "_get_litellm", return_value=make_fake_litellm(completion)):
-        with pytest.raises(llm.LLMError, match="boom"):
-            llm.complete(model="anthropic/claude-opus-4-8", prompt="p")
+    with (
+        mock.patch.object(llm, "_get_litellm", return_value=make_fake_litellm(completion)),
+        pytest.raises(llm.LLMError, match="boom"),
+    ):
+        llm.complete(model="anthropic/claude-opus-4-8", prompt="p")
 
 
 # ---------------------------------------------------------------------------

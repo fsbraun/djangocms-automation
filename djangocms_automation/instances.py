@@ -1,12 +1,11 @@
 import datetime
 import hashlib
 
-from django.db import models
-from django.utils.translation import gettext_lazy as _
-from django.utils.timezone import now
-
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
+from django.db import models
+from django.utils.timezone import now
+from django.utils.translation import gettext_lazy as _
 
 User = get_user_model()
 
@@ -18,6 +17,7 @@ RUNNING = "RUNNING"
 WAITING = "WAITING"
 COMPLETED = "COMPLETED"
 FAILED = "FAILED"
+CANCELED = "CANCELED"
 
 STATES = [
     (PENDING, _("Pending")),
@@ -25,7 +25,78 @@ STATES = [
     (WAITING, _("Waiting")),
     (COMPLETED, _("Completed")),
     (FAILED, _("Failed")),
+    (CANCELED, _("Canceled")),
 ]
+
+#: States from which no further work is scheduled.
+TERMINAL = frozenset({COMPLETED, FAILED, CANCELED})
+
+#: The action lifecycle, as data.
+#:
+#: Every state change goes through
+#: :func:`~djangocms_automation.transitions.transition_action`, which rejects
+#: anything not listed here. Individual call sites still pass ``allowed_from``
+#: to say which source they expect; this table is the coarser statement of what
+#: is possible at all, so an impossible transition fails loudly at its origin
+#: instead of leaving a puzzling row behind. It is also the single place to read
+#: the lifecycle, and what the state diagram in the docs is generated from.
+ALLOWED_TRANSITIONS: dict[str, frozenset] = {
+    # Queued, or waiting for a retry or pause to fall due.
+    PENDING: frozenset(
+        {
+            PENDING,  # re-paused: a pending action's due time is pushed back
+            RUNNING,  # claimed by a worker
+            FAILED,  # the task could not be enqueued, or an ancestor failed
+            CANCELED,  # the run was canceled before it started
+        }
+    ),
+    # Claimed by a worker, under a lease.
+    RUNNING: frozenset(
+        {
+            COMPLETED,  # the plugin succeeded
+            WAITING,  # fanned out, or waiting for a human
+            FAILED,  # the plugin failed, or its lease expired with no attempts left
+            PENDING,  # paused, retried, or recovered for another attempt
+            CANCELED,  # the run was canceled while this action was in flight
+        }
+    ),
+    # Suspended until something else finishes.
+    WAITING: frozenset(
+        {
+            PENDING,  # woken by a child, the lost-wakeup guard, or reconciliation
+            COMPLETED,  # resumed by a permitted user
+            FAILED,  # a branch failed underneath it
+            CANCELED,  # the run was canceled
+        }
+    ),
+    COMPLETED: frozenset(),  # terminal
+    # Terminal, with one exception: replaying a branch action reopens its failed
+    # ancestors so the join can be woken again.
+    FAILED: frozenset({WAITING}),
+    CANCELED: frozenset(),  # terminal
+}
+
+#: The instance lifecycle, as data. Same idea as :data:`ALLOWED_TRANSITIONS`,
+#: for the run as a whole rather than one step of it.
+#:
+#: An instance is coarser than an action: it starts ``RUNNING`` and ends in one
+#: of the three terminal statuses. The interesting edges are the ones going
+#: *back*, which only replay produces — it is the sole path that moves a run out
+#: of a terminal status, and therefore the one most worth guarding.
+ALLOWED_INSTANCE_TRANSITIONS: dict[str, frozenset] = {
+    RUNNING: frozenset({COMPLETED, FAILED, CANCELED}),
+    # Reopened by replaying one of the run's actions.
+    COMPLETED: frozenset({RUNNING}),
+    FAILED: frozenset({RUNNING}),
+    CANCELED: frozenset({RUNNING}),
+    # The engine never puts an instance in these, but the field allows them, so
+    # they are declared rather than left to raise on a value that type-checks.
+    PENDING: frozenset({RUNNING, COMPLETED, FAILED, CANCELED}),
+    WAITING: frozenset({RUNNING, COMPLETED, FAILED, CANCELED}),
+}
+
+#: States an execution can still leave under its own power.
+ACTIVE = frozenset({PENDING, RUNNING, WAITING})
 
 
 class AutomationInstance(models.Model):
@@ -106,6 +177,50 @@ class AutomationInstance(models.Model):
         """
         automations = cls.objects.filter(finished__isnull=False, updated__lt=now() - datetime.timedelta(days=days))
         return automations.delete()
+
+    @classmethod
+    def redact_payloads(cls, days: int) -> int:
+        """Strip stored payloads from finished instances older than ``days``.
+
+        A middle ground between keeping everything and deleting it: execution
+        metadata (timings, states, attempt history) survives for auditing while
+        the data that flowed through the run is dropped.
+
+        :returns: The number of instances redacted.
+        """
+        cutoff = now() - datetime.timedelta(days=days)
+        stale = cls.objects.filter(finished__isnull=False, updated__lt=cutoff).exclude(initial_data=[], data=[])
+        stale_ids = list(stale.values_list("pk", flat=True))
+        if not stale_ids:
+            return 0
+        AutomationAction.objects.filter(automation_instance_id__in=stale_ids).update(input_data=None, result={})
+        return cls.objects.filter(pk__in=stale_ids).update(initial_data=[], data=[])
+
+    def cancel(self, message: str = "Canceled") -> int:
+        """Cancel this instance and every unfinished action within it.
+
+        Idempotent: cancelling a finished instance is a no-op returning 0.
+
+        :returns: The number of actions canceled.
+        """
+        from .transitions import transition_action
+
+        if self.finished is not None:
+            return 0
+        canceled = 0
+        open_actions = list(
+            AutomationAction.objects.filter(automation_instance=self, finished__isnull=True).values_list(
+                "pk", flat=True
+            )
+        )
+        for action_id in open_actions:
+            if transition_action(action_id, CANCELED, message=message[:MAX_FIELD_LENGTH], unfinished_only=True):
+                canceled += 1
+        from .transitions import transition_instance
+
+        if transition_instance(self.pk, CANCELED, unfinished_only=True, metadata={"actions_canceled": canceled}):
+            self.refresh_from_db()
+        return canceled
 
     def __str__(self):
         return f"<AutomationInstance for {self.automation_content.automation.name} ({self.id})>"
@@ -195,6 +310,47 @@ class AutomationAction(models.Model):
         editable=False,
         verbose_name=_("Execution lease"),
     )
+    resumed = models.BooleanField(
+        default=False,
+        editable=False,
+        verbose_name=_("Resumed"),
+        help_text=_(
+            "Marks the next claim as a continuation rather than a new attempt. Set when a waiting "
+            "node is woken or a paused action is revived; cleared when the action is claimed."
+        ),
+    )
+    re_entry_count = models.PositiveIntegerField(
+        default=0,
+        verbose_name=_("Re-entry count"),
+        help_text=_(
+            "How often a waiting node resumed after its children finished. Counted separately from "
+            "retry attempts: a split or agent that re-enters many times has not failed even once."
+        ),
+    )
+    input_data = models.JSONField(
+        null=True,
+        blank=True,
+        verbose_name=_("Input data"),
+        help_text=_("The rows this action was given, recorded at claim time so it can be replayed."),
+    )
+    dead_lettered = models.BooleanField(
+        default=False,
+        verbose_name=_("Dead lettered"),
+        help_text=_("Set when the action exhausted its attempts and awaits inspection or replay."),
+    )
+    dead_lettered_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name=_("Dead lettered at"),
+    )
+    replayed_from = models.ForeignKey(
+        "self",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="replays",
+        verbose_name=_("Replayed from"),
+    )
     requires_interaction = models.BooleanField(default=False, verbose_name=_("Requires interaction"))
     interaction_user = models.ForeignKey(
         User,
@@ -243,6 +399,32 @@ class AutomationAction(models.Model):
     @property
     def data(self):
         return self.automation_instance.data
+
+    @property
+    def duration(self):
+        """Seconds between the start of the last attempt and finishing."""
+        if self.started is None or self.finished is None:
+            return None
+        return (self.finished - self.started).total_seconds()
+
+    def is_lease_expired(self, timestamp=None) -> bool:
+        """Check whether a ``RUNNING`` action's worker appears to be gone.
+
+        True when the action has been running past its own timeout, or has not
+        refreshed its heartbeat within the configured lease window.
+        """
+        from django.conf import settings
+
+        if self.state != RUNNING:
+            return False
+        timestamp = timestamp or now()
+        if self.timeout_seconds and self.started and (timestamp - self.started).total_seconds() > self.timeout_seconds:
+            return True
+        window = getattr(settings, "AUTOMATION_LEASE_SECONDS", 300)
+        reference = self.heartbeat_at or self.started
+        if reference is None:
+            return False
+        return (timestamp - reference).total_seconds() > window
 
     def hours_since_created(self) -> float:
         """Calculate hours elapsed since action creation.
@@ -358,3 +540,95 @@ class AutomationActionEvent(models.Model):
 
     def __str__(self):
         return f"{self.action_id}: {self.from_state} → {self.to_state}"
+
+
+class DeadLetter(AutomationAction):
+    """Dead-lettered actions: those that exhausted their attempts.
+
+    A proxy rather than a separate table — the failed action already carries the
+    full record (input, attempts, error, event history), so copying it into a
+    second model would only create two versions of the same truth. The proxy
+    exists to give the queue its own admin entry and permissions.
+    """
+
+    class Meta:
+        proxy = True
+        verbose_name = _("Dead letter")
+        verbose_name_plural = _("Dead letters")
+
+
+class SchedulerLock(models.Model):
+    """A short-lived, database-backed mutex for the scheduler.
+
+    ``runautomations`` may be installed on several hosts for availability. Only
+    one of them should revive actions, recover leases, or fire timers in a given
+    tick, or a timer fires twice and a recovered action is enqueued twice.
+
+    The lock is a single row per name held until ``locked_until``. Acquisition is
+    one conditional ``UPDATE``, so it is atomic on every supported database
+    without advisory locks or an external coordinator. A holder that dies simply
+    lets the lease expire.
+    """
+
+    name = models.CharField(max_length=64, unique=True, verbose_name=_("Lock name"))
+    holder = models.UUIDField(null=True, blank=True, verbose_name=_("Holder"))
+    locked_until = models.DateTimeField(null=True, blank=True, verbose_name=_("Locked until"))
+
+    class Meta:
+        verbose_name = _("Scheduler lock")
+        verbose_name_plural = _("Scheduler locks")
+
+    def __str__(self):
+        return f"<SchedulerLock {self.name} until {self.locked_until}>"
+
+    @classmethod
+    def acquire(cls, name: str, ttl_seconds: int = 300):
+        """Try to take the named lock.
+
+        :returns: The holder token if the lock was taken, otherwise ``None``.
+        """
+        import uuid as uuid_module
+
+        timestamp = now()
+        expiry = timestamp + datetime.timedelta(seconds=ttl_seconds)
+        token = uuid_module.uuid4()
+        cls.objects.get_or_create(name=name)
+        taken = cls.objects.filter(
+            models.Q(locked_until__isnull=True) | models.Q(locked_until__lte=timestamp),
+            name=name,
+        ).update(holder=token, locked_until=expiry)
+        return token if taken else None
+
+    @classmethod
+    def release(cls, name: str, token) -> bool:
+        """Release the named lock if ``token`` still holds it."""
+        return bool(cls.objects.filter(name=name, holder=token).update(holder=None, locked_until=None))
+
+
+class AutomationInstanceEvent(models.Model):
+    """Immutable audit event for an instance status change.
+
+    The action-level counterpart, :class:`AutomationActionEvent`, records how a
+    single step moved. This records how the run as a whole did — which was
+    previously only inferable from its actions, and not at all for a run
+    reopened by a replay.
+    """
+
+    instance = models.ForeignKey(
+        AutomationInstance,
+        on_delete=models.CASCADE,
+        related_name="events",
+        verbose_name=_("Instance"),
+    )
+    from_status = models.CharField(max_length=20, choices=STATES, verbose_name=_("From status"))
+    to_status = models.CharField(max_length=20, choices=STATES, verbose_name=_("To status"))
+    metadata = models.JSONField(default=dict, blank=True, verbose_name=_("Metadata"))
+    created = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = _("Instance event")
+        verbose_name_plural = _("Instance events")
+        ordering = ["created", "id"]
+
+    def __str__(self):
+        return f"<{self.instance_id}: {self.from_status} -> {self.to_status}>"

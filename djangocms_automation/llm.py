@@ -35,8 +35,8 @@ __all__ = [
     "LLMRateLimited",
     "LLMResult",
     "complete",
-    "get_api_key",
     "get_allowed_llm_models",
+    "get_api_key",
 ]
 
 

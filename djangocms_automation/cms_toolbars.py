@@ -1,9 +1,9 @@
-from django.urls import reverse
 from cms.toolbar_base import CMSToolbar
 from cms.toolbar_pool import toolbar_pool
+from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 
-from .models import AutomationTrigger, AutomationContent
+from .models import AutomationContent, AutomationTrigger
 
 
 @toolbar_pool.register

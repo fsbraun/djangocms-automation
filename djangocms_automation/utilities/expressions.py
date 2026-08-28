@@ -1,25 +1,30 @@
-"""Simple expression resolver.
+r"""Simple expression resolver.
 
 Supported forms:
-        - Integer and float literals (e.g. 42, -3, 3.14, +0.5)
-        - Quoted string literals with single or double quotes. Supports escape sequences: \n, \t, \r, \\ and \" / \'
-        - Variable references composed of dotted identifiers (e.g. user.profile.age)
-          resolved against a provided context dict. Each segment must match /[A-Za-z_][A-Za-z0-9_]*\n+      and traversal follows dictionary keys or object attributes. Lists / tuples can be
-          traversed using an integer segment.
 
-This intentionally does NOT execute arbitrary Python code or support operators – it is a
-minimal safe resolver. Extend carefully if needed.
+- Integer and float literals, for example ``42``, ``-3``, ``3.14`` or ``+0.5``.
+- Quoted string literals using single or double quotes, supporting the escape
+  sequences ``\n``, ``\t``, ``\r``, ``\\``, ``\"`` and ``\'``.
+- Variable references composed of dotted identifiers, for example
+  ``user.profile.age``, resolved against a provided context dict. Each segment
+  must match ``[A-Za-z_][A-Za-z0-9_]*``. Traversal follows dictionary keys;
+  lists and tuples are traversed with an integer segment. Object attributes are
+  deliberately not accessible because automation data is restricted to safe,
+  JSON-like values.
+
+This intentionally does **not** execute arbitrary Python code and supports no
+operators — it is a minimal safe resolver. Extend it carefully.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import re
+from dataclasses import dataclass
 from typing import Any
 
 from django.forms import ValidationError
 
-__all__ = ["ExpressionError", "resolve_expression", "is_number_literal", "is_string_literal", "validate_expression"]
+__all__ = ["ExpressionError", "is_number_literal", "is_string_literal", "resolve_expression", "validate_expression"]
 
 
 class ExpressionError(ValidationError):
@@ -52,9 +57,7 @@ def is_string_literal(expr: str) -> bool:
     """
     if len(expr) < 2:
         return False
-    if (expr[0], expr[-1]) in (("'", "'"), ('"', '"')):
-        return True
-    return False
+    return (expr[0], expr[-1]) in (("'", "'"), ('"', '"'))
 
 
 def _parse_number(expr: str) -> int | float:

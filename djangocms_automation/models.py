@@ -1,20 +1,24 @@
 import uuid
 
+from cms.models import CMSPlugin, Placeholder
+from cms.models.fields import PlaceholderRelationField
 from django.db import models, transaction
 from django.utils.translation import gettext_lazy as _
 
-from cms.models import CMSPlugin, Placeholder
-from cms.models.fields import PlaceholderRelationField
-
 from .instances import (  # noqa F401
-    AutomationInstance,
-    AutomationAction,
-    RUNNING,
-    PENDING,
-    WAITING,
+    CANCELED,
     COMPLETED,
     FAILED,
+    PENDING,
+    RUNNING,
+    WAITING,
+    AutomationAction,
+    AutomationInstance,
+    AutomationInstanceEvent,
+    DeadLetter,
+    SchedulerLock,
 )
+from .queue import QueuedTask  # noqa F401 — registers the durable queue model
 from .services import service_registry
 from .triggers import trigger_registry
 from .utilities.conditions import evaluate as evaluate_condition
@@ -59,7 +63,7 @@ class AutomationContent(models.Model):
         :returns: Always None.
         :rtype: None
         """
-        return None
+        return
 
     def get_placeholder_slots(self) -> list[str]:
         """Get slot names for all triggers.
@@ -126,15 +130,30 @@ class AutomationTrigger(models.Model):
         """
         from django.db import IntegrityError
 
-        if idempotency_key:
-            if AutomationInstance.objects.filter(
+        if (
+            idempotency_key
+            and AutomationInstance.objects.filter(
                 automation_content=self.automation_content,
                 idempotency_key=idempotency_key,
-            ).exists():
-                return  # Already executed for this key — idempotent no-op.
+            ).exists()
+        ):
+            return  # Already executed for this key — idempotent no-op.
 
-        placeholder = Placeholder.objects.get_for_obj(self.automation_content).get(slot=self.slot)
+        try:
+            placeholder = Placeholder.objects.get_for_obj(self.automation_content).get(slot=self.slot)
+        except Placeholder.DoesNotExist:
+            raise ValueError(
+                f"Automation trigger '{self.slot}' has no placeholder and so no plugins to execute."
+            ) from None
         plugin = placeholder.get_plugins().first()
+        if plugin is None:
+            # A misconfigured automation (no placeholder, or no plugin in it) must
+            # report a diagnosable failure rather than raising AttributeError from
+            # deep inside a webhook or a cron tick.
+            raise ValueError(
+                f"Automation trigger '{self.slot}' has no plugins to execute. "
+                f"Add at least one plugin to the '{self.slot}' slot."
+            )
         plugin, _ = plugin.get_plugin_instance()
 
         with transaction.atomic():
@@ -272,18 +291,17 @@ class AutomationPluginModel(CMSPlugin):
             return []
 
         next_plugin = self.next_plugin_instance
-        if next_plugin:
-            # Only create action if the plugin has uuid (is an AutomationPluginModel)
-            if hasattr(next_plugin, "uuid"):
-                return [
-                    AutomationAction.objects.create(
-                        previous=action,
-                        parent=action.parent,
-                        automation_instance=action.automation_instance,
-                        plugin_ptr=next_plugin.uuid,
-                        finished=None,
-                    )
-                ]
+        # Only create an action if the next plugin has a uuid (is an AutomationPluginModel)
+        if next_plugin and hasattr(next_plugin, "uuid"):
+            return [
+                AutomationAction.objects.create(
+                    previous=action,
+                    parent=action.parent,
+                    automation_instance=action.automation_instance,
+                    plugin_ptr=next_plugin.uuid,
+                    finished=None,
+                )
+            ]
         return []
 
 
@@ -365,7 +383,10 @@ class ConditionalPluginModel(AutomationPluginModel):
             (pass-through), and ``(COMPLETED, branch_output)`` once the
             branch chain has finished.
         """
-        children = action.children.all()
+        # As for a split: a child that has been replayed is superseded by its
+        # replacement and must not be counted, or a replayed branch fails its
+        # parent forever.
+        children = action.children.filter(replays__isnull=True)
         if not children.exists():
             condition_result = bool(evaluate_condition(self.condition, data))
             action._condition_result = condition_result
@@ -499,7 +520,11 @@ class SplitPluginModel(AutomationPluginModel):
         """
         from .engine import normalize_rows
 
-        children = action.children.all()
+        # A child that has been replayed is superseded: its replacement is a
+        # sibling in the same set, and the original is kept only as history.
+        # Counting it would make a replayed branch fail its join forever, and
+        # would merge a dead branch's output alongside its replacement's.
+        children = action.children.filter(replays__isnull=True)
         if not children.exists():
             if not self._paths():
                 # Nothing to fan out to: pass data through.
@@ -542,8 +567,8 @@ class BaseActionPluginModel(AutomationPluginModel):
         ``data_form`` are rendered with ``safe_render`` (``{{ path }}``
         substitution); all other fields are resolved as expressions.
         """
-        from django import forms as django_forms
         from cms.plugin_pool import plugin_pool
+        from django import forms as django_forms
 
         try:
             plugin_cls = plugin_pool.get_plugin(self.plugin_type)

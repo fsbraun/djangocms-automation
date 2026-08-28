@@ -1,12 +1,10 @@
 """End-to-end tests for the MailAction plugin."""
 
 import pytest
-
-from django.contrib.contenttypes.models import ContentType
-from django.core import mail
-
 from cms.api import add_plugin
 from cms.models import Placeholder
+from django.contrib.contenttypes.models import ContentType
+from django.core import mail
 
 from djangocms_automation.actions.mail import MailActionPluginModel
 from djangocms_automation.instances import COMPLETED, FAILED, AutomationAction

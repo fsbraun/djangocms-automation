@@ -1,17 +1,14 @@
+from cms.plugin_base import CMSPluginBase
+from cms.plugin_pool import plugin_pool
 from django import forms as django_forms
 from django.utils.translation import gettext as _
 
-from cms.plugin_base import CMSPluginBase
-from cms.plugin_pool import plugin_pool
-
 from . import forms, models
-from .actions import llm_action
+from .actions import llm_action, model_actions, user_input
 from .actions import mail as actions_mail
-from .actions import model_actions, user_input
 from .constants import Module
 from .utilities.expressions import validate_expression
 from .utilities.templates import validate_template
-
 
 automation_plugins = []
 action_plugins = []
@@ -228,7 +225,7 @@ class ActionPlugin(AutomationPlugin):
         if self.data_form:
             obj.config = {
                 f_name: form.cleaned_data.get(f_name, "")
-                for f_name in self.data_form.base_fields.keys()
+                for f_name in self.data_form.base_fields
                 if f_name in form.cleaned_data
             }
         super().save_model(request, obj, form, change)

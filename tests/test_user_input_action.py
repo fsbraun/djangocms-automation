@@ -1,11 +1,9 @@
 """Tests for the user-input (human-in-the-loop) action and resume flow."""
 
 import pytest
-
-from django.contrib.contenttypes.models import ContentType
-
 from cms.api import add_plugin
 from cms.models import Placeholder
+from django.contrib.contenttypes.models import ContentType
 
 from djangocms_automation import engine
 from djangocms_automation.actions.user_input import UserInputActionPluginModel

@@ -4,7 +4,6 @@ import pytest
 
 from djangocms_automation.utilities.conditions import evaluate
 
-
 DATA = [{"status": "active", "count": 5, "name": "Alice", "tags": ["a", "b"]}]
 
 

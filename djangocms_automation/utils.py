@@ -3,8 +3,8 @@ from concurrent.futures import ThreadPoolExecutor
 from traceback import format_exception
 
 from django.db import close_old_connections, connections
-from django.tasks.base import TaskContext, TaskError, TaskResult, TaskResultStatus
 from django.tasks.backends.base import BaseTaskBackend
+from django.tasks.base import TaskContext, TaskError, TaskResult, TaskResultStatus
 from django.tasks.exceptions import TaskResultDoesNotExist
 from django.tasks.signals import task_enqueued, task_finished, task_started
 from django.utils import timezone
@@ -86,7 +86,7 @@ class ThreadBackend(BaseTaskBackend):
                 object.__setattr__(task_result, "_return_value", normalize_json(return_value))
                 object.__setattr__(task_result, "finished_at", timezone.now())
                 object.__setattr__(task_result, "status", TaskResultStatus.SUCCESSFUL)
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 — the worker records every failure on the result
             exception_type = type(exc)
             with self._lock:
                 task_result.errors.append(

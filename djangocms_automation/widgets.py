@@ -6,7 +6,7 @@ from django.utils.html import escape
 from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
 
-from .triggers import trigger_registry, Trigger
+from .triggers import Trigger, trigger_registry
 
 
 def _get_trigger(trigger_id: str) -> Trigger | None:
@@ -33,7 +33,7 @@ class TriggerSelectWidget(forms.Select):
     def _build_choices(self):
         return trigger_registry.get_choices()
 
-    def render(self, name, value, attrs=None, renderer=None):  # noqa: D401 - short override
+    def render(self, name, value, attrs=None, renderer=None):
         if value is None:
             value = ""
         attrs = self.build_attrs(self.attrs, attrs)

@@ -9,3 +9,4 @@ Practical recipes and small focused examples.
    triggering
    webhooks
    actions
+   deployment

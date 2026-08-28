@@ -3,11 +3,9 @@ backend cannot reach end-to-end: straggler branches and failed children on
 revival, plus the editor validation ``messages()`` helpers."""
 
 import pytest
-
-from django.contrib.contenttypes.models import ContentType
-
 from cms.api import add_plugin
 from cms.models import Placeholder
+from django.contrib.contenttypes.models import ContentType
 
 from djangocms_automation import engine
 from djangocms_automation.instances import (
@@ -104,7 +102,7 @@ def test_split_revival_with_straggler_keeps_waiting(placeholder, automation_cont
 
 @pytest.mark.django_db
 def test_split_revival_with_failed_child_fails(placeholder, automation_content, settings):
-    split, branch_plugins = _make_split(placeholder, settings)
+    split, _branch_plugins = _make_split(placeholder, settings)
     plugin_map = engine.build_plugin_map(automation_content.pk)
     split_plugin = SplitPluginModel.objects.get(pk=split.pk)
     split_node = plugin_map[split_plugin.uuid]

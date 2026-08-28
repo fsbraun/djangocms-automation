@@ -65,9 +65,10 @@ pause and wait transitions create immutable
 actions additionally store a machine-readable ``error_type`` and an
 ``error_detail`` summary alongside their existing result traceback.
 
-The attempt fields are the foundation for durable retries and crash recovery;
-automatic retry scheduling, heartbeat emission, expired-lease recovery and
-timeout enforcement are not implemented yet.
+These fields drive durable retry scheduling, heartbeat renewal, expired-lease
+recovery, and timeout enforcement. See
+:doc:`execution-lifecycle` for the complete success, failure, and recovery
+lifecycle and the concurrency controls around it.
 
 Orchestration is owned by the execution engine
 (``djangocms_automation.engine``):

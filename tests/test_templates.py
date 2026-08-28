@@ -1,11 +1,9 @@
 """Tests for the {{ dotted.path }} template utilities (utilities.templates)."""
 
 import pytest
-
 from django.forms import ValidationError
 
 from djangocms_automation.utilities.templates import resolve_path, safe_render, validate_template
-
 
 CONTEXT = {
     "user": {"name": "Alice", "age": 30},

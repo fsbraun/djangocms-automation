@@ -4,8 +4,8 @@ import pytest
 from django import forms
 from django.test import RequestFactory
 
-from djangocms_automation.forms import AutomationTriggerAdminForm, TriggerChoiceField
 from djangocms_automation.admin import AutomationTriggerAdmin
+from djangocms_automation.forms import AutomationTriggerAdminForm, TriggerChoiceField
 from djangocms_automation.models import Automation, AutomationContent, AutomationTrigger
 from djangocms_automation.triggers import trigger_registry
 

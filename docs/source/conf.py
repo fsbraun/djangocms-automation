@@ -1,9 +1,8 @@
 import os
 import sys
-from datetime import datetime
+from datetime import UTC, datetime
 
 from djangocms_automation import __version__
-
 
 # Add project root to sys.path so autodoc can import the package
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
@@ -67,5 +66,5 @@ intersphinx_mapping = {
 # General substitutions
 rst_prolog = f"""
 .. |project| replace:: {project}
-.. |year| replace:: {datetime.utcnow().year}
+.. |year| replace:: {datetime.now(UTC).year}
 """

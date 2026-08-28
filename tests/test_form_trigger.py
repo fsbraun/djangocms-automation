@@ -1,12 +1,10 @@
 """Tests for FormSubmissionTrigger and AutomationAction integration with djangocms_form_builder."""
 
 import pytest
-
-from django import forms
-from django.contrib.contenttypes.models import ContentType
-
 from cms.api import add_plugin
 from cms.models import Placeholder
+from django import forms
+from django.contrib.contenttypes.models import ContentType
 
 from djangocms_automation.models import (
     Automation,
@@ -141,11 +139,10 @@ class TestFormBuilderActionExecute:
     def test_execute_triggers_automation_with_serialized_data(self, settings, admin_user):
         from unittest import mock
 
-        from django.contrib.contenttypes.models import ContentType
-        from django.test import RequestFactory
-
         from cms.api import add_plugin
         from cms.models import Placeholder
+        from django.contrib.contenttypes.models import ContentType
+        from django.test import RequestFactory
 
         from djangocms_automation.instances import COMPLETED, AutomationAction
         from djangocms_automation.models import Automation, AutomationContent, AutomationTrigger
@@ -188,11 +185,10 @@ class TestFormBuilderActionExecute:
     def test_execute_anonymous_user_records_null_user(self, settings, admin_user):
         from unittest import mock
 
+        from cms.models import Placeholder
         from django.contrib.auth.models import AnonymousUser
         from django.contrib.contenttypes.models import ContentType
         from django.test import RequestFactory
-
-        from cms.models import Placeholder
 
         from djangocms_automation.models import Automation, AutomationContent, AutomationTrigger
         from djangocms_automation.triggers import AutomationAction as FormAutomationAction

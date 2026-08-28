@@ -4,13 +4,13 @@ import datetime
 import uuid
 
 import pytest
-
+from cms.api import add_plugin
+from cms.models import Placeholder
+from cms.plugin_base import CMSPluginBase
+from cms.plugin_pool import plugin_pool
 from django.contrib.contenttypes.models import ContentType
 from django.core.management import call_command
 from django.utils.timezone import now
-
-from cms.api import add_plugin
-from cms.models import Placeholder
 
 from djangocms_automation import engine
 from djangocms_automation.instances import (
@@ -27,9 +27,6 @@ from djangocms_automation.models import (
     AutomationTrigger,
     BaseActionPluginModel,
 )
-
-from cms.plugin_base import CMSPluginBase
-from cms.plugin_pool import plugin_pool
 
 
 class FailingActionPluginModel(BaseActionPluginModel):
@@ -134,7 +131,7 @@ def test_failed_enqueue_ignores_missing_or_finished_action(automation_content):
 
 @pytest.mark.django_db
 def test_missing_plugin_fails_action_not_crash(run_setup):
-    trigger, placeholder = run_setup
+    trigger, _placeholder = run_setup
     instance = AutomationInstance.objects.create(automation_content=trigger.automation_content)
     action = AutomationAction.objects.create(
         automation_instance=instance,

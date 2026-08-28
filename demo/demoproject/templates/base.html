@@ -1,0 +1,54 @@
+{% load cms_tags sekizai_tags menu_tags static %}<!DOCTYPE html>
+<html lang="{{ LANGUAGE_CODE|default:'en' }}">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    {% page_attribute "page_title" as cms_page_title %}
+    <title>{% block title %}{{ cms_page_title|default:"Automations" }}{% endblock %} &middot; Automation demo</title>
+    <style>
+        :root { color-scheme: light dark; }
+        body {
+            margin: 0;
+            font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+            background: Canvas;
+            color: CanvasText;
+        }
+        header.site {
+            padding: .75rem 1.5rem;
+            border-bottom: 1px solid color-mix(in srgb, CanvasText 15%, transparent);
+            display: flex;
+            gap: 1.5rem;
+            align-items: baseline;
+        }
+        header.site strong { font-weight: 600; }
+        header.site nav a { margin-right: 1rem; }
+        main { padding: 1.5rem; max-width: 70rem; margin: 0 auto; }
+        a { color: LinkText; }
+        code { background: color-mix(in srgb, CanvasText 8%, transparent); padding: .1em .35em; border-radius: 3px; }
+    </style>
+    {% render_block "css" %}
+</head>
+<body>
+    {% cms_toolbar %}
+
+    {% block navbar %}
+        <header class="site">
+            <strong>djangocms-automation demo</strong>
+            <nav>
+                <a href="/admin/djangocms_automation/automation/">Automations</a>
+                <a href="/admin/djangocms_automation/automationinstance/">Executions</a>
+                <a href="/admin/djangocms_automation/deadletter/">Dead letters</a>
+                <a href="/admin/djangocms_automation/queuedtask/">Queue</a>
+            </nav>
+        </header>
+    {% endblock %}
+
+    <main>
+        {% block content %}
+            {% placeholder "content" %}
+        {% endblock %}
+    </main>
+
+    {% render_block "js" %}
+</body>
+</html>

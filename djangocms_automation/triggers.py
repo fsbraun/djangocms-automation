@@ -1,15 +1,21 @@
 """Trigger registry and base classes for automation triggers.
 
-Provides an abstract base ``Trigger`` class and a global ``trigger_registry``
-for registering concrete triggers that can be referenced by slug/id in
-Automations. Each trigger defines:
-- id: machine identifier (unique key)
-- name: human readable name
-- description: short explanatory text
-- data_schema: JSON schema (Draft 2020-12 compatible subset) describing
-  the expected structure of the trigger data payload.
+Provides an abstract base :class:`Trigger` class and a global
+``trigger_registry`` for registering concrete triggers that can be referenced by
+slug/id in automations. Each trigger defines:
 
-Concrete example triggers are provided for "Click" and "Mail" events.
+``id``
+    Machine identifier, unique across the registry.
+``name``
+    Human readable name, shown in the editor.
+``description``
+    Short explanatory text.
+``data_schema``
+    JSON schema (a Draft 2020-12 compatible subset) describing the expected
+    structure of the trigger's data payload.
+
+Concrete triggers cover manual (``click``), timer, inbound webhook, mail,
+form submission and automation-to-automation (``code``) events.
 """
 
 from __future__ import annotations
@@ -18,7 +24,8 @@ import hashlib
 import hmac
 import json
 import secrets
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from django import forms
 from django.apps import apps
@@ -213,7 +220,11 @@ class GenericWebhookTrigger(WebhookTrigger):
     id = "webhook"
     name = _("Webhook")
     description = _("Starts when an HTTP POST request is received on the trigger's webhook URL.")
-    icon = "bi-broadcast-pin"
+    # Inbound: an external service pushes data to us, so the arrow points down
+    # into the cloud. An upload-style icon would read as data leaving, which is
+    # backwards for a trigger. Icons must also exist as a <symbol> in the sprite
+    # in automation_detail.html — an undefined id renders nothing, silently.
+    icon = "bi-cloud-arrow-down"
     data_schema = {}
 
 
@@ -344,9 +355,7 @@ class MailTrigger(WebhookTrigger):
         if subject_contains and subject_contains.lower() not in str(row.get("subject", "")).lower():
             return False
         status_filter = config.get("status_filter")
-        if status_filter and row.get("status") != status_filter:
-            return False
-        return True
+        return not (status_filter and row.get("status") != status_filter)
 
     def parse_payload(self, request, config: dict[str, Any]) -> list[dict[str, Any]]:
         rows = super().parse_payload(request, config)
@@ -532,13 +541,13 @@ trigger_registry.register(FormSubmissionTrigger)
 trigger_registry.register(GenericWebhookTrigger)
 
 __all__ = [
-    "Trigger",
-    "TriggerRegistry",
-    "trigger_registry",
-    "generate_webhook_token",
-    "WebhookTrigger",
-    "GenericWebhookTrigger",
     "ClickTrigger",
+    "GenericWebhookTrigger",
     "MailTrigger",
     "TimerTrigger",
+    "Trigger",
+    "TriggerRegistry",
+    "WebhookTrigger",
+    "generate_webhook_token",
+    "trigger_registry",
 ]
