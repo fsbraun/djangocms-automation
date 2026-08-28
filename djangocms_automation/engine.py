@@ -29,6 +29,7 @@ time; any other exception fails the action and the automation instance.
 from __future__ import annotations
 
 import datetime
+import logging
 import traceback
 import uuid as uuid_module
 
@@ -42,6 +43,7 @@ from cms.models import CMSPlugin, Placeholder
 from cms.utils.plugins import downcast_plugins, get_plugins_as_layered_tree
 
 from .instances import (
+    CANCELED,
     COMPLETED,
     FAILED,
     MAX_FIELD_LENGTH,
@@ -50,12 +52,18 @@ from .instances import (
     WAITING,
     AutomationAction,
     AutomationInstance,
+    SchedulerLock,
 )
+from .retry import DEFAULT_RETRY_POLICY
+from .signals import action_dead_lettered, instance_finished
 from .transitions import transition_action
+
+logger = logging.getLogger("djangocms_automation.engine")
 
 __all__ = [
     "ActionPause",
     "build_plugin_map",
+    "cancel_instance",
     "claim_action",
     "run_action",
     "normalize_rows",
@@ -65,8 +73,12 @@ __all__ = [
     "propagate_failure",
     "maybe_finish_instance",
     "pause_action",
+    "recover_expired_leases",
+    "reconcile_waiting_joins",
+    "replay_action",
     "resume_action",
     "revive_pending",
+    "scheduler_lock",
 ]
 
 
@@ -171,6 +183,7 @@ def _fail_enqueue(action_id: int, exc: BaseException) -> None:
     )
     if action is None:
         return
+    dead_letter(action)
     propagate_failure(action)
 
 
@@ -231,8 +244,92 @@ def claim_action(action_id: int, allow_states: tuple[str, ...] = (PENDING,)) -> 
     ).get(pk=action_id)
 
 
+def get_retry_policy(action: AutomationAction):
+    """Resolve the retry policy governing an action.
+
+    The policy comes from the plugin model; a plugin that declares none gets
+    :data:`~djangocms_automation.retry.DEFAULT_RETRY_POLICY`, which does not
+    retry. This keeps historical fail-fast behavior for every action that has
+    not opted in.
+    """
+    plugin = getattr(action, "_plugin", None)
+    return getattr(plugin, "retry_policy", DEFAULT_RETRY_POLICY)
+
+
+def effective_max_attempts(action: AutomationAction, policy) -> int:
+    """Combine the plugin's policy with any per-action override.
+
+    The row's ``max_attempts`` defaults to 1, so the policy normally wins.
+    Raising the row value above the policy is the documented per-action
+    override and takes precedence.
+    """
+    return max(action.max_attempts or 1, policy.max_attempts)
+
+
+def schedule_retry(action: AutomationAction, exc: BaseException, policy) -> AutomationAction | None:
+    """Reschedule a failed action for a later attempt.
+
+    The action returns to ``PENDING`` with ``next_attempt_at`` set; the
+    scheduler enqueues it once due. No new logical action is created — the
+    attempt history accumulates on the same row.
+    """
+    delay = policy.next_delay(action.attempt_count, exc)
+    due = now() + datetime.timedelta(seconds=delay)
+    retried = transition_action(
+        action.pk,
+        PENDING,
+        allowed_from=(RUNNING,),
+        message=f"Retry {action.attempt_count}/{effective_max_attempts(action, policy)} after {delay:.0f}s"[
+            :MAX_FIELD_LENGTH
+        ],
+        error=exc,
+        metadata={"retry_in_seconds": round(delay, 3)},
+        field_updates={"next_attempt_at": due, "paused_until": due},
+    )
+    if retried is not None:
+        logger.info(
+            "automation.action.retry_scheduled",
+            extra={
+                "automation_action_id": action.pk,
+                "attempt": action.attempt_count,
+                "retry_in_seconds": round(delay, 3),
+            },
+        )
+    return retried
+
+
+def dead_letter(action: AutomationAction) -> None:
+    """Mark a terminally failed action as awaiting inspection or replay."""
+    AutomationAction.objects.filter(pk=action.pk, dead_lettered=False).update(
+        dead_lettered=True, dead_lettered_at=now()
+    )
+    action.dead_lettered = True
+    logger.warning(
+        "automation.action.dead_lettered",
+        extra={
+            "automation_action_id": action.pk,
+            "automation_instance_id": action.automation_instance_id,
+            "attempt": action.attempt_count,
+        },
+    )
+    action_dead_lettered.send(sender=AutomationAction, action=action)
+
+
 def fail_action(action: AutomationAction, message: str, *, exc: BaseException | None = None) -> None:
-    """Mark an action as failed and propagate the failure."""
+    """Fail an action, retrying first if its policy allows.
+
+    A retryable failure with attempts remaining reschedules instead of failing,
+    and does not propagate. Anything else fails the action, adds it to the
+    dead-letter queue so it can be inspected and replayed, and fails its
+    ancestors and the instance.
+    """
+    policy = get_retry_policy(action)
+    if exc is not None and action.state == RUNNING:
+        max_attempts = effective_max_attempts(action, policy)
+        if policy.is_retryable(exc) and action.attempt_count < max_attempts:
+            if schedule_retry(action, exc, policy) is not None:
+                return
+
     result = {"error": message}
     if exc is not None:
         result["traceback"] = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
@@ -243,39 +340,68 @@ def fail_action(action: AutomationAction, message: str, *, exc: BaseException | 
         message=message[:MAX_FIELD_LENGTH],
         error=exc,
     )
-    if failed is not None:
-        propagate_failure(failed)
+    if failed is None:
+        return
+    failed._plugin = getattr(action, "_plugin", None)
+    dead_letter(failed)
+    propagate_failure(failed)
 
 
 def propagate_failure(action: AutomationAction) -> None:
-    """Fail-fast propagation: fail unfinished ancestors and the instance."""
-    timestamp = now()
+    """Fail-fast propagation: fail unfinished ancestors and the instance.
+
+    Ancestors are failed through the transition service so the propagation is
+    recorded in the event history like any other transition, rather than
+    disappearing into a bulk update.
+    """
     parent_id = action.parent_id
     failed_id = action.pk
     while parent_id:
         parent = AutomationAction.objects.filter(pk=parent_id).first()
         if parent is None or parent.finished is not None:
             break
-        AutomationAction.objects.filter(pk=parent.pk, finished__isnull=True).update(
-            state=FAILED,
-            finished=timestamp,
-            message="Branch failed",
+        transitioned = transition_action(
+            parent.pk,
+            FAILED,
             result={"failed_action_id": failed_id},
+            message="Branch failed",
+            unfinished_only=True,
+            metadata={"propagated_from": failed_id},
         )
+        if transitioned is None:
+            break
         failed_id = parent.pk
         parent_id = parent.parent_id
-    AutomationInstance.objects.filter(pk=action.automation_instance_id, finished__isnull=True).update(
-        status=FAILED, finished=timestamp
+    finish_instance(action.automation_instance_id, FAILED)
+
+
+def finish_instance(instance_id: int, status: str) -> bool:
+    """Move an instance to a terminal status exactly once.
+
+    :returns: True if this call finished the instance.
+    """
+    finished = AutomationInstance.objects.filter(pk=instance_id, finished__isnull=True).update(
+        status=status, finished=now()
     )
+    if not finished:
+        return False
+    instance = AutomationInstance.objects.filter(pk=instance_id).first()
+    logger.info(
+        "automation.instance.finished",
+        extra={"automation_instance_id": instance_id, "status": status},
+    )
+    try:
+        instance_finished.send(sender=AutomationInstance, instance=instance, status=status)
+    except Exception:  # noqa: BLE001 — observability must never fail an execution
+        logger.exception("automation.signal.failed", extra={"automation_instance_id": instance_id})
+    return True
 
 
 def maybe_finish_instance(instance: AutomationInstance) -> None:
     """Mark the instance completed once no unfinished actions remain."""
     has_open = AutomationAction.objects.filter(automation_instance=instance, finished__isnull=True).exists()
     if not has_open:
-        AutomationInstance.objects.filter(pk=instance.pk, finished__isnull=True).update(
-            status=COMPLETED, finished=now()
-        )
+        finish_instance(instance.pk, COMPLETED)
 
 
 def notify_parent(action: AutomationAction, data=None) -> bool:
@@ -287,10 +413,16 @@ def notify_parent(action: AutomationAction, data=None) -> bool:
 
     :returns: True if the parent was woken by this call.
     """
-    woken = AutomationAction.objects.filter(pk=action.parent_id, state=WAITING).update(state=PENDING)
-    if woken:
+    woken = transition_action(
+        action.parent_id,
+        PENDING,
+        allowed_from=(WAITING,),
+        continuation=True,
+        metadata={"woken_by": action.pk},
+    )
+    if woken is not None:
         enqueue_action(action.parent_id, data=data)
-    return bool(woken)
+    return woken is not None
 
 
 def _wake_if_children_done(action: AutomationAction) -> None:
@@ -301,29 +433,52 @@ def _wake_if_children_done(action: AutomationAction) -> None:
     """
     children = AutomationAction.objects.filter(parent=action)
     if children.exists() and not children.filter(finished__isnull=True).exists():
-        if AutomationAction.objects.filter(pk=action.pk, state=WAITING).update(state=PENDING):
+        woken = transition_action(
+            action.pk,
+            PENDING,
+            allowed_from=(WAITING,),
+            continuation=True,
+            metadata={"woken_by": "lost_wakeup_guard"},
+        )
+        if woken is not None:
             enqueue_action(action.pk)
 
 
 def pause_action(action: AutomationAction, until: datetime.datetime, message: str = "") -> None:
-    """Pause an action until a given time (revived by ``revive_pending``)."""
+    """Pause an action until a given time (revived by ``revive_pending``).
+
+    A pause is a deliberate reschedule, not a failure, so it is marked as a
+    continuation: the next claim counts as a re-entry and leaves the action's
+    retry budget intact.
+    """
     action = transition_action(
         action.pk,
         PENDING,
         allowed_from=(PENDING, RUNNING),
         result=action.result,
         message=message[:MAX_FIELD_LENGTH] if message else None,
+        continuation=True,
+        field_updates={"paused_until": until},
     )
-    if action is None:
-        return
-    action.paused_until = until
-    action.save(update_fields=["paused_until"])
+
+
+def _resolve_timeout(plugin) -> int | None:
+    """Resolve the execution timeout for a plugin, in seconds."""
+    timeout = getattr(plugin, "timeout_seconds", None)
+    if timeout is None:
+        timeout = getattr(settings, "AUTOMATION_ACTION_TIMEOUT", None)
+    return int(timeout) if timeout else None
 
 
 def run_action(action_id: int, data=None, single_step: bool = False) -> None:
     """Execute a single automation action and schedule what follows."""
     action = claim_action(action_id)
     if action is None:
+        return
+
+    if action.automation_instance.status == CANCELED:
+        # The run was canceled between enqueue and claim: stop without side effects.
+        transition_action(action.pk, CANCELED, allowed_from=(RUNNING,), message="Instance canceled")
         return
 
     plugin_map = build_plugin_map(action.automation_instance.automation_content_id)
@@ -334,6 +489,13 @@ def run_action(action_id: int, data=None, single_step: bool = False) -> None:
     action._plugin = plugin
 
     rows = normalize_rows(data if data is not None else action.automation_instance.data)
+
+    # Record what this attempt was given, so a dead-lettered action can be
+    # replayed with its real input rather than whatever the instance holds now.
+    timeout = _resolve_timeout(plugin)
+    AutomationAction.objects.filter(pk=action.pk).update(input_data=rows, timeout_seconds=timeout)
+    action.input_data = rows
+    action.timeout_seconds = timeout
 
     try:
         state, output = plugin.execute(action, rows, single_step=single_step, plugin_dict=plugin_map)
@@ -412,12 +574,17 @@ def resume_action(action_id: int, user, data: dict | None = None) -> AutomationA
     if data:
         rows = rows + [data]
 
-    claimed = AutomationAction.objects.filter(pk=action.pk, state=WAITING).update(
-        state=COMPLETED, finished=now(), requires_interaction=False
+    claimed = transition_action(
+        action.pk,
+        COMPLETED,
+        allowed_from=(WAITING,),
+        message="Resumed by user",
+        field_updates={"requires_interaction": False},
+        metadata={"resumed_by": getattr(user, "pk", None)},
     )
-    if not claimed:
+    if claimed is None:
         raise ValueError("Action is no longer waiting.")
-    action.refresh_from_db()
+    action = claimed
 
     plugin_map = build_plugin_map(action.automation_instance.automation_content_id)
     plugin = plugin_map.get(action.plugin_ptr)
@@ -447,15 +614,206 @@ def revive_pending(timestamp: datetime.datetime | None = None) -> int:
     timestamp = timestamp or now()
     actions = AutomationAction.objects.filter(
         Q(paused_until=None) | Q(paused_until__lte=timestamp),
+        Q(next_attempt_at=None) | Q(next_attempt_at__lte=timestamp),
         finished__isnull=True,
         state=PENDING,
         automation_instance__automation_content__automation__is_active=True,
-    )
+    ).exclude(automation_instance__status=CANCELED)
     count = 0
     for action in actions:
         enqueue_action(action.pk)
         count += 1
     return count
+
+
+def cancel_instance(instance_id: int, message: str = "Canceled") -> int:
+    """Cancel a running instance and every unfinished action inside it.
+
+    Idempotent, and safe to call while workers are running: a worker that has
+    already claimed an action finishes it, but nothing further is scheduled
+    because the instance status is checked at the start of every execution.
+
+    :returns: The number of actions canceled.
+    """
+    instance = AutomationInstance.objects.filter(pk=instance_id).first()
+    if instance is None:
+        return 0
+    canceled = instance.cancel(message=message)
+    logger.info(
+        "automation.instance.canceled",
+        extra={"automation_instance_id": instance_id, "actions_canceled": canceled},
+    )
+    return canceled
+
+
+def recover_expired_leases(timestamp: datetime.datetime | None = None, limit: int = 500) -> int:
+    """Recover actions whose worker died or which ran past their timeout.
+
+    An action is recoverable when it is ``RUNNING`` and either exceeded its
+    ``timeout_seconds`` or stopped refreshing its heartbeat for longer than
+    ``AUTOMATION_LEASE_SECONDS``. It is rescheduled if attempts remain and
+    failed otherwise, so a killed worker can never leave an execution stuck in
+    ``RUNNING`` forever.
+
+    :returns: The number of actions recovered.
+    """
+    timestamp = timestamp or now()
+    window = getattr(settings, "AUTOMATION_LEASE_SECONDS", 300)
+    horizon = timestamp - datetime.timedelta(seconds=window)
+    # Prefilter cheaply in SQL, then let ``is_lease_expired`` decide exactly.
+    # Actions carrying their own timeout are always considered: the timeout may
+    # be far shorter than the lease window, so a stale-heartbeat filter alone
+    # would miss an action that is running long but heartbeating happily.
+    candidates = AutomationAction.objects.filter(
+        state=RUNNING,
+        finished__isnull=True,
+    ).filter(
+        Q(heartbeat_at__lte=horizon)
+        | Q(heartbeat_at__isnull=True, started__lte=horizon)
+        | Q(timeout_seconds__isnull=False)
+    )[:limit]
+
+    recovered = 0
+    for action in list(candidates):
+        if not action.is_lease_expired(timestamp):
+            continue
+        policy = DEFAULT_RETRY_POLICY
+        max_attempts = effective_max_attempts(action, policy)
+        timed_out = bool(
+            action.timeout_seconds
+            and action.started
+            and (timestamp - action.started).total_seconds() > action.timeout_seconds
+        )
+        reason = "timed out" if timed_out else "lease expired"
+        if action.attempt_count < max_attempts:
+            due = timestamp + datetime.timedelta(seconds=policy.next_delay(action.attempt_count))
+            transitioned = transition_action(
+                action.pk,
+                PENDING,
+                allowed_from=(RUNNING,),
+                message=f"Recovered: {reason}, retrying"[:MAX_FIELD_LENGTH],
+                metadata={"recovery": reason},
+                field_updates={"next_attempt_at": due, "paused_until": due},
+            )
+        else:
+            transitioned = transition_action(
+                action.pk,
+                FAILED,
+                allowed_from=(RUNNING,),
+                result={"error": f"Action {reason}"},
+                message=f"Recovered: {reason}, no attempts left"[:MAX_FIELD_LENGTH],
+                metadata={"recovery": reason},
+            )
+            if transitioned is not None:
+                dead_letter(transitioned)
+                propagate_failure(transitioned)
+        if transitioned is not None:
+            recovered += 1
+            logger.warning(
+                "automation.action.recovered",
+                extra={
+                    "automation_action_id": action.pk,
+                    "reason": reason,
+                    "attempt": action.attempt_count,
+                },
+            )
+    return recovered
+
+
+def reconcile_waiting_joins(limit: int = 500) -> int:
+    """Wake join points whose children all finished but which never got the news.
+
+    ``notify_parent`` and ``_wake_if_children_done`` close the ordinary races,
+    but a process that dies between a child finishing and its parent being
+    notified leaves the parent ``WAITING`` with nothing left to wake it. This
+    is the scheduler's backstop: it finds those parents and resumes them.
+
+    :returns: The number of joins woken.
+    """
+    stuck = (
+        AutomationAction.objects.filter(state=WAITING, finished__isnull=True, children__isnull=False)
+        .exclude(children__finished__isnull=True)
+        .exclude(automation_instance__status=CANCELED)
+        .distinct()[:limit]
+    )
+    woken = 0
+    for action in list(stuck):
+        resumed = transition_action(
+            action.pk,
+            PENDING,
+            allowed_from=(WAITING,),
+            continuation=True,
+            metadata={"woken_by": "join_reconciliation"},
+        )
+        if resumed is not None:
+            enqueue_action(action.pk)
+            woken += 1
+            logger.warning(
+                "automation.action.join_reconciled",
+                extra={"automation_action_id": action.pk},
+            )
+    return woken
+
+
+def replay_action(action_id: int) -> AutomationAction | None:
+    """Replay a dead-lettered action as a new attempt in its instance.
+
+    Historical rows are never mutated: a fresh action is created linked to the
+    original through ``replayed_from``, seeded with the input the failed attempt
+    actually received, and its instance is reopened.
+
+    :returns: The new action, or ``None`` if the original cannot be replayed.
+    """
+    original = AutomationAction.objects.filter(pk=action_id).select_related("automation_instance").first()
+    if original is None or original.state not in (FAILED, CANCELED):
+        return None
+
+    with transaction.atomic():
+        replacement = AutomationAction.objects.create(
+            previous=original.previous,
+            parent=original.parent,
+            automation_instance=original.automation_instance,
+            plugin_ptr=original.plugin_ptr,
+            max_attempts=original.max_attempts,
+            replayed_from=original,
+            finished=None,
+        )
+        AutomationInstance.objects.filter(pk=original.automation_instance_id).update(status=RUNNING, finished=None)
+    logger.info(
+        "automation.action.replayed",
+        extra={"automation_action_id": replacement.pk, "replayed_from": original.pk},
+    )
+    enqueue_action(replacement.pk, data=original.input_data)
+    return replacement
+
+
+class scheduler_lock:  # noqa: N801 — used as a context manager, not a class
+    """Hold a named scheduler lock for the duration of a block.
+
+    Falsy when the lock could not be taken, so a second scheduler skips the
+    tick instead of duplicating work::
+
+        with scheduler_lock("runautomations") as held:
+            if not held:
+                return
+    """
+
+    def __init__(self, name: str = "runautomations", ttl_seconds: int = 300):
+        self.name = name
+        self.ttl_seconds = ttl_seconds
+        self.token = None
+
+    def __enter__(self):
+        self.token = SchedulerLock.acquire(self.name, self.ttl_seconds)
+        return self
+
+    def __bool__(self) -> bool:
+        return self.token is not None
+
+    def __exit__(self, exc_type, exc, tb):
+        if self.token is not None:
+            SchedulerLock.release(self.name, self.token)
+        return False
 
 
 def _add_months(value: datetime.datetime, months: int) -> datetime.datetime:
@@ -521,7 +879,7 @@ def _next_timer_fire(config: dict, timestamp: datetime.datetime) -> datetime.dat
     return next_fire if next_fire <= timestamp else None
 
 
-def fire_due_timers(timestamp: datetime.datetime | None = None) -> int:
+def fire_due_timers(timestamp: datetime.datetime | None = None, catch_up: int | None = None) -> int:
     """Fire all due timer triggers on active automations.
 
     A one-shot timer fires once when ``scheduled_at`` is reached; recurring
@@ -529,24 +887,56 @@ def fire_due_timers(timestamp: datetime.datetime | None = None) -> int:
     wall-clock stepping — DST-exact recurrence is out of scope). The last
     fire time and count are stamped back into the trigger config.
 
+    If the scheduler was down, a recurring timer may have missed several
+    occurrences. Two bounds keep the recovery from becoming a storm:
+
+    * ``catch_up`` (``AUTOMATION_TIMER_CATCHUP``, default 1) caps how many
+      missed occurrences one tick fires. The default drains a backlog at one
+      occurrence per tick, which is the historical behavior; raising it drains
+      faster after a long outage.
+    * ``AUTOMATION_TIMER_MAX_AGE`` (default ``None``) skips occurrences older
+      than that many seconds instead of firing them, so a scheduler returning
+      after a week does not replay a week of work. Skipped occurrences are
+      logged and counted, never silently dropped.
+
     :returns: The number of triggers fired.
     """
     from .models import AutomationTrigger
 
     timestamp = timestamp or now()
+    if catch_up is None:
+        catch_up = int(getattr(settings, "AUTOMATION_TIMER_CATCHUP", 1))
+    catch_up = max(1, catch_up)
+    max_age = getattr(settings, "AUTOMATION_TIMER_MAX_AGE", None)
+
     fired = 0
     triggers = AutomationTrigger.objects.filter(
         type="timer", automation_content__automation__is_active=True
     ).select_related("automation_content")
     for trigger in triggers:
         config = dict(trigger.config or {})
-        due = _next_timer_fire(config, timestamp)
-        if due is None:
-            continue
-        trigger.trigger_execution(data=[{"scheduled_at": due.isoformat(), "fired_at": timestamp.isoformat()}])
-        config["last_fired"] = due.isoformat()
-        config["fired_count"] = int(config.get("fired_count", 0)) + 1
-        trigger.config = config
-        trigger.save(update_fields=["config"])
-        fired += 1
+        fired_here = skipped = 0
+        while fired_here < catch_up:
+            due = _next_timer_fire(config, timestamp)
+            if due is None:
+                break
+            stale = max_age is not None and (timestamp - due).total_seconds() > float(max_age)
+            if stale:
+                skipped += 1
+            else:
+                trigger.trigger_execution(data=[{"scheduled_at": due.isoformat(), "fired_at": timestamp.isoformat()}])
+                fired_here += 1
+            config["last_fired"] = due.isoformat()
+            config["fired_count"] = int(config.get("fired_count", 0)) + (0 if stale else 1)
+            if skipped > 10000:  # pathological config guard
+                break
+        if fired_here or skipped:
+            trigger.config = config
+            trigger.save(update_fields=["config"])
+        if skipped:
+            logger.warning(
+                "automation.timer.occurrences_skipped",
+                extra={"trigger_id": trigger.pk, "skipped": skipped, "max_age": max_age},
+            )
+        fired += fired_here
     return fired

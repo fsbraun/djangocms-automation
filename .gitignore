@@ -207,4 +207,8 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-IMPLEMENTATION_STATUS.md
+# Demo project database
+demo/demo.sqlite3
+demo/static/
+_*.md
+.gitignore

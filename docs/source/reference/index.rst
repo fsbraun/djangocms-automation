@@ -12,5 +12,6 @@ from docstrings using :mod:`sphinx.ext.autodoc` and :mod:`sphinx.ext.autosummary
    instances
    triggers
    engine
+   reliability
    tasks
    utilities

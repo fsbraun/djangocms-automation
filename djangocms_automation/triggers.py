@@ -213,7 +213,11 @@ class GenericWebhookTrigger(WebhookTrigger):
     id = "webhook"
     name = _("Webhook")
     description = _("Starts when an HTTP POST request is received on the trigger's webhook URL.")
-    icon = "bi-broadcast-pin"
+    # Inbound: an external service pushes data to us, so the arrow points down
+    # into the cloud. An upload-style icon would read as data leaving, which is
+    # backwards for a trigger. Icons must also exist as a <symbol> in the sprite
+    # in automation_detail.html — an undefined id renders nothing, silently.
+    icon = "bi-cloud-arrow-down"
     data_schema = {}
 
 

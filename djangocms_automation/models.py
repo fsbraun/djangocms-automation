@@ -9,12 +9,16 @@ from cms.models.fields import PlaceholderRelationField
 from .instances import (  # noqa F401
     AutomationInstance,
     AutomationAction,
+    DeadLetter,
+    SchedulerLock,
+    CANCELED,
     RUNNING,
     PENDING,
     WAITING,
     COMPLETED,
     FAILED,
 )
+from .queue import QueuedTask  # noqa F401 — registers the durable queue model
 from .services import service_registry
 from .triggers import trigger_registry
 from .utilities.conditions import evaluate as evaluate_condition
@@ -133,8 +137,21 @@ class AutomationTrigger(models.Model):
             ).exists():
                 return  # Already executed for this key — idempotent no-op.
 
-        placeholder = Placeholder.objects.get_for_obj(self.automation_content).get(slot=self.slot)
+        try:
+            placeholder = Placeholder.objects.get_for_obj(self.automation_content).get(slot=self.slot)
+        except Placeholder.DoesNotExist:
+            raise ValueError(
+                f"Automation trigger '{self.slot}' has no placeholder and so no plugins to execute."
+            ) from None
         plugin = placeholder.get_plugins().first()
+        if plugin is None:
+            # A misconfigured automation (no placeholder, or no plugin in it) must
+            # report a diagnosable failure rather than raising AttributeError from
+            # deep inside a webhook or a cron tick.
+            raise ValueError(
+                f"Automation trigger '{self.slot}' has no plugins to execute. "
+                f"Add at least one plugin to the '{self.slot}' slot."
+            )
         plugin, _ = plugin.get_plugin_instance()
 
         with transaction.atomic():

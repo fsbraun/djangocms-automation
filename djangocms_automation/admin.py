@@ -13,7 +13,17 @@ from cms.admin.utils import ChangeListActionsMixin, GrouperModelAdmin
 from . import engine
 from .forms import AutomationTriggerAdminForm
 from .models import Automation, AutomationContent, APIKey, AutomationTrigger
-from .instances import AutomationAction, AutomationActionEvent, AutomationInstance, FAILED, PENDING, RUNNING
+from .queue import QueuedTask
+from .instances import (
+    AutomationAction,
+    AutomationActionEvent,
+    AutomationInstance,
+    DeadLetter,
+    SchedulerLock,
+    FAILED,
+    PENDING,
+    RUNNING,
+)
 from .triggers import trigger_registry
 
 
@@ -52,6 +62,8 @@ class AutomationActionInline(admin.TabularInline):
         "state",
         "attempt_count",
         "max_attempts",
+        "re_entry_count",
+        "dead_lettered",
         "message",
         "requires_interaction",
         "interaction_user",
@@ -64,6 +76,8 @@ class AutomationActionInline(admin.TabularInline):
     readonly_fields = (
         "state",
         "attempt_count",
+        "re_entry_count",
+        "dead_lettered",
         "message",
         "created",
         "started",
@@ -75,9 +89,21 @@ class AutomationActionInline(admin.TabularInline):
 
 @admin.register(AutomationInstance)
 class AutomationInstanceAdmin(admin.ModelAdmin):
-    list_display = ("id", "automation_content__automation", "is_success", "created", "updated")
-    list_filter = ("automation_content__automation", "created")
+    list_display = ("id", "automation_content__automation", "status", "is_success", "created", "updated")
+    list_filter = ("status", "automation_content__automation", "created")
     search_fields = ("key", "automation_content__automation__name")
+    actions = ("cancel_instances",)
+
+    @admin.action(description=_("Cancel selected executions"))
+    def cancel_instances(self, request, queryset):
+        """Stop the selected runs and every unfinished action inside them."""
+        canceled = sum(engine.cancel_instance(instance.pk) for instance in queryset)
+        self.message_user(
+            request,
+            _("Canceled %(count)d action(s).") % {"count": canceled},
+            level=messages.SUCCESS if canceled else messages.INFO,
+        )
+
     readonly_fields = ("key", "created", "updated", "data_display", "error_message_display")
     inlines = [AutomationActionInline]
     fieldsets = (
@@ -163,6 +189,124 @@ class AutomationInstanceAdmin(admin.ModelAdmin):
         else:
             self.message_user(request, _("Task resumed."), level=messages.SUCCESS)
         return HttpResponseRedirect(redirect_url)
+
+
+@admin.register(DeadLetter)
+class DeadLetterAdmin(admin.ModelAdmin):
+    """The dead-letter queue: actions that exhausted their attempts.
+
+    Read-only by design. The only operation is replay, which creates a new
+    action linked back to the original and never edits execution history.
+    """
+
+    list_display = (
+        "id",
+        "automation_instance",
+        "plugin_ptr",
+        "attempt_count",
+        "message",
+        "dead_lettered_at",
+        "replay_count",
+    )
+    list_filter = ("dead_lettered_at", "automation_instance__automation_content__automation")
+    search_fields = ("automation_instance__key", "message", "error_type")
+    readonly_fields = (
+        "automation_instance",
+        "plugin_ptr",
+        "state",
+        "attempt_count",
+        "max_attempts",
+        "re_entry_count",
+        "message",
+        "error_type",
+        "error_detail",
+        "input_data",
+        "result",
+        "started",
+        "finished",
+        "dead_lettered_at",
+        "replayed_from",
+    )
+    actions = ("replay_actions",)
+
+    def get_queryset(self, request):
+        return (
+            super()
+            .get_queryset(request)
+            .filter(dead_lettered=True)
+            .select_related("automation_instance")
+            .prefetch_related("replays")
+        )
+
+    @admin.display(description=_("Replays"))
+    def replay_count(self, obj):
+        return obj.replays.count()
+
+    @admin.action(description=_("Replay selected actions"))
+    def replay_actions(self, request, queryset):
+        """Re-run each selected action with the input its failed attempt saw."""
+        replayed = 0
+        for action in queryset:
+            if engine.replay_action(action.pk) is not None:
+                replayed += 1
+        self.message_user(
+            request,
+            _("Replayed %(count)d action(s).") % {"count": replayed},
+            level=messages.SUCCESS if replayed else messages.WARNING,
+        )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(QueuedTask)
+class QueuedTaskAdmin(admin.ModelAdmin):
+    """The durable queue, for watching backlog and inspecting worker failures.
+
+    Read-only: a task row is worker state, not something to hand-edit. To make
+    failed work run again, replay the automation action it belongs to.
+    """
+
+    list_display = ("id", "task_path", "state", "queue_name", "attempts", "enqueued_at", "worker_id")
+    list_filter = ("state", "queue_name", "enqueued_at")
+    search_fields = ("task_path", "result_id", "worker_id")
+    readonly_fields = (
+        "result_id",
+        "task_path",
+        "queue_name",
+        "priority",
+        "args",
+        "kwargs",
+        "state",
+        "run_after",
+        "enqueued_at",
+        "started_at",
+        "finished_at",
+        "worker_id",
+        "claimed_until",
+        "attempts",
+        "error",
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(SchedulerLock)
+class SchedulerLockAdmin(admin.ModelAdmin):
+    """Visibility into which scheduler holds the tick, for debugging."""
+
+    list_display = ("name", "holder", "locked_until")
+    readonly_fields = ("name", "holder", "locked_until")
+
+    def has_add_permission(self, request):
+        return False
 
 
 @admin.register(AutomationActionEvent)
