@@ -22,8 +22,14 @@ Data is a list of JSON-serializable rows:
     )
     trigger.trigger_execution(
         data=[{"first_name": "Alice", "email": "alice@example.com"}],
-        start=True,  # enqueue immediately; False creates the run paused
+        start=True,  # enqueue immediately; False defers to the scheduler
     )
+
+``start=False`` creates the instance and its first action but does not enqueue
+the action immediately. It is not a pause: the action remains ``PENDING`` with
+no ``paused_until`` value, so the next ``runautomations`` scheduler tick finds
+and enqueues it. Use this option to defer startup to the scheduler, not to hold
+an execution indefinitely.
 
 On form submission
 ------------------

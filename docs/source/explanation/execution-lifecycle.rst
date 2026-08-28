@@ -61,6 +61,11 @@ error and says so.
 path except replay, which reopens a failed ancestor so a replayed branch can
 report back to its join.
 
+At the action level, ``PENDING`` means that work is available now or scheduled
+for later, ``RUNNING`` means that a worker owns an execution lease, and
+``WAITING`` means that progress depends on child branches or human input rather
+than worker time.
+
 The run itself has the same treatment, one level up. An instance starts
 ``RUNNING`` and ends in one of the three terminal statuses, declared in
 :data:`~djangocms_automation.instances.ALLOWED_INSTANCE_TRANSITIONS` and applied
@@ -69,10 +74,11 @@ by ``transition_instance``. The edges worth attention are the ones pointing
 it now says so, recording which replay reopened the run and clearing
 ``finished`` so the run is genuinely open rather than merely relabelled. Every
 instance status change leaves an
-:class:`~djangocms_automation.instances.AutomationInstanceEvent`. ``PENDING``
-means that an action is available now or scheduled for later; ``RUNNING`` means
-that a worker owns an execution lease; and ``WAITING`` means that progress
-depends on child branches or human input rather than worker time.
+:class:`~djangocms_automation.instances.AutomationInstanceEvent`. The instance
+transition table also declares ``PENDING`` and ``WAITING`` because they are
+valid choices on the model field and may be used by extensions, but the built-in
+engine never assigns those statuses to an instance. The action meanings above
+must therefore not be inferred for instance statuses.
 
 From trigger to execution
 -------------------------

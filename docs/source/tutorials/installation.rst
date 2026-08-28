@@ -29,11 +29,13 @@ Configuration
 
     python manage.py migrate djangocms_automation
 
-Release upgrades that include execution-attempt tracking apply migration
-``0010_action_attempts_and_events``. It adds attempt and lease fields to
-existing actions and creates their transition-event table. Existing actions
-start with an attempt count of zero; the next successful claim creates their
-first recorded attempt. No data backfill is required.
+Migrations ``0010`` through ``0014`` together install the reliability schema.
+They add action attempt, lease, error, recovery, replay, and cancellation
+bookkeeping; action events and the scheduler lock; the dead-letter proxy; the
+durable queued-task table; and instance events. Existing actions start with an
+attempt count of zero, and the next successful claim creates their first
+recorded attempt. Apply the complete migration sequence with ``migrate``; no
+manual data backfill is required.
 
 3. (Optional) Include the package URLs to enable inbound webhooks
    (see :doc:`../howto/webhooks`):
@@ -138,16 +140,41 @@ provides a bounded in-process thread backend:
 worker thread after the surrounding database transaction commits. It is not a
 durable task queue: queued tasks and results exist only in the web process's
 memory, are not shared between multiple processes, and are lost if that process
-is restarted or terminated. It provides no retry or crash recovery. Do not use
-it for production automation where losing an email, database update, webhook,
-or paid external API call would be unacceptable.
+is restarted or terminated. The automation engine can re-enqueue persisted
+``PENDING`` actions and recover expired action leases after a restart, but the
+thread backend itself provides no durable queue, cross-process workers, or
+persistent task status. Do not use it for production automation where losing or
+delaying an email, database update, webhook, or paid external API call would be
+unacceptable.
 
-The database now records task attempts and transition events, but this does not
-make an in-memory backend durable. The current release does not automatically
-retry failed actions or recover a task lost when its process exits.
+For production, use the package's durable database backend:
 
-For production, configure a durable Django task backend with persistent queue
-storage and separate workers. The exact backend and worker command depend on
-the task backend package you select. Independently of that worker, continue to
-run ``python manage.py runautomations`` periodically so paused actions and timer
-triggers are revived.
+.. code-block:: python
+
+    TASKS = {
+        "default": {
+            "BACKEND": "djangocms_automation.backends.DatabaseBackend",
+            "QUEUES": ["default"],
+        }
+    }
+
+Run one or more workers separately from the web process:
+
+.. code-block:: bash
+
+    python manage.py runworker
+
+Automatic retry and recovery are built into the current release. A plugin's
+:class:`~djangocms_automation.retry.RetryPolicy` controls which exceptions may
+be retried, the attempt budget, and backoff. Running actions renew an execution
+lease; if a worker disappears, the scheduler detects the expired lease and
+either reschedules the action or dead-letters it when no attempts remain. The
+database backend also persists queued tasks and releases queue claims abandoned
+by dead workers.
+
+Continue to run ``python manage.py runautomations`` periodically. It recovers
+expired action leases, revives due retries and paused actions, reconciles joins,
+and fires timer triggers. The worker and scheduler are both required for the
+full production reliability model. See :doc:`../howto/deployment` for the
+complete process layout and :doc:`../explanation/execution-lifecycle` for why
+retries and recovery behave this way.

@@ -7,8 +7,10 @@ Supported forms:
   sequences ``\n``, ``\t``, ``\r``, ``\\``, ``\"`` and ``\'``.
 - Variable references composed of dotted identifiers, for example
   ``user.profile.age``, resolved against a provided context dict. Each segment
-  must match ``[A-Za-z_][A-Za-z0-9_]*``. Traversal follows dictionary keys or
-  object attributes; lists and tuples are traversed with an integer segment.
+  must match ``[A-Za-z_][A-Za-z0-9_]*``. Traversal follows dictionary keys;
+  lists and tuples are traversed with an integer segment. Object attributes are
+  deliberately not accessible because automation data is restricted to safe,
+  JSON-like values.
 
 This intentionally does **not** execute arbitrary Python code and supports no
 operators — it is a minimal safe resolver. Extend it carefully.

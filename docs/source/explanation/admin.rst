@@ -27,10 +27,13 @@ The three are separated by tense, but also by audience: the person composing a
 workflow, the person working out why a run went wrong, and the person keeping the
 service alive are rarely the same person, and rarely need the same access.
 
-The permissions follow that split. Definition entries have full add and change
-forms. Record and machinery entries have no add form at all, and their change
-forms are read-only. That asymmetry is deliberate, and the rest of this page is
-mostly about why.
+The permissions mostly follow that split. Definition entries have full add and
+change forms. Append-only event logs, dead letters, and queued tasks have no add
+or editable change form; the scheduler lock also cannot be added and exposes
+only read-only fields. **Execution Instances** is the exception among records:
+Django exposes add and change forms for it, although manually creating or
+editing an instance is not a supported execution workflow. That asymmetry is
+deliberate, and the rest of this page is mostly about why.
 
 Why the definition is barely in the admin
 -----------------------------------------
