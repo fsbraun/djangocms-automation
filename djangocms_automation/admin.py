@@ -339,6 +339,10 @@ class AutomationInstanceEventAdmin(admin.ModelAdmin):
     def has_change_permission(self, request, obj=None):
         return False
 
+    def has_delete_permission(self, request, obj=None):
+        # An audit log you can delete from is not an audit log.
+        return False
+
 
 @admin.register(AutomationActionEvent)
 class AutomationActionEventAdmin(admin.ModelAdmin):

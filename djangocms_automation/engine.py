@@ -328,10 +328,16 @@ def dead_letter(action: AutomationAction) -> None:
             "attempt": action.attempt_count,
         },
     )
-    try:
-        action_dead_lettered.send(sender=AutomationAction, action=action)
-    except Exception:
-        logger.exception("automation.signal.failed", extra={"automation_action_id": action.pk})
+
+    def _announce():
+        try:
+            action_dead_lettered.send(sender=AutomationAction, action=action)
+        except Exception:
+            logger.exception("automation.signal.failed", extra={"automation_action_id": action.pk})
+
+    # Dead-lettering now happens inside the transaction that fails the action,
+    # so the announcement waits for that to land.
+    transaction.on_commit(_announce)
 
 
 def fail_action(
@@ -736,8 +742,22 @@ def resume_action(action_id: int, user, data: dict | None = None) -> AutomationA
     if data:
         rows = rows + [data]
 
+    # Reject a stale claim before doing anything else. The transition below is
+    # still the authority under lock; this only keeps an action that is no
+    # longer waiting from being failed by the missing-plugin path.
+    if action.state != WAITING:
+        raise ValueError("Action is no longer waiting.")
+
     plugin_map = build_plugin_map(action.automation_instance.automation_content_id)
     plugin = plugin_map.get(action.plugin_ptr)
+    if plugin is None:
+        # Fail from WAITING, before the resume. Completing first and failing
+        # afterwards asks for COMPLETED -> FAILED, which the lifecycle forbids:
+        # the whole transaction would roll back and leave the action waiting,
+        # permanently unresumable.
+        fail_action(action, "Plugin no longer exists in the automation")
+        action.refresh_from_db()
+        return action
 
     # The resume and what follows it commit together, for the same reason as an
     # action's outcome: a resume that lands without its continuation leaves a
@@ -754,10 +774,6 @@ def resume_action(action_id: int, user, data: dict | None = None) -> AutomationA
         if claimed is None:
             raise ValueError("Action is no longer waiting.")
         action = claimed
-
-        if plugin is None:
-            fail_action(action, "Plugin no longer exists in the automation")
-            return action
 
         next_actions = plugin.get_next_actions(action)
         if next_actions:
@@ -786,8 +802,19 @@ def revive_pending(timestamp: datetime.datetime | None = None) -> int:
         state=PENDING,
         automation_instance__automation_content__automation__is_active=True,
     ).exclude(automation_instance__status=CANCELED)
+    # Hold each revived action off for a lease window. Without it every tick
+    # re-enqueues the same due actions, so a worker outage builds one duplicate
+    # queue row per action per tick. Claiming clears ``next_attempt_at``, so an
+    # action a worker actually picks up is unaffected; one that is not picked up
+    # simply comes round again on a later tick.
+    hold_until = timestamp + datetime.timedelta(seconds=float(getattr(settings, "AUTOMATION_LEASE_SECONDS", 300)))
     count = 0
-    for action in actions:
+    for action in list(actions):
+        held = AutomationAction.objects.filter(pk=action.pk, state=PENDING, finished__isnull=True).update(
+            next_attempt_at=hold_until
+        )
+        if not held:
+            continue  # Claimed or finished between the scan and here.
         enqueue_action(action.pk)
         count += 1
     return count
@@ -883,11 +910,6 @@ def recover_expired_leases(timestamp: datetime.datetime | None = None, limit: in
                 "attempt": transitioned.attempt_count,
             },
         )
-        if transitioned.state == FAILED:
-            # Done outside the row lock: walking ancestors while holding it
-            # invites deadlocks with workers locking those same rows.
-            dead_letter(transitioned)
-            propagate_failure(transitioned)
     return recovered
 
 
@@ -950,6 +972,14 @@ def _recover_one(action_id: int, timestamp: datetime.datetime, plugin_maps: dict
                 metadata={"recovery": reason},
                 require_lease=action.lease_id,
             )
+        if transitioned is not None and transitioned.state == FAILED:
+            # Inside the transaction: a FAILED action committed without its
+            # dead-letter mark and instance failure cannot be repaired, because
+            # the next recovery pass skips terminal actions entirely. The
+            # ancestor walk always locks child before parent, so the consistent
+            # ordering keeps it deadlock-free.
+            dead_letter(transitioned)
+            propagate_failure(transitioned)
         return transitioned, reason
 
 
@@ -1255,14 +1285,26 @@ def fire_due_timers(timestamp: datetime.datetime | None = None, catch_up: int | 
             stale = max_age is not None and (timestamp - due).total_seconds() > float(max_age)
             if stale:
                 skipped += 1
+                config["last_fired"] = due.isoformat()
             else:
-                trigger.trigger_execution(data=[{"scheduled_at": due.isoformat(), "fired_at": timestamp.isoformat()}])
+                # Firing and recording the occurrence commit together, so a
+                # scheduler that dies between them cannot fire it twice. The
+                # idempotency key is belt and braces: derived from the trigger
+                # and the occurrence itself, it makes a repeat delivery a no-op
+                # even if the config write is somehow lost.
+                with transaction.atomic():
+                    trigger.trigger_execution(
+                        data=[{"scheduled_at": due.isoformat(), "fired_at": timestamp.isoformat()}],
+                        idempotency_key=f"timer:{trigger.pk}:{due.isoformat()}",
+                    )
+                    config["last_fired"] = due.isoformat()
+                    config["fired_count"] = int(config.get("fired_count", 0)) + 1
+                    trigger.config = config
+                    trigger.save(update_fields=["config"])
                 fired_here += 1
-            config["last_fired"] = due.isoformat()
-            config["fired_count"] = int(config.get("fired_count", 0)) + (0 if stale else 1)
             if skipped > 10000:  # pathological config guard
                 break
-        if fired_here or skipped:
+        if skipped:
             trigger.config = config
             trigger.save(update_fields=["config"])
         if skipped:

@@ -623,8 +623,13 @@ def test_replay_refuses_an_unfinished_action(run_setup, settings):
 
 
 @pytest.mark.django_db
-def test_transitions_emit_a_signal(run_setup, settings):
-    """The signal is the supported hook for metrics and tracing."""
+def test_transitions_emit_a_signal(run_setup, settings, django_capture_on_commit_callbacks):
+    """The signal is the supported hook for metrics and tracing.
+
+    Emission is deferred to commit — a transition can still roll back with the
+    work that follows it — so the callbacks have to be run for the test to see
+    anything.
+    """
     from djangocms_automation.signals import action_transitioned
 
     seen = []
@@ -634,7 +639,8 @@ def test_transitions_emit_a_signal(run_setup, settings):
 
     action_transitioned.connect(receiver)
     try:
-        run(trigger=run_setup[0], placeholder=run_setup[1], plugin_type="SlowPlugin", settings=settings)
+        with django_capture_on_commit_callbacks(execute=True):
+            run(trigger=run_setup[0], placeholder=run_setup[1], plugin_type="SlowPlugin", settings=settings)
     finally:
         action_transitioned.disconnect(receiver)
 
@@ -643,7 +649,7 @@ def test_transitions_emit_a_signal(run_setup, settings):
 
 
 @pytest.mark.django_db
-def test_a_broken_receiver_cannot_fail_an_execution(run_setup, settings):
+def test_a_broken_receiver_cannot_fail_an_execution(run_setup, settings, django_capture_on_commit_callbacks):
     """Observability must never take down a run."""
     from djangocms_automation.signals import action_transitioned
 
@@ -652,7 +658,8 @@ def test_a_broken_receiver_cannot_fail_an_execution(run_setup, settings):
 
     action_transitioned.connect(broken)
     try:
-        action = run(run_setup[0], run_setup[1], "SlowPlugin", settings)
+        with django_capture_on_commit_callbacks(execute=True):
+            action = run(run_setup[0], run_setup[1], "SlowPlugin", settings)
     finally:
         action_transitioned.disconnect(broken)
 
@@ -892,7 +899,7 @@ def test_lost_wakeup_guard_wakes_a_parent_whose_children_all_finished(run_setup,
 
 
 @pytest.mark.django_db
-def test_a_broken_instance_receiver_cannot_fail_a_run(run_setup, settings):
+def test_a_broken_instance_receiver_cannot_fail_a_run(run_setup, settings, django_capture_on_commit_callbacks):
     """As for action transitions, instance observability must never break a run."""
     from djangocms_automation.signals import instance_finished
 
@@ -901,7 +908,8 @@ def test_a_broken_instance_receiver_cannot_fail_a_run(run_setup, settings):
 
     instance_finished.connect(broken)
     try:
-        action = run(trigger=run_setup[0], placeholder=run_setup[1], plugin_type="SlowPlugin", settings=settings)
+        with django_capture_on_commit_callbacks(execute=True):
+            action = run(trigger=run_setup[0], placeholder=run_setup[1], plugin_type="SlowPlugin", settings=settings)
     finally:
         instance_finished.disconnect(broken)
 
@@ -1092,7 +1100,9 @@ def test_replaying_a_top_level_action_has_no_ancestors_to_reopen(run_setup, sett
 
 
 @pytest.mark.django_db
-def test_a_broken_dead_letter_receiver_does_not_block_propagation(run_setup, settings):
+def test_a_broken_dead_letter_receiver_does_not_block_propagation(
+    run_setup, settings, django_capture_on_commit_callbacks
+):
     """A raising receiver must not leave the failure un-propagated."""
     from djangocms_automation.signals import action_dead_lettered
 
@@ -1103,7 +1113,8 @@ def test_a_broken_dead_letter_receiver_does_not_block_propagation(run_setup, set
 
     action_dead_lettered.connect(broken)
     try:
-        action = run(trigger, placeholder, "UnknownFailurePlugin", settings)
+        with django_capture_on_commit_callbacks(execute=True):
+            action = run(trigger, placeholder, "UnknownFailurePlugin", settings)
     finally:
         action_dead_lettered.disconnect(broken)
 
@@ -1749,3 +1760,119 @@ def test_reconciliation_waits_out_the_grace_period(run_setup, settings):
 
     # The action finished a moment ago, well inside the lease window.
     assert engine.reconcile_stalled_instances() == 0
+
+
+# --------------------------------------------------------------------------
+# Scheduler idempotency
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_a_timer_occurrence_fires_once_even_if_it_is_replayed(run_setup, settings):
+    """Firing and recording an occurrence commit together, and the occurrence
+    carries a deterministic key, so a scheduler crash between the two cannot
+    produce a second run of the same occurrence."""
+    trigger, placeholder = run_setup
+    add_plugin(placeholder=placeholder, plugin_type="ActionPlugin", language=settings.LANGUAGE_CODE)
+    due = now() - datetime.timedelta(minutes=5)
+    trigger.type = "timer"
+    trigger.config = {"scheduled_at": due.isoformat()}
+    trigger.save()
+
+    assert engine.fire_due_timers() == 1
+    before = AutomationInstance.objects.count()
+
+    # Simulate the crash: the occurrence fired but `last_fired` was never saved.
+    config = dict(trigger.config)
+    config.pop("last_fired", None)
+    config.pop("fired_count", None)
+    trigger.config = config
+    trigger.save(update_fields=["config"])
+
+    engine.fire_due_timers()
+
+    assert AutomationInstance.objects.count() == before, "the same occurrence ran twice"
+
+
+@pytest.mark.django_db
+def test_reviving_holds_an_action_off_until_the_lease_window(run_setup, settings):
+    """Otherwise a worker outage builds one duplicate queue row per tick.
+
+    Uses the dummy backend so the enqueue goes nowhere: the point is what the
+    *scheduler* does with an action no worker has picked up.
+    """
+    trigger, placeholder = run_setup
+    action = run(trigger, placeholder, "FlakyPlugin", settings)
+    settings.TASKS = {"default": {"BACKEND": "django.tasks.backends.dummy.DummyBackend"}}
+    AutomationAction.objects.filter(pk=action.pk).update(
+        state=PENDING, finished=None, next_attempt_at=None, paused_until=None
+    )
+
+    assert engine.revive_pending() == 1
+    action.refresh_from_db()
+    assert action.next_attempt_at is not None, "a revived action must be held off"
+
+    # Ticking again straight away must not queue the same work a second time.
+    assert engine.revive_pending() == 0
+    assert engine.revive_pending() == 0
+
+
+@pytest.mark.django_db
+def test_claiming_clears_the_revival_hold(run_setup, settings):
+    """The hold must not delay an action a worker actually picked up."""
+    trigger, placeholder = run_setup
+    action = run(trigger, placeholder, "SlowPlugin", settings)
+    AutomationAction.objects.filter(pk=action.pk).update(
+        state=PENDING, finished=None, next_attempt_at=now() + datetime.timedelta(minutes=5)
+    )
+
+    claimed = engine.claim_action(action.pk)
+    assert claimed is not None
+    assert claimed.next_attempt_at is None
+
+
+@pytest.mark.django_db
+def test_recovery_dead_letters_in_the_same_commit_as_the_failure(run_setup, settings, monkeypatch):
+    """A FAILED action without its dead-letter mark cannot be repaired: the next
+    recovery pass skips terminal actions entirely."""
+    trigger, placeholder = run_setup
+    action = run(trigger, placeholder, "SlowPlugin", settings)
+    stale = now() - datetime.timedelta(hours=1)
+    AutomationAction.objects.filter(pk=action.pk).update(
+        state=RUNNING, finished=None, started=stale, heartbeat_at=stale, attempt_count=1, max_attempts=1
+    )
+    AutomationInstance.objects.filter(pk=action.automation_instance_id).update(status=RUNNING, finished=None)
+
+    def explode(failed):
+        raise RuntimeError("scheduler died before propagating")
+
+    monkeypatch.setattr(engine, "propagate_failure", explode)
+    with pytest.raises(RuntimeError):
+        engine.recover_expired_leases()
+
+    action.refresh_from_db()
+    assert action.state == RUNNING, "the failure must not survive without its consequences"
+    assert action.dead_lettered is False
+
+
+# --------------------------------------------------------------------------
+# Resuming an action whose plugin is gone
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_resuming_an_action_whose_plugin_vanished_fails_it(run_setup, settings, admin_user):
+    """Completing first and failing afterwards would ask for COMPLETED -> FAILED,
+    which the lifecycle forbids — rolling back and leaving the action waiting
+    forever."""
+    trigger, placeholder = run_setup
+    action = run(trigger, placeholder, "SlowPlugin", settings)
+    AutomationAction.objects.filter(pk=action.pk).update(
+        state=WAITING, finished=None, requires_interaction=True, plugin_ptr=uuid.uuid4()
+    )
+    AutomationInstance.objects.filter(pk=action.automation_instance_id).update(status=RUNNING, finished=None)
+
+    resumed = engine.resume_action(action.pk, admin_user)
+
+    assert resumed.state == FAILED, "it must not be left waiting and unresumable"
+    assert AutomationAction.objects.get(pk=action.pk).state == FAILED

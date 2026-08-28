@@ -61,7 +61,13 @@ MUTABLE_ACTION_FIELDS = frozenset(
 
 
 def _emit(action, from_state: str, to_state: str, metadata: dict) -> None:
-    """Log the transition and notify observers, never raising into the engine."""
+    """Log the transition and notify observers, never raising into the engine.
+
+    Deferred to commit by its callers: they wrap a transition together with the
+    work that follows it, so a transition that has been written can still roll
+    back. An observer told about a state change that never happened is worse
+    than one told a moment late.
+    """
     logger.info(
         "automation.action.transition",
         extra={
@@ -204,7 +210,7 @@ def transition_action(
             lease_id=action.lease_id,
             metadata=metadata or {},
         )
-    _emit(action, from_state, to_state, metadata or {})
+    transaction.on_commit(lambda: _emit(action, from_state, to_state, metadata or {}))
     return action
 
 
@@ -271,17 +277,21 @@ def transition_instance(
             metadata=metadata or {},
         )
 
-    logger.info(
-        "automation.instance.transition",
-        extra={
-            "automation_instance_id": instance.pk,
-            "from_status": from_status,
-            "to_status": to_status,
-        },
-    )
-    if to_status in TERMINAL_STATES:
-        try:
-            instance_finished.send(sender=AutomationInstance, instance=instance, status=to_status)
-        except Exception:
-            logger.exception("automation.signal.failed", extra={"automation_instance_id": instance.pk})
+    def _announce():
+        logger.info(
+            "automation.instance.transition",
+            extra={
+                "automation_instance_id": instance.pk,
+                "from_status": from_status,
+                "to_status": to_status,
+            },
+        )
+        if to_status in TERMINAL_STATES:
+            try:
+                instance_finished.send(sender=AutomationInstance, instance=instance, status=to_status)
+            except Exception:
+                logger.exception("automation.signal.failed", extra={"automation_instance_id": instance.pk})
+
+    # Same reasoning as for actions: announce only what has actually landed.
+    transaction.on_commit(_announce)
     return instance
