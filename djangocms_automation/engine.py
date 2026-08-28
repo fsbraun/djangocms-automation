@@ -863,9 +863,53 @@ def recover_expired_leases(timestamp: datetime.datetime | None = None, limit: in
     # Resolving a plugin means building its whole plugin tree, so cache the maps
     # by automation content: a batch of stranded actions usually shares a few.
     plugin_maps: dict[int, dict] = {}
-    for action in list(candidates):
-        if not action.is_lease_expired(timestamp):
+    for candidate in list(candidates):
+        transitioned, reason = _recover_one(candidate.pk, timestamp, plugin_maps)
+        if transitioned is None:
             continue
+        recovered += 1
+        logger.warning(
+            "automation.action.recovered",
+            extra={
+                "automation_action_id": transitioned.pk,
+                "reason": reason,
+                "attempt": transitioned.attempt_count,
+            },
+        )
+        if transitioned.state == FAILED:
+            # Done outside the row lock: walking ancestors while holding it
+            # invites deadlocks with workers locking those same rows.
+            dead_letter(transitioned)
+            propagate_failure(transitioned)
+    return recovered
+
+
+def _recover_one(action_id: int, timestamp: datetime.datetime, plugin_maps: dict):
+    """Recover one stranded action, re-checking its lease under a row lock.
+
+    The candidate scan is unlocked, so by the time an action is reached its
+    worker may have heartbeated and be perfectly healthy again. Recovering it on
+    the strength of that stale snapshot would take the action away from a
+    running worker and start a duplicate — exactly what the lease prevents
+    everywhere else. So the row is locked and expiry re-checked inside the same
+    transaction as the transition; a heartbeat arriving concurrently blocks on
+    that lock and is either already applied (we skip) or applied after (it finds
+    the action no longer ``RUNNING`` under its lease, and does nothing).
+
+    :returns: ``(transitioned_action_or_None, reason)``.
+    """
+    with transaction.atomic():
+        action = (
+            AutomationAction.objects.select_for_update()
+            .select_related("automation_instance")
+            .filter(pk=action_id)
+            .first()
+        )
+        if action is None or action.state != RUNNING or action.finished is not None:
+            return None, ""
+        if not action.is_lease_expired(timestamp):
+            return None, ""  # A heartbeat landed after the scan: the worker is alive.
+
         # Use the plugin's own retry policy, not just the persisted attempt
         # budget: its backoff, multiplier, cap and jitter shape how a recovered
         # action is rescheduled, and a crash is no reason to ignore them.
@@ -877,6 +921,7 @@ def recover_expired_leases(timestamp: datetime.datetime | None = None, limit: in
             and (timestamp - action.started).total_seconds() > action.timeout_seconds
         )
         reason = "timed out" if timed_out else "lease expired"
+
         if action.attempt_count < max_attempts:
             due = timestamp + datetime.timedelta(seconds=policy.next_delay(action.attempt_count))
             transitioned = transition_action(
@@ -886,6 +931,7 @@ def recover_expired_leases(timestamp: datetime.datetime | None = None, limit: in
                 message=f"Recovered: {reason}, retrying"[:MAX_FIELD_LENGTH],
                 metadata={"recovery": reason},
                 field_updates={"next_attempt_at": due, "paused_until": due},
+                require_lease=action.lease_id,
             )
         else:
             transitioned = transition_action(
@@ -895,21 +941,9 @@ def recover_expired_leases(timestamp: datetime.datetime | None = None, limit: in
                 result={"error": f"Action {reason}"},
                 message=f"Recovered: {reason}, no attempts left"[:MAX_FIELD_LENGTH],
                 metadata={"recovery": reason},
+                require_lease=action.lease_id,
             )
-            if transitioned is not None:
-                dead_letter(transitioned)
-                propagate_failure(transitioned)
-        if transitioned is not None:
-            recovered += 1
-            logger.warning(
-                "automation.action.recovered",
-                extra={
-                    "automation_action_id": action.pk,
-                    "reason": reason,
-                    "attempt": action.attempt_count,
-                },
-            )
-    return recovered
+        return transitioned, reason
 
 
 def reconcile_waiting_joins(limit: int = 500) -> int:

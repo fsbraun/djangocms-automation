@@ -1430,3 +1430,63 @@ def test_recovery_uses_the_plugins_backoff(run_setup, settings):
     assert (action.next_attempt_at - now()).total_seconds() < 5, (
         "recovery ignored the plugin's backoff and used the default"
     )
+
+
+@pytest.mark.django_db
+def test_a_heartbeat_racing_recovery_saves_the_action(run_setup, settings):
+    """The candidate scan is unlocked, so its snapshot can already be stale.
+
+    If a heartbeat lands between the scan and the transition, the worker is
+    alive and recovery must stand down — taking the action away from it would
+    start the duplicate the lease exists to prevent. Expiry is therefore
+    re-checked under the row lock, inside the transition's transaction.
+    """
+    trigger, placeholder = run_setup
+    action = run(trigger, placeholder, "SlowPlugin", settings)
+    stale = now() - datetime.timedelta(hours=1)
+    AutomationAction.objects.filter(pk=action.pk).update(
+        state=RUNNING,
+        finished=None,
+        started=stale,
+        heartbeat_at=stale,
+        lease_id=uuid.uuid4(),
+        # A timeout is recovered whatever the heartbeat says; this test is about
+        # the lease-expiry path, so leave the action without one.
+        timeout_seconds=None,
+    )
+    AutomationInstance.objects.filter(pk=action.automation_instance_id).update(status=RUNNING, finished=None)
+
+    # The scan sees an expired lease...
+    timestamp = now()
+    candidate = AutomationAction.objects.get(pk=action.pk)
+    assert candidate.is_lease_expired(timestamp), "the scan must consider it abandoned"
+
+    # ...but the worker heartbeats before recovery gets the row lock.
+    AutomationAction.objects.filter(pk=action.pk).update(heartbeat_at=now())
+
+    transitioned, _reason = engine._recover_one(candidate.pk, timestamp, {})
+
+    assert transitioned is None, "a healthy, heartbeating action must not be recovered"
+    action.refresh_from_db()
+    assert action.state == RUNNING
+
+
+@pytest.mark.django_db
+def test_recovery_skips_an_action_that_finished_after_the_scan(run_setup, settings):
+    """The same staleness applies to an action that simply completed."""
+    trigger, placeholder = run_setup
+    action = run(trigger, placeholder, "SlowPlugin", settings)
+    stale = now() - datetime.timedelta(hours=1)
+    AutomationAction.objects.filter(pk=action.pk).update(
+        state=RUNNING, finished=None, started=stale, heartbeat_at=stale
+    )
+
+    # It is COMPLETED by the time recovery reaches it.
+    candidates = list(AutomationAction.objects.filter(pk=action.pk))
+    AutomationAction.objects.filter(pk=action.pk).update(state=COMPLETED, finished=now())
+
+    transitioned, _reason = engine._recover_one(candidates[0].pk, now(), {})
+    assert transitioned is None
+
+    action.refresh_from_db()
+    assert action.state == COMPLETED
