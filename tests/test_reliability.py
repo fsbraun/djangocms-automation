@@ -1135,6 +1135,18 @@ def test_execution_policy_is_stored_with_the_claim(run_setup, settings):
     assert action.input_data == [{"seed": 1}]
 
 
+def fast_heartbeat(interval: float = 0.02):
+    """A heartbeat that ticks fast enough to test.
+
+    ``_Heartbeat`` floors its interval at one second so a pathological lease
+    setting cannot produce a hot loop in production. These tests exercise the
+    retry loop, not that floor, so they lower it after construction.
+    """
+    beat = engine._Heartbeat(action_id=1, lease_id=uuid.uuid4(), interval=interval)
+    beat.interval = interval
+    return beat
+
+
 @pytest.mark.django_db
 def test_a_transient_heartbeat_error_does_not_end_renewal(monkeypatch):
     """One database blip must not leave a healthy action looking abandoned."""
@@ -1147,7 +1159,7 @@ def test_a_transient_heartbeat_error_does_not_end_renewal(monkeypatch):
         return True
 
     monkeypatch.setattr("djangocms_automation.transitions.heartbeat_action", flaky)
-    beat = engine._Heartbeat(action_id=1, lease_id=uuid.uuid4(), interval=0.05)
+    beat = fast_heartbeat()
     with beat:
         deadline = now() + datetime.timedelta(seconds=5)
         while now() < deadline and calls["n"] < 3:
@@ -1157,8 +1169,14 @@ def test_a_transient_heartbeat_error_does_not_end_renewal(monkeypatch):
 
 
 @pytest.mark.django_db
-def test_heartbeat_gives_up_after_repeated_failures(monkeypatch):
-    """It must not spin forever against a database that is genuinely gone."""
+def test_heartbeat_never_gives_up_while_the_action_runs(monkeypatch):
+    """A long outage must not end renewal.
+
+    The action keeps executing whatever the database is doing. A thread that
+    stopped retrying would leave a stale heartbeat behind, and the scheduler
+    would start a duplicate the moment the database came back — the exact
+    failure the lease exists to prevent.
+    """
     calls = {"n": 0}
 
     def always_fails(action_id, lease_id):
@@ -1166,13 +1184,82 @@ def test_heartbeat_gives_up_after_repeated_failures(monkeypatch):
         raise RuntimeError("database is down")
 
     monkeypatch.setattr("djangocms_automation.transitions.heartbeat_action", always_fails)
-    beat = engine._Heartbeat(action_id=1, lease_id=uuid.uuid4(), interval=0.05)
+    beat = fast_heartbeat()
     with beat:
         deadline = now() + datetime.timedelta(seconds=5)
-        while now() < deadline and beat._thread.is_alive():
-            threading.Event().wait(0.05)
+        while now() < deadline and calls["n"] < 20:
+            threading.Event().wait(0.02)
+        assert beat._thread.is_alive(), "renewal stopped while the action was still running"
 
-    assert calls["n"] == engine._Heartbeat.max_consecutive_failures
+    assert calls["n"] >= 20, "renewal must keep trying for as long as the action runs"
+
+
+@pytest.mark.django_db
+def test_heartbeat_resumes_when_the_database_recovers(monkeypatch):
+    """After an outage the lease must be refreshed again, not left stale."""
+    calls = {"n": 0, "succeeded": 0}
+
+    def down_then_up(action_id, lease_id):
+        calls["n"] += 1
+        if calls["n"] <= 10:
+            raise RuntimeError("database is down")
+        calls["succeeded"] += 1
+        return True
+
+    monkeypatch.setattr("djangocms_automation.transitions.heartbeat_action", down_then_up)
+    beat = fast_heartbeat()
+    with beat:
+        deadline = now() + datetime.timedelta(seconds=5)
+        while now() < deadline and calls["succeeded"] < 3:
+            threading.Event().wait(0.02)
+
+    assert calls["succeeded"] >= 3, "the lease was never refreshed again after recovery"
+
+
+@pytest.mark.django_db
+def test_heartbeat_recycles_its_connection_after_a_failure(monkeypatch):
+    """A failed refresh usually means a dead socket, not a dead database.
+
+    Without dropping it, the thread would keep reusing the same broken
+    connection and could never recover. Django's ``connection`` is thread-local,
+    so this asserts the loop *calls* recycling; the call itself is covered by
+    :func:`test_recycle_connection_closes_the_connection` below.
+    """
+    recycled = {"n": 0}
+
+    def failing(action_id, lease_id):
+        raise RuntimeError("connection reset")
+
+    monkeypatch.setattr("djangocms_automation.transitions.heartbeat_action", failing)
+    beat = fast_heartbeat()
+    beat._recycle_connection = lambda: recycled.__setitem__("n", recycled["n"] + 1)
+    with beat:
+        deadline = now() + datetime.timedelta(seconds=5)
+        while now() < deadline and recycled["n"] < 3:
+            threading.Event().wait(0.02)
+
+    assert recycled["n"] >= 3, "the broken connection was never recycled"
+
+
+@pytest.mark.django_db
+def test_recycle_connection_closes_the_connection(monkeypatch):
+    """The recycling itself: close this thread's connection, tolerating failure."""
+    closed = {"n": 0}
+    monkeypatch.setattr("django.db.connection.close", lambda: closed.__setitem__("n", closed["n"] + 1))
+
+    fast_heartbeat()._recycle_connection()
+    assert closed["n"] == 1
+
+
+@pytest.mark.django_db
+def test_recycle_connection_survives_a_failing_close(monkeypatch):
+    """Recycling is best effort; a failure there must not end renewal."""
+
+    def boom():
+        raise RuntimeError("cannot close")
+
+    monkeypatch.setattr("django.db.connection.close", boom)
+    fast_heartbeat()._recycle_connection()  # must not raise
 
 
 @pytest.mark.django_db
@@ -1185,7 +1272,7 @@ def test_heartbeat_stops_when_the_lease_is_lost(monkeypatch):
         return False
 
     monkeypatch.setattr("djangocms_automation.transitions.heartbeat_action", lease_lost)
-    beat = engine._Heartbeat(action_id=1, lease_id=uuid.uuid4(), interval=0.05)
+    beat = fast_heartbeat()
     with beat:
         deadline = now() + datetime.timedelta(seconds=5)
         while now() < deadline and beat._thread.is_alive():

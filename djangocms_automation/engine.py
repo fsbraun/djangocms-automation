@@ -484,10 +484,20 @@ class _Heartbeat:
     otherwise look abandoned to the scheduler, which would recover it and run it
     a second time — precisely the duplicate side effect leases exist to prevent.
 
-    A daemon thread refreshes the lease at a fraction of the lease window for as
-    long as the action runs. ``heartbeat_action`` only updates rows that still
-    hold the lease, so a stale thread can never revive an action someone else
-    has taken over.
+    A daemon thread refreshes the lease for as long as the action runs.
+    ``heartbeat_action`` only updates rows that still hold the lease, so a stale
+    thread can never revive an action someone else has taken over.
+
+    **It never gives up on its own.** A database outage is exactly when renewal
+    matters most: the action keeps executing regardless, so a thread that
+    stopped retrying would leave a stale heartbeat behind, and the scheduler
+    would start a duplicate as soon as the database came back. Failures are
+    retried indefinitely with capped backoff, and the thread's connection is
+    dropped after each one so a broken socket is replaced rather than reused.
+
+    There are exactly two ways out: the action finishes (``__exit__`` sets the
+    stop event) or the lease is lost, which means someone else owns the action
+    and this thread must stop touching it.
     """
 
     def __init__(self, action_id: int, lease_id, interval: float):
@@ -504,40 +514,64 @@ class _Heartbeat:
         self._thread.start()
         return self
 
-    #: Consecutive failed refreshes tolerated before giving up. A blip must not
-    #: end renewal: the action keeps running either way, so a stale heartbeat
-    #: would let recovery treat a healthy action as abandoned and run it twice.
-    max_consecutive_failures = 5
+    #: How often a continuing outage is logged, in failures. Retrying forever
+    #: must not also mean logging forever.
+    log_every = 10
+
+    def _first_retry_delay(self) -> float:
+        """Retry sooner than the normal interval: the lease is already at risk."""
+        return max(0.05, self.interval / 8)
+
+    def _recycle_connection(self) -> None:
+        """Drop this thread's database connection so the next try gets a fresh one.
+
+        A failed refresh usually means the connection is broken, not that the
+        database is gone. Without this the thread would keep reusing the same
+        dead socket and never recover.
+        """
+        try:
+            from django.db import connection
+
+            connection.close()
+        except Exception:
+            logger.debug("automation.heartbeat.connection_recycle_failed", exc_info=True)
 
     def _run(self):
         from .transitions import heartbeat_action
 
         failures = 0
         delay = self.interval
-        while not self._stop.wait(delay):
-            try:
-                if not heartbeat_action(self.action_id, self.lease_id):
-                    return  # Lease lost or action finished; stop quietly.
-            except Exception:
-                failures += 1
-                logger.warning(
-                    "automation.heartbeat.failed",
-                    extra={"automation_action_id": self.action_id, "consecutive_failures": failures},
-                    exc_info=True,
-                )
-                if failures >= self.max_consecutive_failures:
-                    logger.error(
-                        "automation.heartbeat.abandoned",
+        retry_delay = self._first_retry_delay()
+        try:
+            while not self._stop.wait(delay):
+                try:
+                    if not heartbeat_action(self.action_id, self.lease_id):
+                        return  # Lease lost or action finished; stop quietly.
+                except Exception:
+                    failures += 1
+                    if failures == 1 or failures % self.log_every == 0:
+                        logger.warning(
+                            "automation.heartbeat.failed",
+                            extra={"automation_action_id": self.action_id, "consecutive_failures": failures},
+                            exc_info=True,
+                        )
+                    self._recycle_connection()
+                    delay = retry_delay
+                    # Back off, but never past the normal interval: a recovered
+                    # database must still be noticed inside the lease window.
+                    retry_delay = min(self.interval, retry_delay * 2)
+                    continue
+                if failures:
+                    logger.info(
+                        "automation.heartbeat.recovered",
                         extra={"automation_action_id": self.action_id, "consecutive_failures": failures},
                     )
-                    return
-                # Retry sooner than the normal interval, so a recovered
-                # connection refreshes well before the lease is considered lost.
-                # The floor only prevents a hot loop; the failure cap bounds it.
-                delay = max(0.05, self.interval / 2)
-                continue
-            failures = 0
-            delay = self.interval
+                failures = 0
+                delay = self.interval
+                retry_delay = self._first_retry_delay()
+        finally:
+            # Django opens a connection per thread; this one is ours to close.
+            self._recycle_connection()
 
     def __exit__(self, exc_type, exc, tb):
         self._stop.set()
