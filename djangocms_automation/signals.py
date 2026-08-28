@@ -10,8 +10,8 @@ from __future__ import annotations
 import django.dispatch
 
 __all__ = [
-    "action_transitioned",
     "action_dead_lettered",
+    "action_transitioned",
     "instance_finished",
 ]
 

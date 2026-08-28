@@ -16,13 +16,13 @@ operators — it is a minimal safe resolver. Extend it carefully.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import re
+from dataclasses import dataclass
 from typing import Any
 
 from django.forms import ValidationError
 
-__all__ = ["ExpressionError", "resolve_expression", "is_number_literal", "is_string_literal", "validate_expression"]
+__all__ = ["ExpressionError", "is_number_literal", "is_string_literal", "resolve_expression", "validate_expression"]
 
 
 class ExpressionError(ValidationError):
@@ -55,9 +55,7 @@ def is_string_literal(expr: str) -> bool:
     """
     if len(expr) < 2:
         return False
-    if (expr[0], expr[-1]) in (("'", "'"), ('"', '"')):
-        return True
-    return False
+    return (expr[0], expr[-1]) in (("'", "'"), ('"', '"'))
 
 
 def _parse_number(expr: str) -> int | float:

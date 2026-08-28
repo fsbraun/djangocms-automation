@@ -94,7 +94,7 @@ class DatabaseBackend(BaseTaskBackend):
             # task returned, and its row locks would block cancellation and lease
             # recovery — so a hung action could never be timed out or recovered.
             func(*task_row.args, **task_row.kwargs)
-        except BaseException as exc:  # noqa: BLE001 — recorded, never re-raised at the worker
+        except BaseException as exc:
             import traceback
 
             QueuedTask.objects.filter(pk=task_row.pk).update(

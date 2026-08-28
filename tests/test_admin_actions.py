@@ -6,16 +6,14 @@ reports back to the user.
 """
 
 import pytest
-
+from cms.api import add_plugin
+from cms.models import Placeholder
 from django.contrib.admin.sites import AdminSite
 from django.contrib.auth.models import Permission, User
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.messages.storage.fallback import FallbackStorage
 from django.test import RequestFactory
 from django.utils.timezone import now
-
-from cms.api import add_plugin
-from cms.models import Placeholder
 
 from djangocms_automation.admin import (
     AutomationInstanceAdmin,

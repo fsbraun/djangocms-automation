@@ -3,9 +3,9 @@
 import pytest
 
 from djangocms_automation.utilities.expressions import (
-    resolve_expression,
-    compile_expression,
     ExpressionError,
+    compile_expression,
+    resolve_expression,
 )
 
 

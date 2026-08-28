@@ -56,7 +56,13 @@ dynamic.version = { attr = "djangocms_automation.__version__" }
 target-version = "py310"
 line-length = 119
 exclude = [ "djangocms_automation/migrations" ]
-lint.ignore = []
+lint.ignore = [
+  # Django, django CMS and DRF all declare configuration as plain mutable class
+  # attributes (`list_display`, `child_classes`, `fieldsets`, ...). Annotating
+  # them `ClassVar` is not how those frameworks are written and would make the
+  # code harder to compare with their documentation.
+  "RUF012",
+]
 lint.mccabe.max-complexity = 5
 
 [tool.pytest]

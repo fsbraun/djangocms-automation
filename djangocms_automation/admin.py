@@ -1,5 +1,6 @@
 import json
 
+from cms.admin.utils import ChangeListActionsMixin, GrouperModelAdmin
 from django import forms
 from django.contrib import admin, messages
 from django.contrib.admin.options import IS_POPUP_VAR
@@ -9,22 +10,20 @@ from django.urls import path, reverse
 from django.utils.html import format_html, mark_safe
 from django.utils.translation import gettext_lazy as _
 
-from cms.admin.utils import ChangeListActionsMixin, GrouperModelAdmin
-
 from . import engine
 from .forms import AutomationTriggerAdminForm
-from .models import Automation, AutomationContent, APIKey, AutomationTrigger
-from .queue import QueuedTask
 from .instances import (
+    FAILED,
+    PENDING,
+    RUNNING,
     AutomationAction,
     AutomationActionEvent,
     AutomationInstance,
     DeadLetter,
     SchedulerLock,
-    FAILED,
-    PENDING,
-    RUNNING,
 )
+from .models import APIKey, Automation, AutomationContent, AutomationTrigger
+from .queue import QueuedTask
 from .triggers import trigger_registry
 
 
@@ -473,18 +472,17 @@ class AutomationTriggerAdmin(ChangeListActionsMixin, admin.ModelAdmin):
         ]
         trigger_class, changed = self.get_trigger(request, obj)
         # Add config fieldset if trigger has config fields
-        if trigger_class and not changed:
-            if trigger_class.declared_fields:
-                # Get all config field names (with config_ prefix)
-                base_fieldsets.append(
-                    (
-                        trigger_class.name,
-                        {
-                            "fields": list(trigger_class.declared_fields.keys()),
-                            "classes": ("collapse",),
-                        },
-                    )
+        if trigger_class and not changed and trigger_class.declared_fields:
+            # Get all config field names (with config_ prefix)
+            base_fieldsets.append(
+                (
+                    trigger_class.name,
+                    {
+                        "fields": list(trigger_class.declared_fields.keys()),
+                        "classes": ("collapse",),
+                    },
                 )
+            )
         return base_fieldsets
 
     def get_form(self, request, obj=None, **kwargs):

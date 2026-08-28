@@ -23,10 +23,10 @@ import random
 from dataclasses import dataclass, field
 
 __all__ = [
-    "RetryableError",
+    "DEFAULT_RETRY_POLICY",
     "PermanentError",
     "RetryPolicy",
-    "DEFAULT_RETRY_POLICY",
+    "RetryableError",
 ]
 
 

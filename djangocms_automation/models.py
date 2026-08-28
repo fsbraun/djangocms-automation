@@ -1,22 +1,21 @@
 import uuid
 
+from cms.models import CMSPlugin, Placeholder
+from cms.models.fields import PlaceholderRelationField
 from django.db import models, transaction
 from django.utils.translation import gettext_lazy as _
 
-from cms.models import CMSPlugin, Placeholder
-from cms.models.fields import PlaceholderRelationField
-
 from .instances import (  # noqa F401
-    AutomationInstance,
-    AutomationAction,
-    DeadLetter,
-    SchedulerLock,
     CANCELED,
-    RUNNING,
-    PENDING,
-    WAITING,
     COMPLETED,
     FAILED,
+    PENDING,
+    RUNNING,
+    WAITING,
+    AutomationAction,
+    AutomationInstance,
+    DeadLetter,
+    SchedulerLock,
 )
 from .queue import QueuedTask  # noqa F401 — registers the durable queue model
 from .services import service_registry
@@ -63,7 +62,7 @@ class AutomationContent(models.Model):
         :returns: Always None.
         :rtype: None
         """
-        return None
+        return
 
     def get_placeholder_slots(self) -> list[str]:
         """Get slot names for all triggers.
@@ -130,12 +129,14 @@ class AutomationTrigger(models.Model):
         """
         from django.db import IntegrityError
 
-        if idempotency_key:
-            if AutomationInstance.objects.filter(
+        if (
+            idempotency_key
+            and AutomationInstance.objects.filter(
                 automation_content=self.automation_content,
                 idempotency_key=idempotency_key,
-            ).exists():
-                return  # Already executed for this key — idempotent no-op.
+            ).exists()
+        ):
+            return  # Already executed for this key — idempotent no-op.
 
         try:
             placeholder = Placeholder.objects.get_for_obj(self.automation_content).get(slot=self.slot)
@@ -289,18 +290,17 @@ class AutomationPluginModel(CMSPlugin):
             return []
 
         next_plugin = self.next_plugin_instance
-        if next_plugin:
-            # Only create action if the plugin has uuid (is an AutomationPluginModel)
-            if hasattr(next_plugin, "uuid"):
-                return [
-                    AutomationAction.objects.create(
-                        previous=action,
-                        parent=action.parent,
-                        automation_instance=action.automation_instance,
-                        plugin_ptr=next_plugin.uuid,
-                        finished=None,
-                    )
-                ]
+        # Only create an action if the next plugin has a uuid (is an AutomationPluginModel)
+        if next_plugin and hasattr(next_plugin, "uuid"):
+            return [
+                AutomationAction.objects.create(
+                    previous=action,
+                    parent=action.parent,
+                    automation_instance=action.automation_instance,
+                    plugin_ptr=next_plugin.uuid,
+                    finished=None,
+                )
+            ]
         return []
 
 
@@ -563,8 +563,8 @@ class BaseActionPluginModel(AutomationPluginModel):
         ``data_form`` are rendered with ``safe_render`` (``{{ path }}``
         substitution); all other fields are resolved as expressions.
         """
-        from django import forms as django_forms
         from cms.plugin_pool import plugin_pool
+        from django import forms as django_forms
 
         try:
             plugin_cls = plugin_pool.get_plugin(self.plugin_type)

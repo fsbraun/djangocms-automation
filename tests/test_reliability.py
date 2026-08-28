@@ -10,15 +10,13 @@ import datetime
 import threading
 
 import pytest
-
-from django.contrib.contenttypes.models import ContentType
-from django.core.management import call_command
-from django.utils.timezone import now
-
 from cms.api import add_plugin
 from cms.models import Placeholder
 from cms.plugin_base import CMSPluginBase
 from cms.plugin_pool import plugin_pool
+from django.contrib.contenttypes.models import ContentType
+from django.core.management import call_command
+from django.utils.timezone import now
 
 from djangocms_automation import engine
 from djangocms_automation.instances import (
@@ -38,7 +36,7 @@ from djangocms_automation.models import (
     AutomationTrigger,
     BaseActionPluginModel,
 )
-from djangocms_automation.retry import PermanentError, RetryPolicy, RetryableError
+from djangocms_automation.retry import PermanentError, RetryableError, RetryPolicy
 
 #: Execution counters keyed by plugin name, reset by the ``counters`` fixture.
 CALLS: dict[str, int] = {}

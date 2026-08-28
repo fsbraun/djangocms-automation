@@ -2,8 +2,8 @@
 
 import json
 
-from djangocms_automation.widgets import TriggerSelectWidget, ConditionBuilderWidget
 from djangocms_automation.triggers import trigger_registry
+from djangocms_automation.widgets import ConditionBuilderWidget, TriggerSelectWidget
 
 
 def test_trigger_select_widget_renders_choices_and_description():

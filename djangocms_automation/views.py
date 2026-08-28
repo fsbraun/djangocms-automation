@@ -1,3 +1,6 @@
+from cms.models import Placeholder
+from cms.toolbar.utils import get_object_edit_url, get_object_preview_url
+from cms.utils import get_language_from_request
 from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
 from django.http import Http404, HttpResponseRedirect, JsonResponse
@@ -5,10 +8,6 @@ from django.utils.decorators import method_decorator
 from django.views import View
 from django.views.decorators.csrf import csrf_exempt
 from django.views.generic import DetailView
-
-from cms.models import Placeholder
-from cms.utils import get_language_from_request
-from cms.toolbar.utils import get_object_edit_url, get_object_preview_url
 
 from .models import AutomationContent, AutomationTrigger
 from .triggers import WebhookTrigger
@@ -61,7 +60,7 @@ class WebhookView(View):
                     return JsonResponse({"error": "Payload does not match the trigger's data schema."}, status=400)
             try:
                 trigger.trigger_execution(data=rows, start=True, idempotency_key=idempotency_key)
-            except Exception:
+            except Exception:  # noqa: BLE001 — never leak an internal error to a webhook caller
                 return JsonResponse({"error": "Automation execution failed."}, status=500)
             fired += 1
 

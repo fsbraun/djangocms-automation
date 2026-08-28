@@ -14,9 +14,9 @@ from __future__ import annotations
 from django import forms
 from django.utils.translation import gettext_lazy as _
 
+from . import widgets
 from .models import AutomationTrigger, ConditionalPluginModel
 from .triggers import trigger_registry
-from . import widgets
 
 
 class TriggerChoiceField(forms.ChoiceField):
@@ -70,7 +70,7 @@ class AutomationTriggerAdminForm(forms.ModelForm):
         if trigger_type:
             trigger_class = trigger_registry.get(trigger_type)
             if trigger_class:
-                for field_name in trigger_class.declared_fields.keys():
+                for field_name in trigger_class.declared_fields:
                     if field_name in cleaned_data:
                         value = cleaned_data[field_name]
                         # Convert datetime objects to ISO strings for JSON storage

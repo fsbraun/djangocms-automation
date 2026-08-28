@@ -9,9 +9,9 @@ class StoriesCMSConfig(CMSAppConfig):
     cms_toolbar_enabled_models = [(AutomationContent, AutomationView.as_view(), "automation")]
     djangocms_versioning_enabled = True
     if djangocms_versioning_enabled:
-        from packaging.version import Version as PackageVersion
         from djangocms_versioning import __version__ as djangocms_versioning_version
-        from djangocms_versioning.datastructures import default_copy, VersionableItem
+        from djangocms_versioning.datastructures import VersionableItem, default_copy
+        from packaging.version import Version as PackageVersion
 
         if PackageVersion(djangocms_versioning_version) < PackageVersion("2.4"):  # pragma: no cover
             raise ImportError(

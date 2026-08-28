@@ -10,16 +10,14 @@ database-backed queue and a worker draining it explicitly.
 import datetime
 
 import pytest
-
-from django.contrib.contenttypes.models import ContentType
-from django.core.management import call_command
-from django.db import transaction
-from django.utils.timezone import now
-
 from cms.api import add_plugin
 from cms.models import Placeholder
 from cms.plugin_base import CMSPluginBase
 from cms.plugin_pool import plugin_pool
+from django.contrib.contenttypes.models import ContentType
+from django.core.management import call_command
+from django.db import transaction
+from django.utils.timezone import now
 
 from djangocms_automation.instances import (
     COMPLETED,
@@ -127,10 +125,9 @@ def test_rolled_back_transaction_enqueues_nothing(setup):
     class Rollback(Exception):
         pass
 
-    with pytest.raises(Rollback):
-        with transaction.atomic():
-            trigger.trigger_execution(data=[{"seed": 1}])
-            raise Rollback
+    with pytest.raises(Rollback), transaction.atomic():
+        trigger.trigger_execution(data=[{"seed": 1}])
+        raise Rollback
 
     assert QueuedTask.objects.count() == 0
     assert AutomationInstance.objects.count() == 0

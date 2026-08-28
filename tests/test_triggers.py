@@ -4,10 +4,10 @@ import pytest
 from jsonschema import ValidationError
 
 from djangocms_automation.triggers import (
-    trigger_registry,
     ClickTrigger,
     MailTrigger,
     TimerTrigger,
+    trigger_registry,
 )
 
 

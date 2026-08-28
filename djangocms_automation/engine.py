@@ -34,14 +34,13 @@ import threading
 import traceback
 import uuid as uuid_module
 
+from cms.models import CMSPlugin, Placeholder
+from cms.utils.plugins import downcast_plugins, get_plugins_as_layered_tree
 from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
 from django.db.models import Q
 from django.utils.timezone import now
-
-from cms.models import CMSPlugin, Placeholder
-from cms.utils.plugins import downcast_plugins, get_plugins_as_layered_tree
 
 from .instances import (
     CANCELED,
@@ -66,19 +65,19 @@ __all__ = [
     "build_plugin_map",
     "cancel_instance",
     "claim_action",
-    "run_action",
-    "normalize_rows",
     "enqueue_action",
-    "notify_parent",
     "fail_action",
-    "propagate_failure",
     "maybe_finish_instance",
+    "normalize_rows",
+    "notify_parent",
     "pause_action",
-    "recover_expired_leases",
+    "propagate_failure",
     "reconcile_waiting_joins",
+    "recover_expired_leases",
     "replay_action",
     "resume_action",
     "revive_pending",
+    "run_action",
     "scheduler_lock",
 ]
 
@@ -220,7 +219,7 @@ def enqueue_action(action_id: int, data=None, single_step: bool = False) -> None
     if _is_immediate_backend():
         try:
             _do_enqueue()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — any enqueue failure must be recorded, not raised
             _fail_enqueue(action_id, exc)
     else:
         transaction.on_commit(lambda: _safe_enqueue(_do_enqueue, action_id))
@@ -315,7 +314,7 @@ def dead_letter(action: AutomationAction) -> None:
     )
     try:
         action_dead_lettered.send(sender=AutomationAction, action=action)
-    except Exception:  # noqa: BLE001 — observability must never block failure propagation
+    except Exception:
         logger.exception("automation.signal.failed", extra={"automation_action_id": action.pk})
 
 
@@ -330,9 +329,8 @@ def fail_action(action: AutomationAction, message: str, *, exc: BaseException | 
     policy = get_retry_policy(action)
     if exc is not None and action.state == RUNNING:
         max_attempts = effective_max_attempts(action, policy)
-        if policy.should_retry(exc, action.attempt_count, max_attempts):
-            if schedule_retry(action, exc, policy) is not None:
-                return
+        if policy.should_retry(exc, action.attempt_count, max_attempts) and schedule_retry(action, exc, policy):
+            return
 
     result = {"error": message}
     if exc is not None:
@@ -396,7 +394,7 @@ def finish_instance(instance_id: int, status: str) -> bool:
     )
     try:
         instance_finished.send(sender=AutomationInstance, instance=instance, status=status)
-    except Exception:  # noqa: BLE001 — observability must never fail an execution
+    except Exception:
         logger.exception("automation.signal.failed", extra={"automation_instance_id": instance_id})
     return True
 
@@ -502,7 +500,7 @@ class _Heartbeat:
             try:
                 if not heartbeat_action(self.action_id, self.lease_id):
                     return  # Lease lost or action finished; stop quietly.
-            except Exception:  # noqa: BLE001 — a heartbeat failure must not kill the action
+            except Exception:
                 logger.exception("automation.heartbeat.failed", extra={"automation_action_id": self.action_id})
                 return
 
@@ -894,7 +892,7 @@ def replay_action(action_id: int) -> AutomationAction | None:
     return replacement
 
 
-class scheduler_lock:  # noqa: N801 — used as a context manager, not a class
+class scheduler_lock:
     """Hold a named scheduler lock for the duration of a block.
 
     Falsy when the lock could not be taken, so a second scheduler skips the

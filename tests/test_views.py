@@ -1,13 +1,12 @@
 """Tests for AutomationView context and placeholder handling."""
 
 import pytest
-from django.test import RequestFactory
-from django.contrib.contenttypes.models import ContentType
-
 from cms.models import Placeholder
+from django.contrib.contenttypes.models import ContentType
+from django.test import RequestFactory
 
-from djangocms_automation.views import AutomationView
 from djangocms_automation.models import Automation, AutomationContent, AutomationTrigger
+from djangocms_automation.views import AutomationView
 
 
 @pytest.fixture

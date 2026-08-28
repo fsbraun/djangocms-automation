@@ -3,7 +3,6 @@
 from unittest import mock
 
 import pytest
-
 from django.test import RequestFactory
 
 from djangocms_automation.cms_toolbars import AutomationToolbar

@@ -1,11 +1,9 @@
 """End-to-end tests for conditional (If/Then/Else) branching."""
 
 import pytest
-
-from django.contrib.contenttypes.models import ContentType
-
 from cms.api import add_plugin
 from cms.models import Placeholder
+from django.contrib.contenttypes.models import ContentType
 
 from djangocms_automation.instances import COMPLETED, AutomationAction
 from djangocms_automation.models import (

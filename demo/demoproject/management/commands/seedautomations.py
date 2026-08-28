@@ -8,21 +8,19 @@ is there to open in the editor.
 supposed to survive, so they can be observed rather than only asserted in tests.
 """
 
+import datetime
+
+from cms.api import add_plugin
+from cms.models import Placeholder
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.core.management.base import BaseCommand
 from django.utils.timezone import now
 
-import datetime
-
-from cms.api import add_plugin
-from cms.models import Placeholder
-
-from djangocms_automation.instances import AutomationAction, AutomationInstance, PENDING, RUNNING
+from demoproject.models import Article, Order
+from djangocms_automation.instances import PENDING, RUNNING, AutomationAction, AutomationInstance
 from djangocms_automation.models import Automation, AutomationContent, AutomationTrigger
 from djangocms_automation.queue import QueuedTask
-
-from demoproject.models import Article, Order
 
 LANGUAGE = "en"
 

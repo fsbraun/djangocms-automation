@@ -1,12 +1,10 @@
 """Tests for the Django model CRUD actions."""
 
 import pytest
-
-from django.contrib.auth import get_user_model
-from django.contrib.contenttypes.models import ContentType
-
 from cms.api import add_plugin
 from cms.models import Placeholder
+from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
 
 from djangocms_automation.actions.model_actions import (
     CreateModelActionModel,

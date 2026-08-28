@@ -3,12 +3,10 @@
 import uuid
 
 import pytest
-
-from django.contrib.contenttypes.models import ContentType
-from django.urls import reverse
-
 from cms.api import add_plugin
 from cms.models import Placeholder
+from django.contrib.contenttypes.models import ContentType
+from django.urls import reverse
 
 from djangocms_automation.actions.user_input import UserInputActionPluginModel
 from djangocms_automation.admin import AutomationInstanceAdmin

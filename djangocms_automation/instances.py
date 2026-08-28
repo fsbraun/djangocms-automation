@@ -1,12 +1,11 @@
 import datetime
 import hashlib
 
-from django.db import models
-from django.utils.translation import gettext_lazy as _
-from django.utils.timezone import now
-
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
+from django.db import models
+from django.utils.timezone import now
+from django.utils.translation import gettext_lazy as _
 
 User = get_user_model()
 
@@ -357,9 +356,8 @@ class AutomationAction(models.Model):
         if self.state != RUNNING:
             return False
         timestamp = timestamp or now()
-        if self.timeout_seconds and self.started:
-            if (timestamp - self.started).total_seconds() > self.timeout_seconds:
-                return True
+        if self.timeout_seconds and self.started and (timestamp - self.started).total_seconds() > self.timeout_seconds:
+            return True
         window = getattr(settings, "AUTOMATION_LEASE_SECONDS", 300)
         reference = self.heartbeat_at or self.started
         if reference is None:

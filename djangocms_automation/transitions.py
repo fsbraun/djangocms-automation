@@ -69,7 +69,7 @@ def _emit(action, from_state: str, to_state: str, metadata: dict) -> None:
             duration=action.duration,
             metadata=metadata,
         )
-    except Exception:  # noqa: BLE001 — observability must never fail an execution
+    except Exception:
         logger.exception("automation.signal.failed", extra={"automation_action_id": action.pk})
 
 

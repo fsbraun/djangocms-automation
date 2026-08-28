@@ -24,7 +24,8 @@ import hashlib
 import hmac
 import json
 import secrets
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from django import forms
 from django.apps import apps
@@ -354,9 +355,7 @@ class MailTrigger(WebhookTrigger):
         if subject_contains and subject_contains.lower() not in str(row.get("subject", "")).lower():
             return False
         status_filter = config.get("status_filter")
-        if status_filter and row.get("status") != status_filter:
-            return False
-        return True
+        return not (status_filter and row.get("status") != status_filter)
 
     def parse_payload(self, request, config: dict[str, Any]) -> list[dict[str, Any]]:
         rows = super().parse_payload(request, config)
@@ -542,13 +541,13 @@ trigger_registry.register(FormSubmissionTrigger)
 trigger_registry.register(GenericWebhookTrigger)
 
 __all__ = [
-    "Trigger",
-    "TriggerRegistry",
-    "trigger_registry",
-    "generate_webhook_token",
-    "WebhookTrigger",
-    "GenericWebhookTrigger",
     "ClickTrigger",
+    "GenericWebhookTrigger",
     "MailTrigger",
     "TimerTrigger",
+    "Trigger",
+    "TriggerRegistry",
+    "WebhookTrigger",
+    "generate_webhook_token",
+    "trigger_registry",
 ]

@@ -8,8 +8,7 @@ from django.test import RequestFactory
 from djangocms_automation.admin import AutomationTriggerAdmin
 from djangocms_automation.forms import AutomationTriggerAdminForm
 from djangocms_automation.models import Automation, AutomationContent, AutomationTrigger
-from djangocms_automation.triggers import TimerTrigger, MailTrigger
-
+from djangocms_automation.triggers import MailTrigger, TimerTrigger
 
 User = get_user_model()
 

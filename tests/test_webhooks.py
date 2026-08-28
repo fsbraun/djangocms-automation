@@ -5,12 +5,10 @@ import hmac
 import json
 
 import pytest
-
-from django.contrib.contenttypes.models import ContentType
-from django.urls import reverse
-
 from cms.api import add_plugin
 from cms.models import Placeholder
+from django.contrib.contenttypes.models import ContentType
+from django.urls import reverse
 
 from djangocms_automation.instances import COMPLETED, AutomationAction
 from djangocms_automation.models import Automation, AutomationContent, AutomationTrigger

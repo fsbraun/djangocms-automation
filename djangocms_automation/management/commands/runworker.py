@@ -79,7 +79,7 @@ class Command(BaseCommand):
                 continue
             try:
                 backend._run_now(task_row)
-            except Exception:  # noqa: BLE001 — one bad task must not kill the worker
+            except Exception:
                 logger.exception(
                     "automation.worker.task_failed",
                     extra={"queued_task_id": task_row.pk, "task_path": task_row.task_path},

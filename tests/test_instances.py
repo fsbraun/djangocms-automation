@@ -7,9 +7,8 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
 from django.utils.timezone import now
 
+from djangocms_automation.instances import AutomationAction, AutomationInstance
 from djangocms_automation.models import Automation, AutomationContent
-from djangocms_automation.instances import AutomationInstance, AutomationAction
-
 
 User = get_user_model()
 

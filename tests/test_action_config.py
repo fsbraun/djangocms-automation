@@ -1,11 +1,10 @@
 """Tests for action data_form config persistence (ActionPlugin)."""
 
 import pytest
-
-from django import forms
-from django.test import RequestFactory
-
 from cms.plugin_pool import plugin_pool
+from django import forms
+from django.core.exceptions import ValidationError
+from django.test import RequestFactory
 
 from djangocms_automation.actions.mail import MailActionPluginModel
 
@@ -30,7 +29,7 @@ def test_data_form_fields_expression_and_template_modes(rf_request):
     # Template validator accepts template text that is not a valid expression.
     fields["body"].validators[0]("Hello {{ user.name }}!")
     # Expression validator rejects free text.
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         fields["subject"].validators[0]("not a valid expression!!")
 
 
@@ -64,7 +63,7 @@ def test_save_model_persists_config(rf_request):
     def fake_super_save(request, obj, form, change):
         saved["config"] = obj.config
 
-    import unittest.mock as mock
+    from unittest import mock
 
     with mock.patch("cms.plugin_base.CMSPluginBase.save_model", side_effect=fake_super_save):
         plugin.save_model(rf_request, obj, FakeForm(), change=False)

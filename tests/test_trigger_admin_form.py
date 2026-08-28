@@ -8,10 +8,9 @@ other's form.
 """
 
 import pytest
-
 from django.contrib.admin.sites import AdminSite
-from django.urls import reverse
 from django.test import RequestFactory
+from django.urls import reverse
 
 from djangocms_automation.admin import AutomationTriggerAdmin
 from djangocms_automation.forms import AutomationTriggerAdminForm

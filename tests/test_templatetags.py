@@ -2,11 +2,10 @@
 
 from types import SimpleNamespace
 
-
 from djangocms_automation.templatetags.automation_tags import (
-    then_branch,
     else_branch,
     format_paragraphs,
+    then_branch,
 )
 
 
