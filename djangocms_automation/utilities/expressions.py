@@ -1,14 +1,17 @@
-"""Simple expression resolver.
+r"""Simple expression resolver.
 
 Supported forms:
-        - Integer and float literals (e.g. 42, -3, 3.14, +0.5)
-        - Quoted string literals with single or double quotes. Supports escape sequences: \n, \t, \r, \\ and \" / \'
-        - Variable references composed of dotted identifiers (e.g. user.profile.age)
-          resolved against a provided context dict. Each segment must match /[A-Za-z_][A-Za-z0-9_]*\n+      and traversal follows dictionary keys or object attributes. Lists / tuples can be
-          traversed using an integer segment.
 
-This intentionally does NOT execute arbitrary Python code or support operators – it is a
-minimal safe resolver. Extend carefully if needed.
+- Integer and float literals, for example ``42``, ``-3``, ``3.14`` or ``+0.5``.
+- Quoted string literals using single or double quotes, supporting the escape
+  sequences ``\n``, ``\t``, ``\r``, ``\\``, ``\"`` and ``\'``.
+- Variable references composed of dotted identifiers, for example
+  ``user.profile.age``, resolved against a provided context dict. Each segment
+  must match ``[A-Za-z_][A-Za-z0-9_]*``. Traversal follows dictionary keys or
+  object attributes; lists and tuples are traversed with an integer segment.
+
+This intentionally does **not** execute arbitrary Python code and supports no
+operators — it is a minimal safe resolver. Extend it carefully.
 """
 
 from __future__ import annotations

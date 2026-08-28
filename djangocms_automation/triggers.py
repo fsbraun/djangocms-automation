@@ -1,15 +1,21 @@
 """Trigger registry and base classes for automation triggers.
 
-Provides an abstract base ``Trigger`` class and a global ``trigger_registry``
-for registering concrete triggers that can be referenced by slug/id in
-Automations. Each trigger defines:
-- id: machine identifier (unique key)
-- name: human readable name
-- description: short explanatory text
-- data_schema: JSON schema (Draft 2020-12 compatible subset) describing
-  the expected structure of the trigger data payload.
+Provides an abstract base :class:`Trigger` class and a global
+``trigger_registry`` for registering concrete triggers that can be referenced by
+slug/id in automations. Each trigger defines:
 
-Concrete example triggers are provided for "Click" and "Mail" events.
+``id``
+    Machine identifier, unique across the registry.
+``name``
+    Human readable name, shown in the editor.
+``description``
+    Short explanatory text.
+``data_schema``
+    JSON schema (a Draft 2020-12 compatible subset) describing the expected
+    structure of the trigger's data payload.
+
+Concrete triggers cover manual (``click``), timer, inbound webhook, mail,
+form submission and automation-to-automation (``code``) events.
 """
 
 from __future__ import annotations
