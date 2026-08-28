@@ -10,6 +10,7 @@ other's form.
 import pytest
 
 from django.contrib.admin.sites import AdminSite
+from django.urls import reverse
 from django.test import RequestFactory
 
 from djangocms_automation.admin import AutomationTriggerAdmin
@@ -102,3 +103,99 @@ def test_type_change_post_omits_config_fields(trigger_admin, admin_user):
     form = trigger_admin.get_form(request)
 
     assert not (WEBHOOK_FIELDS & set(form.base_fields))
+
+
+# --------------------------------------------------------------------------
+# Popup marking for the CMS modal
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def trigger(db, content):
+    return AutomationTrigger.objects.create(automation_content=content, slot="start", type="webhook", position=0)
+
+
+@pytest.mark.django_db
+def test_direct_admin_visit_keeps_the_normal_chrome(admin_client, trigger):
+    """Navigating to the admin URL yourself is not a modal; keep the full page."""
+    url = reverse("admin:djangocms_automation_automationtrigger_change", args=[trigger.pk])
+    html = admin_client.get(url).content.decode()
+
+    assert "breadcrumbs" in html
+    assert 'name="_popup"' not in html
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("query", ["language=en", "cms_path=/en/", "edit_fields=slot"])
+def test_frontend_edit_links_render_as_a_popup(admin_client, trigger, query):
+    """django CMS opens these in its modal but does not flag them itself."""
+    url = reverse("admin:djangocms_automation_automationtrigger_change", args=[trigger.pk])
+    html = admin_client.get(f"{url}?{query}").content.decode()
+
+    assert "breadcrumbs" not in html, "admin chrome must not render inside the modal"
+    assert 'name="_popup"' in html, "the popup flag must survive into the POST"
+
+
+@pytest.mark.django_db
+def test_add_from_the_automation_editor_renders_as_a_popup(admin_client, content):
+    url = reverse("admin:djangocms_automation_automationtrigger_add")
+    html = admin_client.get(f"{url}?automation_content={content.pk}").content.decode()
+
+    assert "breadcrumbs" not in html
+    assert 'name="_popup"' in html
+
+
+@pytest.mark.django_db
+def test_toolbar_popup_flag_is_left_alone(admin_client, trigger):
+    """When the toolbar already flagged the request, do nothing to it."""
+    url = reverse("admin:djangocms_automation_automationtrigger_change", args=[trigger.pk])
+    html = admin_client.get(f"{url}?_popup=1").content.decode()
+
+    assert 'name="_popup"' in html
+
+
+@pytest.mark.django_db
+def test_saving_from_the_modal_returns_the_popup_response(admin_client, trigger, content):
+    """The popup response is what tells the CMS modal it may close.
+
+    Without it the modal would follow the redirect and display the changelist
+    instead of closing.
+    """
+    url = reverse("admin:djangocms_automation_automationtrigger_change", args=[trigger.pk])
+    response = admin_client.post(
+        f"{url}?language=en",
+        {
+            "automation_content": content.pk,
+            "type": "webhook",
+            "slot": "start",
+            "position": 0,
+            "token": "abc",
+            "signing_secret": "shh",
+            "_popup": "1",
+            "_save": "Save",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "django-admin-popup-response-constants" in response.content.decode()
+
+
+@pytest.mark.django_db
+def test_saving_outside_the_modal_still_redirects(admin_client, trigger, content):
+    """A direct admin save keeps ordinary admin behaviour."""
+    url = reverse("admin:djangocms_automation_automationtrigger_change", args=[trigger.pk])
+    response = admin_client.post(
+        url,
+        {
+            "automation_content": content.pk,
+            "type": "webhook",
+            "slot": "start",
+            "position": 0,
+            "token": "abc",
+            "signing_secret": "shh",
+            "_save": "Save",
+        },
+    )
+
+    assert response.status_code == 302
+    assert response["Location"].endswith("/automationtrigger/")

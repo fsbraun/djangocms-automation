@@ -2,6 +2,7 @@ import json
 
 from django import forms
 from django.contrib import admin, messages
+from django.contrib.admin.options import IS_POPUP_VAR
 from django.http import HttpResponseRedirect
 from django.template.response import TemplateResponse
 from django.urls import path, reverse
@@ -395,6 +396,13 @@ class APIKeyAdmin(admin.ModelAdmin):
 class AutomationTriggerAdmin(ChangeListActionsMixin, admin.ModelAdmin):
     """Admin for AutomationTrigger: add/change views available, hidden from index."""
 
+    #: Query parameters present when this admin is opened from the automation
+    #: editor rather than navigated to directly. ``language`` comes from the
+    #: ``{% render_model_block %}`` edit link on a trigger node, ``cms_path``
+    #: from toolbar modal items, ``edit_fields`` from field-level frontend
+    #: editing, and ``automation_content`` from the "Add Trigger" link.
+    cms_modal_markers = ("cms_path", "edit_fields", "language", "automation_content")
+
     name = _("Trigger")
     form = AutomationTriggerAdminForm
     list_display = (
@@ -412,6 +420,35 @@ class AutomationTriggerAdmin(ChangeListActionsMixin, admin.ModelAdmin):
     class Media:
         js = ("djangocms_automation/js/trigger_type_change.js",)
         css = {"all": ("djangocms_automation/css/trigger_admin.css",)}
+
+    def _mark_as_popup(self, request):
+        """Render as a popup when django CMS opened this view in its modal.
+
+        django CMS appends ``_popup=1`` for toolbar modal items, but not for the
+        frontend-editing links ``{% render_model_block %}`` builds around each
+        trigger node — those are a plain admin change URL. Without the flag the
+        full admin chrome (branding, sidebar, breadcrumbs) renders inside a small
+        modal, and saving lands on the changelist rather than closing it.
+
+        Setting the flag on the request rather than faking ``is_popup`` in the
+        template context keeps Django as the single source of truth: it renders
+        the popup layout, emits the hidden ``_popup`` input, and returns the
+        popup response on save, which is what tells the modal it may close.
+        """
+        if IS_POPUP_VAR in request.GET or IS_POPUP_VAR in request.POST:
+            return  # Already flagged by the toolbar.
+        if not any(marker in request.GET for marker in self.cms_modal_markers):
+            return  # A direct visit to the admin URL keeps the normal chrome.
+        request.GET = request.GET.copy()
+        request.GET[IS_POPUP_VAR] = "1"
+
+    def add_view(self, request, form_url="", extra_context=None):
+        self._mark_as_popup(request)
+        return super().add_view(request, form_url, extra_context)
+
+    def change_view(self, request, object_id, form_url="", extra_context=None):
+        self._mark_as_popup(request)
+        return super().change_view(request, object_id, form_url, extra_context)
 
     @staticmethod
     def get_trigger(request, obj) -> tuple[forms.Form | None, bool]:

@@ -83,6 +83,8 @@ CMS_CONFIRM_VERSION4 = True
 
 USE_TZ = True
 TIME_ZONE = "UTC"
+
+X_FRAME_OPTIONS = "SAMEORIGIN"
 STATIC_URL = "/static/"
 STATIC_ROOT = os.path.join(BASE_DIR, "static")
 
