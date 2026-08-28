@@ -19,7 +19,6 @@ free. See :mod:`djangocms_automation.queue` for the trade-offs.
 
 from __future__ import annotations
 
-from django.db import transaction
 from django.tasks.backends.base import BaseTaskBackend
 from django.tasks.base import TaskResult, TaskResultStatus
 from django.utils.crypto import get_random_string
@@ -89,8 +88,12 @@ class DatabaseBackend(BaseTaskBackend):
         try:
             task_obj = import_string(task_row.task_path)
             func = getattr(task_obj, "func", task_obj)
-            with transaction.atomic():
-                func(*task_row.args, **task_row.kwargs)
+            # Deliberately *not* wrapped in a transaction. The engine commits the
+            # claim, heartbeats, and state changes as it goes; holding one
+            # transaction around the whole task would hide all of them until the
+            # task returned, and its row locks would block cancellation and lease
+            # recovery — so a hung action could never be timed out or recovered.
+            func(*task_row.args, **task_row.kwargs)
         except BaseException as exc:  # noqa: BLE001 — recorded, never re-raised at the worker
             import traceback
 

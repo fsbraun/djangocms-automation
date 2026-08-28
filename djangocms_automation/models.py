@@ -516,7 +516,11 @@ class SplitPluginModel(AutomationPluginModel):
         """
         from .engine import normalize_rows
 
-        children = action.children.all()
+        # A child that has been replayed is superseded: its replacement is a
+        # sibling in the same set, and the original is kept only as history.
+        # Counting it would make a replayed branch fail its join forever, and
+        # would merge a dead branch's output alongside its replacement's.
+        children = action.children.filter(replays__isnull=True)
         if not children.exists():
             if not self._paths():
                 # Nothing to fan out to: pass data through.

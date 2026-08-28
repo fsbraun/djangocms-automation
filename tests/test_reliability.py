@@ -7,6 +7,7 @@ between claim, execute, transition, and schedule.
 """
 
 import datetime
+import threading
 
 import pytest
 
@@ -41,6 +42,9 @@ from djangocms_automation.retry import PermanentError, RetryPolicy, RetryableErr
 
 #: Execution counters keyed by plugin name, reset by the ``counters`` fixture.
 CALLS: dict[str, int] = {}
+
+#: Events used to hold an action open while a test inspects it mid-execution.
+BARRIER: dict[str, object] = {}
 
 
 class FlakyActionModel(BaseActionPluginModel):
@@ -101,6 +105,32 @@ class UnknownFailureModel(BaseActionPluginModel):
         raise ValueError("something surprising")
 
 
+class SlowHeartbeatModel(BaseActionPluginModel):
+    """Blocks until the test releases it, so a heartbeat has time to fire."""
+
+    class Meta:
+        proxy = True
+        app_label = "djangocms_automation"
+
+    def perform(self, action, rows):
+        BARRIER["running"].set()
+        BARRIER["release"].wait(timeout=10)
+        return rows
+
+
+class ThreeAttemptModel(BaseActionPluginModel):
+    """Declares a retry budget that the action row does not carry by default."""
+
+    retry_policy = RetryPolicy(max_attempts=3, backoff_seconds=0, jitter=0)
+
+    class Meta:
+        proxy = True
+        app_label = "djangocms_automation"
+
+    def perform(self, action, rows):
+        raise RetryableError("transient")
+
+
 class SlowActionModel(BaseActionPluginModel):
     """Succeeds, but declares a very short timeout for recovery tests."""
 
@@ -139,6 +169,20 @@ class PermanentFailurePlugin(CMSPluginBase):
 class UnknownFailurePlugin(CMSPluginBase):
     model = UnknownFailureModel
     name = "Unknown Failure Plugin"
+    render_template = "djangocms_automation/plugins/action.html"
+
+
+@plugin_pool.register_plugin
+class SlowHeartbeatPlugin(CMSPluginBase):
+    model = SlowHeartbeatModel
+    name = "Slow Heartbeat Plugin"
+    render_template = "djangocms_automation/plugins/action.html"
+
+
+@plugin_pool.register_plugin
+class ThreeAttemptPlugin(CMSPluginBase):
+    model = ThreeAttemptModel
+    name = "Three Attempt Plugin"
     render_template = "djangocms_automation/plugins/action.html"
 
 
@@ -896,3 +940,174 @@ def test_trigger_without_a_placeholder_reports_a_usable_error(automation_content
         trigger.trigger_execution(data=[{"seed": 1}])
 
     assert AutomationInstance.objects.count() == 0
+
+
+# --------------------------------------------------------------------------
+# Lease renewal: a long action must not look abandoned
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.django_db(transaction=True)
+def test_heartbeat_is_renewed_while_an_action_runs(run_setup, settings):
+    """A legitimately long action must keep its lease alive.
+
+    Without renewal, an action running past ``AUTOMATION_LEASE_SECONDS`` looks
+    abandoned to the scheduler, which recovers it and runs it a second time —
+    the duplicate side effect leases exist to prevent.
+    """
+    settings.AUTOMATION_LEASE_SECONDS = 3  # refresh interval becomes 1s
+    trigger, placeholder = run_setup
+    add_plugin(placeholder=placeholder, plugin_type="SlowHeartbeatPlugin", language=settings.LANGUAGE_CODE)
+
+    BARRIER["running"] = threading.Event()
+    BARRIER["release"] = threading.Event()
+    errors = []
+
+    def fire():
+        try:
+            trigger.trigger_execution(data=[{"seed": 1}])
+        except Exception as exc:  # noqa: BLE001 - surfaced by the assertion below
+            errors.append(exc)
+
+    worker = threading.Thread(target=fire)
+    worker.start()
+    try:
+        assert BARRIER["running"].wait(timeout=10), "the action never started"
+        action = AutomationAction.objects.latest("id")
+        first = AutomationAction.objects.get(pk=action.pk).heartbeat_at
+
+        deadline = now() + datetime.timedelta(seconds=8)
+        while now() < deadline:
+            if AutomationAction.objects.get(pk=action.pk).heartbeat_at > first:
+                break
+            threading.Event().wait(0.25)
+        else:  # pragma: no cover - only reached on failure
+            pytest.fail("heartbeat was never refreshed while the action ran")
+    finally:
+        BARRIER["release"].set()
+        worker.join(timeout=15)
+
+    assert not errors, errors
+
+
+@pytest.mark.django_db(transaction=True)
+def test_heartbeat_stops_when_the_action_finishes(run_setup, settings):
+    """The refresher must not outlive the action it was renewing."""
+    settings.AUTOMATION_LEASE_SECONDS = 3
+    trigger, placeholder = run_setup
+    add_plugin(placeholder=placeholder, plugin_type="SlowHeartbeatPlugin", language=settings.LANGUAGE_CODE)
+
+    BARRIER["running"] = threading.Event()
+    BARRIER["release"] = threading.Event()
+    BARRIER["release"].set()  # do not block
+    trigger.trigger_execution(data=[{"seed": 1}])
+
+    before = threading.active_count()
+    threading.Event().wait(0.5)
+    assert threading.active_count() <= before, "the heartbeat thread outlived the action"
+    assert AutomationAction.objects.latest("id").state == COMPLETED
+
+
+@pytest.mark.django_db
+def test_recovery_honours_the_plugins_retry_budget(run_setup, settings):
+    """A crashed worker must not dead-letter an action that had attempts left.
+
+    Recovery runs in the scheduler, which has no plugin instance to ask, so the
+    budget is persisted onto the action when it is claimed.
+    """
+    trigger, placeholder = run_setup
+    add_plugin(placeholder=placeholder, plugin_type="ThreeAttemptPlugin", language=settings.LANGUAGE_CODE)
+    trigger.trigger_execution(data=[{"seed": 1}])
+
+    action = AutomationAction.objects.latest("id")
+    assert action.max_attempts == 3, "the plugin's budget must be persisted at claim time"
+
+    stale = now() - datetime.timedelta(hours=1)
+    AutomationAction.objects.filter(pk=action.pk).update(
+        state=RUNNING, finished=None, started=stale, heartbeat_at=stale, attempt_count=1
+    )
+    AutomationInstance.objects.filter(pk=action.automation_instance_id).update(status=RUNNING, finished=None)
+
+    assert engine.recover_expired_leases() == 1
+    action.refresh_from_db()
+    assert action.state == PENDING, "attempts remained, so it must be retried"
+    assert action.dead_lettered is False
+
+
+# --------------------------------------------------------------------------
+# Replaying a branch: superseded siblings and reopened ancestors
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_replaying_a_branch_action_lets_the_split_join(run_setup, settings):
+    """Replaying a failed branch must let the run finish.
+
+    Two things have to hold. The split's failed ancestors are reopened so the
+    join can be woken, and the superseded original is excluded from the join —
+    otherwise the split re-runs, sees its old failed child, and fails again.
+    """
+    trigger, placeholder = run_setup
+    split = add_plugin(placeholder=placeholder, plugin_type="AutomationSplit", language=settings.LANGUAGE_CODE)
+    path = add_plugin(
+        placeholder=placeholder, plugin_type="AutomationPath", language=settings.LANGUAGE_CODE, target=split
+    )
+    add_plugin(placeholder=placeholder, plugin_type="ActionPlugin", language=settings.LANGUAGE_CODE, target=path)
+    trigger.trigger_execution(data=[{"seed": 1}])
+
+    child = AutomationAction.objects.filter(parent__isnull=False).latest("id")
+    parent = child.parent
+    # Stage the fail-fast outcome: child failed, ancestors and instance closed.
+    AutomationAction.objects.filter(pk=child.pk).update(
+        state=FAILED, finished=now(), dead_lettered=True, dead_lettered_at=now(), input_data=[{"seed": 1}]
+    )
+    AutomationAction.objects.filter(pk=parent.pk).update(state=FAILED, finished=now())
+    AutomationInstance.objects.filter(pk=child.automation_instance_id).update(status=FAILED, finished=now())
+
+    replacement = engine.replay_action(child.pk)
+    assert replacement is not None
+
+    parent.refresh_from_db()
+    replacement.refresh_from_db()
+    child.refresh_from_db()
+    instance = AutomationInstance.objects.get(pk=child.automation_instance_id)
+    assert replacement.state == COMPLETED
+    assert parent.state == COMPLETED, "the reopened split must join, not stall"
+    assert instance.status == COMPLETED, "the instance must not run forever"
+    assert child.state == FAILED, "the superseded original stays as history"
+
+
+@pytest.mark.django_db
+def test_replaying_a_top_level_action_has_no_ancestors_to_reopen(run_setup, settings):
+    """The common case must not be disturbed by the ancestor walk."""
+    trigger, placeholder = run_setup
+    action = run(trigger, placeholder, "SlowPlugin", settings)
+    AutomationAction.objects.filter(pk=action.pk).update(
+        state=FAILED, finished=now(), dead_lettered=True, input_data=[]
+    )
+
+    replacement = engine.replay_action(action.pk)
+    assert replacement is not None
+    assert replacement.parent_id is None
+
+
+@pytest.mark.django_db
+def test_a_broken_dead_letter_receiver_does_not_block_propagation(run_setup, settings):
+    """A raising receiver must not leave the failure un-propagated."""
+    from djangocms_automation.signals import action_dead_lettered
+
+    trigger, placeholder = run_setup
+
+    def broken(sender, **kwargs):
+        raise RuntimeError("alerting backend down")
+
+    action_dead_lettered.connect(broken)
+    try:
+        action = run(trigger, placeholder, "UnknownFailurePlugin", settings)
+    finally:
+        action_dead_lettered.disconnect(broken)
+
+    action.refresh_from_db()
+    assert action.state == FAILED
+    assert action.dead_lettered is True
+    assert action.automation_instance.status == FAILED, "failure must still have propagated"

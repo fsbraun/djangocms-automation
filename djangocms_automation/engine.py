@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import datetime
 import logging
+import threading
 import traceback
 import uuid as uuid_module
 
@@ -312,7 +313,10 @@ def dead_letter(action: AutomationAction) -> None:
             "attempt": action.attempt_count,
         },
     )
-    action_dead_lettered.send(sender=AutomationAction, action=action)
+    try:
+        action_dead_lettered.send(sender=AutomationAction, action=action)
+    except Exception:  # noqa: BLE001 — observability must never block failure propagation
+        logger.exception("automation.signal.failed", extra={"automation_action_id": action.pk})
 
 
 def fail_action(action: AutomationAction, message: str, *, exc: BaseException | None = None) -> None:
@@ -462,6 +466,59 @@ def pause_action(action: AutomationAction, until: datetime.datetime, message: st
     )
 
 
+class _Heartbeat:
+    """Refresh a running action's lease from a background thread.
+
+    The engine claims an action, stamps ``heartbeat_at``, and then hands control
+    to ``plugin.execute()``. On a durable backend that commits the claim, an
+    action legitimately running longer than ``AUTOMATION_LEASE_SECONDS`` would
+    otherwise look abandoned to the scheduler, which would recover it and run it
+    a second time — precisely the duplicate side effect leases exist to prevent.
+
+    A daemon thread refreshes the lease at a fraction of the lease window for as
+    long as the action runs. ``heartbeat_action`` only updates rows that still
+    hold the lease, so a stale thread can never revive an action someone else
+    has taken over.
+    """
+
+    def __init__(self, action_id: int, lease_id, interval: float):
+        self.action_id = action_id
+        self.lease_id = lease_id
+        self.interval = max(1.0, interval)
+        self._stop = threading.Event()
+        self._thread = None
+
+    def __enter__(self):
+        if self.lease_id is None:
+            return self
+        self._thread = threading.Thread(target=self._run, name=f"automation-heartbeat-{self.action_id}", daemon=True)
+        self._thread.start()
+        return self
+
+    def _run(self):
+        from .transitions import heartbeat_action
+
+        while not self._stop.wait(self.interval):
+            try:
+                if not heartbeat_action(self.action_id, self.lease_id):
+                    return  # Lease lost or action finished; stop quietly.
+            except Exception:  # noqa: BLE001 — a heartbeat failure must not kill the action
+                logger.exception("automation.heartbeat.failed", extra={"automation_action_id": self.action_id})
+                return
+
+    def __exit__(self, exc_type, exc, tb):
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=5)
+        return False
+
+
+def _heartbeat_interval() -> float:
+    """Refresh well inside the lease window, so one missed beat is not fatal."""
+    window = float(getattr(settings, "AUTOMATION_LEASE_SECONDS", 300))
+    return max(1.0, window / 3)
+
+
 def _resolve_timeout(plugin) -> int | None:
     """Resolve the execution timeout for a plugin, in seconds."""
     timeout = getattr(plugin, "timeout_seconds", None)
@@ -493,12 +550,21 @@ def run_action(action_id: int, data=None, single_step: bool = False) -> None:
     # Record what this attempt was given, so a dead-lettered action can be
     # replayed with its real input rather than whatever the instance holds now.
     timeout = _resolve_timeout(plugin)
-    AutomationAction.objects.filter(pk=action.pk).update(input_data=rows, timeout_seconds=timeout)
+    # Persist the plugin's retry budget too. Lease recovery runs in the
+    # scheduler, which has no plugin instance to ask, so a policy that only
+    # lived on the plugin would be lost the moment a worker died — an action
+    # allowed three attempts would be dead-lettered after its first crash.
+    max_attempts = effective_max_attempts(action, get_retry_policy(action))
+    AutomationAction.objects.filter(pk=action.pk).update(
+        input_data=rows, timeout_seconds=timeout, max_attempts=max_attempts
+    )
     action.input_data = rows
     action.timeout_seconds = timeout
+    action.max_attempts = max_attempts
 
     try:
-        state, output = plugin.execute(action, rows, single_step=single_step, plugin_dict=plugin_map)
+        with _Heartbeat(action.pk, action.lease_id, _heartbeat_interval()):
+            state, output = plugin.execute(action, rows, single_step=single_step, plugin_dict=plugin_map)
     except ActionPause as pause:
         pause_action(action, until=pause.until, message=pause.message)
         return
@@ -755,12 +821,52 @@ def reconcile_waiting_joins(limit: int = 500) -> int:
     return woken
 
 
+def _reopen_ancestors(action: AutomationAction, replacement_id: int) -> int:
+    """Return the failed ancestors of a replayed action to ``WAITING``.
+
+    Walks up the parent chain, reopening each ancestor that fail-fast
+    propagation closed, so the replacement's eventual completion can wake the
+    join. Ancestors that are still unfinished, or that failed on their own
+    account rather than through propagation, are left alone.
+
+    :returns: The number of ancestors reopened.
+    """
+    reopened = 0
+    parent_id = action.parent_id
+    while parent_id:
+        parent = AutomationAction.objects.filter(pk=parent_id).first()
+        if parent is None:
+            break
+        if parent.state == FAILED:
+            transitioned = transition_action(
+                parent.pk,
+                WAITING,
+                allowed_from=(FAILED,),
+                message="Reopened for replay"[:MAX_FIELD_LENGTH],
+                metadata={"reopened_for": replacement_id},
+                field_updates={"dead_lettered": False, "dead_lettered_at": None, "finished": None},
+            )
+            if transitioned is None:
+                break
+            reopened += 1
+        parent_id = parent.parent_id
+    return reopened
+
+
 def replay_action(action_id: int) -> AutomationAction | None:
     """Replay a dead-lettered action as a new attempt in its instance.
 
     Historical rows are never mutated: a fresh action is created linked to the
     original through ``replayed_from``, seeded with the input the failed attempt
     actually received, and its instance is reopened.
+
+    Ancestors are the exception, and they have to be. Fail-fast propagation marks
+    every unfinished ancestor ``FAILED`` when a branch dies, and ``notify_parent``
+    only wakes a ``WAITING`` parent. Replaying a branch action while its parents
+    stayed terminal would therefore complete the replacement and then stall: no
+    join would ever fire and the reopened instance would run forever. So the
+    ancestor chain is returned to ``WAITING`` — reopening the path the
+    replacement needs in order to report back.
 
     :returns: The new action, or ``None`` if the original cannot be replayed.
     """
@@ -778,6 +884,7 @@ def replay_action(action_id: int) -> AutomationAction | None:
             replayed_from=original,
             finished=None,
         )
+        _reopen_ancestors(original, replacement.pk)
         AutomationInstance.objects.filter(pk=original.automation_instance_id).update(status=RUNNING, finished=None)
     logger.info(
         "automation.action.replayed",

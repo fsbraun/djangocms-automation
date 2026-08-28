@@ -8,6 +8,7 @@ reports back to the user.
 import pytest
 
 from django.contrib.admin.sites import AdminSite
+from django.contrib.auth.models import Permission, User
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.messages.storage.fallback import FallbackStorage
 from django.test import RequestFactory
@@ -155,3 +156,56 @@ def test_replaying_something_unreplayable_warns(executed, request_with_messages)
 
     assert AutomationAction.objects.filter(replayed_from_id=executed.pk).count() == 0
     assert [str(m) for m in request._messages]
+
+
+# --------------------------------------------------------------------------
+# Authorization
+#
+# Both actions mutate: one stops other people's work, the other re-runs real
+# side effects. Neither may be available merely because you can see the list.
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def viewer(db):
+    """A staff user who may look at the changelists and nothing more."""
+    user = User.objects.create_user("viewer", password="x", is_staff=True)
+    for codename in ("view_automationinstance", "view_automationaction"):
+        permission = Permission.objects.filter(codename=codename).first()
+        if permission:
+            user.user_permissions.add(permission)
+    return User.objects.get(pk=user.pk)
+
+
+def bare_request(user):
+    request = RequestFactory().post("/")
+    request.user = user
+    request.session = {}
+    request._messages = FallbackStorage(request)
+    return request
+
+
+@pytest.mark.django_db
+def test_view_only_user_is_not_offered_cancel(viewer):
+    admin = AutomationInstanceAdmin(AutomationInstance, AdminSite())
+    assert "cancel_instances" not in admin.get_actions(bare_request(viewer))
+
+
+@pytest.mark.django_db
+def test_view_only_user_is_not_offered_replay(viewer):
+    """Replay is gated on changing executions, not on viewing the queue.
+
+    The dead-letter list is read-only, so it has no change permission of its own
+    for the action to borrow.
+    """
+    admin = DeadLetterAdmin(DeadLetter, AdminSite())
+    assert "replay_actions" not in admin.get_actions(bare_request(viewer))
+
+
+@pytest.mark.django_db
+def test_permitted_user_is_offered_both_actions(admin_user):
+    instance_admin = AutomationInstanceAdmin(AutomationInstance, AdminSite())
+    dead_letter_admin = DeadLetterAdmin(DeadLetter, AdminSite())
+
+    assert "cancel_instances" in instance_admin.get_actions(bare_request(admin_user))
+    assert "replay_actions" in dead_letter_admin.get_actions(bare_request(admin_user))

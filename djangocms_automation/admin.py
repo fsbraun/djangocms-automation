@@ -95,7 +95,7 @@ class AutomationInstanceAdmin(admin.ModelAdmin):
     search_fields = ("key", "automation_content__automation__name")
     actions = ("cancel_instances",)
 
-    @admin.action(description=_("Cancel selected executions"))
+    @admin.action(description=_("Cancel selected executions"), permissions=["change"])
     def cancel_instances(self, request, queryset):
         """Stop the selected runs and every unfinished action inside them."""
         canceled = sum(engine.cancel_instance(instance.pk) for instance in queryset)
@@ -243,7 +243,17 @@ class DeadLetterAdmin(admin.ModelAdmin):
     def replay_count(self, obj):
         return obj.replays.count()
 
-    @admin.action(description=_("Replay selected actions"))
+    def has_replay_permission(self, request):
+        """Authorize the replay action.
+
+        The dead-letter queue is read-only, so it has no change permission of
+        its own to borrow. Replay re-runs an action with real side effects —
+        sending mail, writing records — so it is gated on the permission to
+        change executions rather than on the ability to view this list.
+        """
+        return request.user.has_perm("djangocms_automation.change_automationinstance")
+
+    @admin.action(description=_("Replay selected actions"), permissions=["replay"])
     def replay_actions(self, request, queryset):
         """Re-run each selected action with the input its failed attempt saw."""
         replayed = 0

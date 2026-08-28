@@ -18,6 +18,8 @@ from django.utils.timezone import now
 
 from cms.api import add_plugin
 from cms.models import Placeholder
+from cms.plugin_base import CMSPluginBase
+from cms.plugin_pool import plugin_pool
 
 from djangocms_automation.instances import (
     COMPLETED,
@@ -28,8 +30,33 @@ from djangocms_automation.models import (
     Automation,
     AutomationContent,
     AutomationTrigger,
+    BaseActionPluginModel,
 )
 from djangocms_automation.queue import READY, RUNNING, SUCCESSFUL, QueuedTask
+
+#: Filled in by ``AtomicProbeModel`` while it executes.
+PROBE: dict = {}
+
+
+class AtomicProbeModel(BaseActionPluginModel):
+    """Records whether the worker executed it inside a transaction."""
+
+    class Meta:
+        proxy = True
+        app_label = "djangocms_automation"
+
+    def perform(self, action, rows):
+        from django.db import connection
+
+        PROBE["in_atomic_block"] = connection.in_atomic_block
+        return rows
+
+
+@plugin_pool.register_plugin
+class AtomicProbePlugin(CMSPluginBase):
+    model = AtomicProbeModel
+    name = "Atomic Probe Plugin"
+    render_template = "djangocms_automation/plugins/action.html"
 
 
 @pytest.fixture
@@ -372,3 +399,30 @@ def test_worker_idles_when_the_queue_is_empty(setup):
     assert QueuedTask.objects.count() == 0
     call_command("runworker", "--once", "--sleep", "0")
     assert QueuedTask.objects.count() == 0
+
+
+@pytest.mark.django_db(transaction=True)
+def test_the_worker_does_not_wrap_a_task_in_a_transaction(automation_content, durable):
+    """Plugin execution must not run inside one long transaction.
+
+    The engine commits the claim, heartbeats and state changes as it goes. A
+    transaction around the whole task would hide every one of them until it
+    returned, and its row locks would block cancellation and lease recovery — so
+    a hung action could never be timed out or recovered.
+    """
+    trigger = AutomationTrigger.objects.create(
+        automation_content=automation_content, slot="start", type="click", position=0
+    )
+    placeholder = Placeholder.objects.get_or_create(
+        content_type=ContentType.objects.get_for_model(AutomationContent),
+        object_id=automation_content.pk,
+        slot="start",
+    )[0]
+    add_plugin(placeholder=placeholder, plugin_type="AtomicProbePlugin", language=durable.LANGUAGE_CODE)
+
+    PROBE.clear()
+    trigger.trigger_execution(data=[{"seed": 1}])
+    call_command("runworker", "--once")
+
+    assert PROBE.get("in_atomic_block") is False, "the worker held a transaction around the task"
+    assert AutomationAction.objects.latest("id").state == COMPLETED
