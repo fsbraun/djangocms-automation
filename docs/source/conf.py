@@ -1,6 +1,6 @@
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from djangocms_automation import __version__
 
@@ -66,5 +66,5 @@ intersphinx_mapping = {
 # General substitutions
 rst_prolog = f"""
 .. |project| replace:: {project}
-.. |year| replace:: {datetime.now(timezone.utc).year}
+.. |year| replace:: {datetime.now(UTC).year}
 """

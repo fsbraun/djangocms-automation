@@ -1174,7 +1174,7 @@ def _parse_datetime(value) -> datetime.datetime | None:
     except (TypeError, ValueError):
         return None
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+        parsed = parsed.replace(tzinfo=datetime.UTC)
     return parsed
 
 
