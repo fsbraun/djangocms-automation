@@ -116,7 +116,7 @@ Wait for User
 Tool calling
 ~~~~~~~~~~~~
 
-:func:`djangocms_automation.llm.complete` also accepts a conversation and a set
+:func:`djangocms_automation.ai.llm.complete` also accepts a conversation and a set
 of tools, which is what the agent work in phase 1 is built on::
 
     result = complete(
@@ -134,7 +134,7 @@ this action uses, the second carries an agent's conversation so far, including
 the assistant's earlier tool requests and the results that came back.
 
 Two behaviours are deliberate. Giving tools to a model that cannot use them
-raises :class:`~djangocms_automation.llm.LLMToolsUnsupported` rather than
+raises :class:`~djangocms_automation.ai.llm.LLMToolsUnsupported` rather than
 quietly dropping them — a model whose tools were ignored writes confident prose
 instead of doing the work, which is far harder to diagnose. And arguments that
 are not valid JSON become an empty set rather than an error, so the tool's own

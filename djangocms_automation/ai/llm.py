@@ -88,7 +88,7 @@ class LLMResult:
     usage: dict = field(default_factory=dict)
     #: Tool invocations the model requested, in the order it asked for them.
     tool_calls: list[ToolCall] = field(default_factory=list)
-    #: Why the model stopped: ``"tool_calls"``, ``"stop"``, ``"length"``, ...
+    #: Why the model stopped - ``"tool_calls"``, ``"stop"``, ``"length"``, ...
     finish_reason: str = ""
 
     @property
