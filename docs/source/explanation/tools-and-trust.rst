@@ -79,6 +79,37 @@ is a quiet failure rather than a loud one — the argument is validated, accepte
 and then the action does what the editor configured instead, which looks like
 success.
 
+The same distinction goes one level deeper, in the place it is easiest to miss.
+A *Query Records* filter is a mapping, and its **values** are expressions too:
+an editor writes ``{"email": "customer.email"}`` meaning *look this up in the
+data*. A model writing ``{"username": "ann"}`` means ann. Resolved as a path,
+that finds nothing — and an empty result is indistinguishable from an honest no
+match, so the tool reports success and the agent concludes there is no such
+user. Actions therefore declare which of their inputs are mappings of
+expressions, and each value a model supplies for one is wrapped as a
+:class:`~djangocms_automation.utilities.expressions.Literal`, which the resolver
+returns untouched. The editor's expression validator is set aside for those
+fields at the same time: it asks whether the text is valid expression syntax,
+which is the wrong question to put to something supplying values — ``ann smith``
+is a perfectly good value and not a valid expression.
+
+Nothing at all
+--------------
+
+One argument list deserves separate mention: the one that would not parse.
+
+Providers stream tool arguments as JSON text, and it can arrive truncated or
+malformed. The obvious handling is to treat what could not be read as nothing,
+and it is wrong, because *nothing* is a legitimate call. A tool whose inputs are
+all optional — a query with a default limit and no required filter — accepts an
+empty argument list and means "use the defaults". Collapsing a garbled message
+into that turns a transmission failure into an unfiltered query over the whole
+table.
+
+So a call that failed to parse is kept and marked as such, and refused before it
+reaches the action. The model is told its arguments were not valid JSON, which
+is a thing it can fix on the next turn.
+
 Getting it wrong is recoverable
 -------------------------------
 

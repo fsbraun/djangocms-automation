@@ -774,3 +774,82 @@ def test_an_expression_configured_action_still_gets_literals(run_setup, settings
 
     assert mail.outbox, "the mail was sent"
     assert mail.outbox[-1].subject == "Ship it", "the literal, not a data path"
+
+
+def _query_agent(placeholder, settings, exposed, config):
+    """An agent with one Query Records tool over auth.User."""
+    agent = add_plugin(
+        placeholder=placeholder,
+        plugin_type="AutomationAgent",
+        language=settings.LANGUAGE_CODE,
+        model="anthropic/claude-opus-4-8",
+        prompt="find someone",
+    )
+    tool = add_plugin(
+        placeholder=placeholder,
+        plugin_type="AutomationAgentTool",
+        language=settings.LANGUAGE_CODE,
+        target=agent,
+        tool_name="find_users",
+        tool_description="Find users.",
+        exposed_fields=exposed,
+    )
+    add_plugin(
+        placeholder=placeholder,
+        plugin_type="QueryModelAction",
+        language=settings.LANGUAGE_CODE,
+        target=tool,
+        config=config,
+    )
+    return agent
+
+
+@pytest.mark.django_db
+def test_a_mapping_argument_is_read_as_values_not_as_paths(run_setup, settings, django_user_model):
+    """A model filling a filter means the value, not a path to it.
+
+    The editor writes expressions there — ``user.email`` reaches into the
+    automation's data — but a model has no reason to know that language and
+    every reason to write what it is looking for. Resolved as a path, "ann"
+    finds nothing, and an empty result is indistinguishable from no match.
+    """
+    settings.AUTOMATION_ALLOWED_MODELS = ["auth.User"]
+    for name in ("ann", "bo", "cy"):
+        django_user_model.objects.create(username=name)
+
+    _trigger, placeholder = run_setup
+    _query_agent(placeholder, settings, ["filters"], {"model": "auth.User", "limit": 100})
+    SCRIPT.append(says(calls=[ToolCall(id="c1", name="find_users", arguments={"filters": {"username": "ann"}})]))
+    SCRIPT.append(says(text="Found."))
+
+    _trigger.trigger_execution(data=[{"seed": 1}])
+
+    call = AutomationAction.objects.exclude(parent__isnull=True).latest("id")
+    assert call.state == COMPLETED
+    assert [row["username"] for row in call.result] == ["ann"]
+
+
+@pytest.mark.django_db
+def test_arguments_that_were_not_valid_json_do_not_run_the_tool(run_setup, settings, django_user_model):
+    """An unparseable argument list is not an empty one.
+
+    Every field of this tool is optional, so an empty object is a perfectly
+    valid call — meaning "query everything". Turning a parse failure into that
+    turns a garbled message into an unfiltered query.
+    """
+    settings.AUTOMATION_ALLOWED_MODELS = ["auth.User"]
+    for name in ("ann", "bo", "cy"):
+        django_user_model.objects.create(username=name)
+
+    _trigger, placeholder = run_setup
+    _query_agent(placeholder, settings, ["filters", "limit"], {"model": "auth.User", "limit": 100})
+    garbled = ToolCall(id="c1", name="find_users", arguments={}, malformed=True)
+    SCRIPT.append(says(calls=[garbled]))
+    SCRIPT.append(says(text="Never mind."))
+
+    _trigger.trigger_execution(data=[{"seed": 1}])
+
+    call = AutomationAction.objects.exclude(parent__isnull=True).latest("id")
+    assert not call.result, "no query ran"
+    observation = next(m for m in AgentState.load(agent_action()).messages if m["role"] == "tool")
+    assert "JSON" in observation["content"], "the model is told what to fix"

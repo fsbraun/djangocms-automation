@@ -77,6 +77,11 @@ class ToolCall:
     id: str
     name: str
     arguments: dict[str, Any]
+    #: The model sent arguments that were not valid JSON. ``arguments`` is then
+    #: empty, which is *not* the same as the model having sent none: for a tool
+    #: whose inputs are all optional, an empty object is a valid call meaning
+    #: "use the defaults". A garbled message must not be able to mean that.
+    malformed: bool = False
 
 
 #: Reasons that mean the model stopped because it had finished. ``tool_calls``
@@ -167,9 +172,10 @@ def _tool_calls_from(message) -> list[ToolCall]:
     """Normalize a provider's tool-call shape into :class:`ToolCall` objects.
 
     Arguments arrive as a JSON string. A model that emits malformed JSON is a
-    normal occurrence, not an exception: it becomes an empty argument set, which
-    the tool contract then rejects against the tool's schema and reports back to
-    the model as a correctable error rather than failing the run.
+    normal occurrence, not an exception. The call is kept and marked
+    ``malformed``, so the tool contract can report a correctable error to the
+    model rather than failing the run — and so that it stays distinguishable
+    from a call that legitimately carried no arguments.
     """
     calls = []
     for raw in getattr(message, "tool_calls", None) or []:
@@ -177,17 +183,19 @@ def _tool_calls_from(message) -> list[ToolCall]:
         if function is None:
             continue
         raw_arguments = getattr(function, "arguments", None) or "{}"
+        malformed = False
         try:
             arguments = json.loads(raw_arguments) if isinstance(raw_arguments, str) else dict(raw_arguments)
         except (json.JSONDecodeError, TypeError, ValueError):
-            arguments = {}
+            arguments, malformed = {}, True
         if not isinstance(arguments, dict):
-            arguments = {}
+            arguments, malformed = {}, True
         calls.append(
             ToolCall(
                 id=str(getattr(raw, "id", "") or ""),
                 name=str(getattr(function, "name", "") or ""),
                 arguments=arguments,
+                malformed=malformed,
             )
         )
     return calls

@@ -114,7 +114,10 @@ class AgentState:
 
     def queue(self, calls: list[ToolCall]) -> None:
         """Record the calls a turn asked for, ready to be dispatched."""
-        self.pending = [{"id": call.id, "name": call.name, "arguments": call.arguments} for call in calls]
+        self.pending = [
+            {"id": call.id, "name": call.name, "arguments": call.arguments, "malformed": call.malformed}
+            for call in calls
+        ]
 
     def undispatched(self) -> list[ToolCall]:
         """The queued calls not yet turned into actions.
@@ -124,7 +127,12 @@ class AgentState:
         a resumed agent and a duplicated side effect.
         """
         return [
-            ToolCall(id=entry["id"], name=entry["name"], arguments=entry.get("arguments") or {})
+            ToolCall(
+                id=entry["id"],
+                name=entry["name"],
+                arguments=entry.get("arguments") or {},
+                malformed=bool(entry.get("malformed")),
+            )
             for entry in self.pending
             if entry["id"] not in self.dispatched
         ]

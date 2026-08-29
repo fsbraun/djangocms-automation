@@ -833,6 +833,12 @@ class BaseActionPluginModel(AutomationPluginModel):
         help_text=_("Field values (expressions or templates) entered in the plugin form."),
     )
 
+    #: Config keys holding a mapping whose *values* this action resolves as
+    #: expressions. Empty for most actions. A caller supplying such an input as
+    #: literal values — a model calling this action as a tool — wraps each one
+    #: so the resolver returns it untouched.
+    expression_mappings: frozenset = frozenset()
+
     def _template_fields(self) -> set[str]:
         """Get the config field names that hold templates (Textarea widgets).
 

@@ -14,7 +14,7 @@ from django.db import transaction
 from django.utils.translation import gettext_lazy as _
 
 from ..models import BaseActionPluginModel
-from ..utilities.expressions import ExpressionError, resolve_expression, validate_expression
+from ..utilities.expressions import ExpressionError, Literal, resolve_expression, validate_expression
 from ..utilities.json import model_to_row
 
 MAX_QUERY_LIMIT = 1000
@@ -60,7 +60,12 @@ def _validate_expression_mapping(value):
 
 
 def _resolve_mapping(mapping: dict, context: dict) -> dict:
-    return {name: resolve_expression(str(expr), context) for name, expr in (mapping or {}).items()}
+    # A Literal is passed through rather than stringified: it is already the
+    # value, and ``str()`` would lose the marker that says so.
+    return {
+        name: resolve_expression(expr if isinstance(expr, Literal) else str(expr), context)
+        for name, expr in (mapping or {}).items()
+    }
 
 
 def _validate_model_fields(model, names, *, lookups: bool = False) -> None:
@@ -129,6 +134,12 @@ class QueryModelActionForm(ModelActionBaseForm):
 class CreateModelActionModel(BaseActionPluginModel):
     """Create one model instance per data row."""
 
+    #: Config keys holding a mapping whose *values* are expressions rather than
+    #: values. What an editor writes there is a path into the automation's data;
+    #: what a model supplies is the value itself. See
+    #: :class:`~djangocms_automation.utilities.expressions.Literal`.
+    expression_mappings = frozenset({"field_mapping"})
+
     class Meta:
         proxy = True
         app_label = "djangocms_automation"
@@ -151,6 +162,12 @@ class CreateModelActionModel(BaseActionPluginModel):
 
 class UpdateModelActionModel(BaseActionPluginModel):
     """Update model instances matching per-row filters."""
+
+    #: Config keys holding a mapping whose *values* are expressions rather than
+    #: values. What an editor writes there is a path into the automation's data;
+    #: what a model supplies is the value itself. See
+    #: :class:`~djangocms_automation.utilities.expressions.Literal`.
+    expression_mappings = frozenset({"filters", "field_mapping"})
 
     class Meta:
         proxy = True
@@ -179,6 +196,12 @@ class UpdateModelActionModel(BaseActionPluginModel):
 
 class QueryModelActionModel(BaseActionPluginModel):
     """Query model instances and emit them as data rows (per run)."""
+
+    #: Config keys holding a mapping whose *values* are expressions rather than
+    #: values. What an editor writes there is a path into the automation's data;
+    #: what a model supplies is the value itself. See
+    #: :class:`~djangocms_automation.utilities.expressions.Literal`.
+    expression_mappings = frozenset({"filters"})
 
     class Meta:
         proxy = True

@@ -19,6 +19,7 @@ from django.utils.translation import gettext_lazy as _
 from ..engine import ActionPause
 from ..instances import COMPLETED, FAILED, WAITING, AutomationAction
 from ..models import AutomationPluginModel
+from ..utilities.expressions import Literal
 from . import llm
 from .budget import AgentBudget, BudgetExceeded
 from .state import AgentState
@@ -172,10 +173,27 @@ class AgentToolPluginModel(AutomationPluginModel):
         if plugin is None:
             return COMPLETED, ToolResult(call_id=call.id, content="This tool has no action to run.", is_error=True), []
 
+        if call.malformed:
+            # Not run under any circumstances. A tool whose inputs are all
+            # optional would otherwise accept the empty set this parsed to and
+            # do something wholly unasked for — an unfiltered query, say.
+            return (
+                COMPLETED,
+                ToolResult(
+                    call_id=call.id,
+                    content="Your arguments were not valid JSON. Send the call again with a JSON object.",
+                    is_error=True,
+                ),
+                [],
+            )
+
         form = self._data_form()
         exposed = list(self.exposed_fields or [])
+        mappings = frozenset(getattr(plugin, "expression_mappings", frozenset()))
         try:
-            arguments = validate_arguments(form, call.arguments, allowed=exposed) if form else {}
+            arguments = (
+                validate_arguments(form, call.arguments, allowed=exposed, literal_mappings=mappings) if form else {}
+            )
         except ToolValidationError as exc:
             # Handed back for the model to correct rather than failing the run.
             return COMPLETED, ToolResult(call_id=call.id, content=str(exc), is_error=True), []
@@ -202,7 +220,7 @@ class AgentToolPluginModel(AutomationPluginModel):
         plugin._input_overrides = arguments
         configured = plugin.config
         if arguments:
-            plugin.config = {**(configured or {}), **arguments}
+            plugin.config = {**(configured or {}), **_as_config(arguments, mappings)}
         try:
             state, output = plugin.execute(action, rows)
         except ActionPause:
@@ -287,7 +305,12 @@ class AgentToolPluginModel(AutomationPluginModel):
         """
         scratch = dict(action.scratch or {})
         raw = scratch.get("tool_call") or {}
-        call = llm.ToolCall(id=raw.get("id", ""), name=raw.get("name", ""), arguments=raw.get("arguments") or {})
+        call = llm.ToolCall(
+            id=raw.get("id", ""),
+            name=raw.get("name", ""),
+            arguments=raw.get("arguments") or {},
+            malformed=bool(raw.get("malformed")),
+        )
 
         # The wrapped action was waiting for a person, and that person has
         # answered. What they said is what the model hears back.
@@ -577,13 +600,38 @@ class AgentPluginModel(AutomationPluginModel):
                     parent=action,
                     automation_instance=action.automation_instance,
                     plugin_ptr=tool.uuid,
-                    scratch={"tool_call": {"id": call.id, "name": call.name, "arguments": call.arguments}},
+                    scratch={
+                        "tool_call": {
+                            "id": call.id,
+                            "name": call.name,
+                            "arguments": call.arguments,
+                            "malformed": call.malformed,
+                        }
+                    },
                     finished=None,
                 )
             )
         state.mark_dispatched(pending)
         state.save(action)
         return created
+
+
+def _as_config(arguments: dict, mappings: frozenset) -> dict:
+    """Put a model's arguments into the vocabulary the action's config uses.
+
+    Almost all of them go across unchanged. The exception is a mapping the
+    action resolves as expressions: each of its values is wrapped so the
+    resolver hands it back rather than reading it as a path into the data. That
+    is the difference between a filter meaning ``ann`` and one meaning
+    "whatever is at ``ann``", which is nothing, and which looks like no match
+    rather than like a mistake.
+    """
+    resolved = dict(arguments)
+    for name in mappings & set(resolved):
+        entry = resolved[name]
+        if isinstance(entry, dict):
+            resolved[name] = {key: Literal(value) for key, value in entry.items()}
+    return resolved
 
 
 def _answered(state) -> set:

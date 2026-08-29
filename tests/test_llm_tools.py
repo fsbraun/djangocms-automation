@@ -280,3 +280,21 @@ def test_an_unrecognised_finish_reason_counts_as_incomplete():
     assert reply("").incomplete is None, "not every provider sends one"
     assert "token limit" in reply("length").incomplete
     assert reply("model_context_window_exceeded").incomplete is not None
+
+
+def test_unparseable_tool_arguments_stay_distinguishable_from_none():
+    """``{}`` is a legitimate call for a tool whose fields are all optional, so
+    a parse failure must not be spelled the same way."""
+    from djangocms_automation.ai.llm import _tool_calls_from
+
+    message = types.SimpleNamespace(
+        tool_calls=[
+            types.SimpleNamespace(id="c1", function=types.SimpleNamespace(name="t", arguments='{"a": ')),
+            types.SimpleNamespace(id="c2", function=types.SimpleNamespace(name="t", arguments="{}")),
+        ]
+    )
+    garbled, empty = _tool_calls_from(message)
+
+    assert garbled.malformed is True
+    assert garbled.arguments == {}
+    assert empty.malformed is False, "an empty object is a real, valid call"

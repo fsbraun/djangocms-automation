@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
 from django import forms
+from django.core.exceptions import ValidationError
 
 __all__ = [
     "TOOL_NAME_RE",
@@ -233,10 +234,27 @@ def schema_from_form(form_class: type[forms.Form], include: list[str] | None = N
     }
 
 
+def _validate_flat_mapping(value) -> None:
+    """A mapping of names to plain values, and nothing cleverer.
+
+    Nesting is refused rather than flattened: an action reads these one level
+    deep, and a nested object would be silently stringified into a field lookup
+    that means nothing.
+    """
+    # A form validator, so it raises Django's error and the form collects it —
+    # which is what turns it into the message the model is asked to correct.
+    if not isinstance(value, dict):
+        raise ValidationError("Must be an object mapping names to values.")
+    for name, entry in value.items():
+        if isinstance(entry, (dict, list)):
+            raise ValidationError(f"{name}: must be a single value, not a list or object.")
+
+
 def validate_arguments(
     form_class: type[forms.Form],
     arguments: dict[str, Any],
     allowed: list[str],
+    literal_mappings: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     """Validate and coerce a model's arguments through the action's own form.
 
@@ -248,6 +266,11 @@ def validate_arguments(
     :param allowed: The fields the tool exposed. Anything else is refused
         outright — the schema told the model what it could send, but only this
         decides what it may.
+    :param literal_mappings: Exposed fields the action reads as a mapping of
+        expressions. The editor's validator for those demands expression syntax,
+        which is the wrong question to ask a model: it supplies values, and
+        ``ann smith`` is a perfectly good value and not a valid expression. They
+        are checked as a flat object of scalars instead.
     :raises ToolValidationError: If anything is unknown, missing or invalid.
     """
     if not isinstance(arguments, dict):
@@ -266,6 +289,13 @@ def validate_arguments(
     for name in list(form.fields):
         if name not in permitted:
             del form.fields[name]
+    for name in literal_mappings & permitted:
+        if name in form.fields:
+            form.fields[name] = forms.JSONField(
+                label=form.fields[name].label,
+                required=form.fields[name].required,
+                validators=[_validate_flat_mapping],
+            )
 
     if not form.is_valid():
         problems = "; ".join(f"{name}: {' '.join(errors)}" for name, errors in form.errors.items())

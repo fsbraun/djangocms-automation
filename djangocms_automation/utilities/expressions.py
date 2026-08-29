@@ -24,11 +24,35 @@ from typing import Any
 
 from django.forms import ValidationError
 
-__all__ = ["ExpressionError", "is_number_literal", "is_string_literal", "resolve_expression", "validate_expression"]
+__all__ = [
+    "ExpressionError",
+    "Literal",
+    "is_number_literal",
+    "is_string_literal",
+    "resolve_expression",
+    "validate_expression",
+]
 
 
 class ExpressionError(ValidationError):
     """Raised for invalid expressions or resolution failures."""
+
+
+@dataclass(frozen=True)
+class Literal:
+    """A value that is already a value, and must not be resolved again.
+
+    Expressions are how an *editor* writes an input: ``user.email`` reaches into
+    the automation's data. Some inputs do not come from an editor. An argument
+    supplied by a language model is the thing itself — ``"ann"`` means ann, not
+    a path to somewhere ann might be found — and running it through the resolver
+    turns a search into a lookup that finds nothing.
+
+    Wrapping says which of the two it is, so a value carrying a dot, a space or
+    a quote survives intact instead of being read as syntax.
+    """
+
+    value: Any
 
 
 _NUMBER_RE = re.compile(r"^[\s]*([+-]?)(?:((?:\d+))(?:\.(\d*))?|(?:\.(\d+)))[\s]*$")
@@ -153,7 +177,8 @@ def validate_expression(expr: str) -> bool:
 def resolve_expression(expr: str, context: dict[str, Any]) -> Any:
     """Resolve a simple expression against a context dictionary.
 
-    Supports number literals, string literals, and dotted variable paths.
+    Supports number literals, string literals, and dotted variable paths. A
+    :class:`Literal` is returned unchanged, having nothing left to resolve.
 
     :param expr: Expression string to resolve.
     :type expr: str
@@ -168,6 +193,8 @@ def resolve_expression(expr: str, context: dict[str, Any]) -> Any:
         resolve_expression('42', ctx)  # -> 42
         resolve_expression('user.profile.age', ctx)  # -> value from context
     """
+    if isinstance(expr, Literal):
+        return expr.value
     if expr is None:
         raise ExpressionError("Expression is None")
     expr = str(expr).strip()
