@@ -5,6 +5,7 @@ reason to import this package. django CMS discovers this module because ``ai``
 is an installed app in its own right.
 """
 
+from django import forms
 from django.utils.translation import gettext_lazy as _
 
 from ..cms_plugins import ActionPlugin, AutomationPlugin, action_plugins, register_automation_plugin
@@ -57,12 +58,39 @@ class AutomationAgent(AutomationPlugin):
         return context
 
 
+class AgentToolForm(forms.ModelForm):
+    """Spells out what leaving the approval gate unset actually means.
+
+    Django renders a nullable boolean as Unknown/Yes/No, and "Unknown" is a bad
+    word for a security decision. The three states are: decide from what the
+    action does, always ask, never ask.
+    """
+
+    requires_approval = forms.TypedChoiceField(
+        label=_("Requires approval"),
+        required=False,
+        empty_value=None,
+        coerce=lambda value: value == "true",
+        choices=(
+            ("", _("Automatic — ask before anything irreversible")),
+            ("true", _("Always ask")),
+            ("false", _("Never ask")),
+        ),
+        help_text=_("A person sees the call, and the arguments the model chose, before it runs."),
+    )
+
+    class Meta:
+        model = models.AgentToolPluginModel
+        fields = "__all__"
+
+
 @register_automation_plugin
 class AutomationAgentTool(AutomationPlugin):
     name = _("Agent tool")
     module = Module.AI
     icon = "bi-plug"
     model = models.AgentToolPluginModel
+    form = AgentToolForm
     render_template = "djangocms_automation/plugins/agent_tool.html"
 
     show_add_form = True
@@ -75,13 +103,3 @@ class AutomationAgentTool(AutomationPlugin):
         (None, {"fields": ("tool_name", "tool_description", "exposed_fields", "requires_approval")}),
         (_("Comment"), {"classes": ("collapse",), "fields": ("comment",)}),
     )
-
-    def save_model(self, request, obj, form, change):
-        """Default an irreversible action to needing approval.
-
-        Only on first save, so an editor who deliberately turns it off is not
-        overruled every time they touch the tool again.
-        """
-        if not change and obj.is_destructive():
-            obj.requires_approval = True
-        super().save_model(request, obj, form, change)

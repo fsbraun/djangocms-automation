@@ -266,6 +266,23 @@ class AutomationPluginModel(CMSPlugin):
         help_text=_("Optional comment about this automation step"),
     )
 
+    #: Whether resuming this node re-enters it instead of completing it.
+    #:
+    #: Resuming normally means "this step is done": the engine completes the
+    #: waiting action and carries on. A node that pauses *before* doing its
+    #: work — an agent's tool call waiting for approval — needs the opposite,
+    #: so it declares re-entry and is enqueued to run again instead.
+    resume_reenters = False
+
+    def on_resume(self, action: AutomationAction, user, data: dict | None) -> None:
+        """Record a person's decision, in the transaction that resumes.
+
+        Called only for a node with :attr:`resume_reenters`, immediately before
+        it is woken, and committed with it. A node that runs again on resume
+        cannot infer consent from its own state: a crash between pausing and
+        being recovered would look identical. It has to be written down.
+        """
+
     def execute(self, action: AutomationAction, data: dict, single_step: bool = False, **kwargs):
         """Execute the plugin logic for the given action.
 

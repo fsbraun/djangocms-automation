@@ -318,12 +318,12 @@ def test_a_tool_needing_approval_waits_for_a_person(run_setup, settings):
 
 
 @pytest.mark.django_db
-def test_an_irreversible_action_defaults_to_needing_approval(run_setup, settings, admin_user):
-    """The conservative default can be relaxed; the opposite mistake cannot be undone."""
-    from django.contrib.admin.sites import AdminSite
-    from django.test import RequestFactory
+def test_an_editor_can_relax_the_default_but_has_to_say_so(run_setup, settings):
+    """The conservative default can be relaxed; the opposite mistake cannot be undone.
 
-    from djangocms_automation.ai.cms_plugins import AutomationAgentTool
+    Unset means "decide by what the action does"; False is an editor saying
+    they know, and is left alone.
+    """
     from djangocms_automation.ai.models import AgentToolPluginModel
 
     _trigger, placeholder = run_setup
@@ -331,14 +331,11 @@ def test_an_irreversible_action_defaults_to_needing_approval(run_setup, settings
     tool = AgentToolPluginModel.objects.get(tool_name="wipe")
     tool.child_plugin_instances = list(tool.cmsplugin_set.all())
     assert tool.is_destructive()
+    assert tool.requires_approval is None, "nothing was chosen in the editor"
+    assert tool.needs_approval() is True
 
-    plugin = AutomationAgentTool(AgentToolPluginModel, AdminSite())
-    request = RequestFactory().post("/")
-    request.user = admin_user
     tool.requires_approval = False
-    plugin.save_model(request, tool, form=None, change=False)
-
-    assert tool.requires_approval is True
+    assert tool.needs_approval() is False, "an explicit choice is not overruled"
 
 
 @pytest.mark.django_db
@@ -361,3 +358,144 @@ def test_two_tools_with_the_same_name_warn_the_editor(run_setup, settings):
     instance = AgentPluginModel.objects.get(pk=agent.pk)
     instance.child_plugin_instances = list(instance.cmsplugin_set.all())
     assert any("share the name" in str(message) for message in instance.messages())
+
+
+# --------------------------------------------------------------------------
+# Review findings — see the tests above for the intended behaviour
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_a_destructive_tool_requires_approval_when_built_in_the_normal_order(run_setup, settings):
+    """A tool is saved before the action it wraps exists.
+
+    That is simply the order the editor works in: you add the tool, then drop an
+    action inside it. Deciding at save time whether the wrapped action is
+    irreversible therefore always decides against a tool that wraps nothing.
+    """
+    from djangocms_automation.ai.models import AgentToolPluginModel
+
+    _trigger, placeholder = run_setup
+    build_agent(placeholder, settings, tools=(("wipe", "UpdateModelAction", []),))
+
+    tool = AgentToolPluginModel.objects.get(tool_name="wipe")
+    tool.child_plugin_instances = list(tool.cmsplugin_set.all())
+    assert tool.get_tool_spec().requires_approval is True
+
+
+@pytest.mark.django_db
+def test_an_approved_call_actually_runs_the_tool(run_setup, settings, admin_user):
+    """Approving a call has to run it.
+
+    The pause is the engine's human-in-the-loop wait, and resuming one normally
+    means "this step is done". For an approval it means the opposite: the step
+    has not run yet, and approving is what lets it.
+    """
+    from djangocms_automation.ai.models import AgentToolPluginModel
+    from djangocms_automation.engine import resume_action
+
+    _trigger, placeholder = run_setup
+    build_agent(placeholder, settings)
+    AgentToolPluginModel.objects.filter(tool_name="echo").update(requires_approval=True)
+    SCRIPT.append(says(calls=[ToolCall(id="c1", name="echo", arguments={})]))
+
+    _trigger.trigger_execution(data=[{"seed": 1}])
+
+    call = AutomationAction.objects.exclude(parent__isnull=True).latest("id")
+    assert call.state == WAITING, "waiting for a person"
+
+    SCRIPT.append(says(text="Done."))
+    resume_action(call.pk, admin_user)
+
+    call.refresh_from_db()
+    assert call.state == COMPLETED
+    assert (call.scratch or {}).get("tool_result"), "the wrapped action ran and its result was recorded"
+    observations = [m for m in AgentState.load(agent_action()).messages if m["role"] == "tool"]
+    assert [m["tool_call_id"] for m in observations] == ["c1"], "the model was told what the tool returned"
+
+
+@pytest.mark.django_db
+def test_every_requested_call_is_answered_before_the_next_turn(run_setup, settings):
+    """A conversation must answer every tool call the model asked for.
+
+    Providers reject a request whose assistant turn contains a tool call with no
+    matching result. Dispatching one of two and dropping the other produces
+    exactly that.
+    """
+    sent: list = []
+
+    def complete(**kwargs):
+        # Copied, not referenced: this is the agent's live conversation and it
+        # keeps appending to it, so a reference would show the reply too.
+        sent.append([dict(message) for message in kwargs.get("messages") or []])
+        assert SCRIPT, "the agent asked for more turns than the test scripted"
+        return SCRIPT.pop(0)
+
+    _trigger, placeholder = run_setup
+    build_agent(placeholder, settings, tools=(("echo", "ActionPlugin", []), ("ping", "ActionPlugin", [])))
+    SCRIPT.append(
+        says(calls=[ToolCall(id="c1", name="echo", arguments={}), ToolCall(id="c2", name="ping", arguments={})])
+    )
+    SCRIPT.append(says(text="Done."))
+
+    with mock.patch.object(llm, "complete", side_effect=complete):
+        _trigger.trigger_execution(data=[{"seed": 1}])
+
+    assert agent_action().state == COMPLETED
+    for messages in sent:
+        requested = [
+            call["id"] for m in messages if m.get("role") == "assistant" for call in m.get("tool_calls") or []
+        ]
+        answered = [m["tool_call_id"] for m in messages if m.get("role") == "tool"]
+        assert sorted(requested) == sorted(answered), f"unanswered tool calls: {messages}"
+
+
+@pytest.mark.django_db
+def test_a_tool_wrapping_a_human_step_waits_for_the_human(run_setup, settings):
+    """An action whose behaviour lives in execute() must not be bypassed.
+
+    Wait for User pauses from ``execute``; ``perform`` is the base pass-through.
+    Calling the latter makes an escalation tool report success without anyone
+    having seen it.
+    """
+    _trigger, placeholder = run_setup
+    build_agent(placeholder, settings, tools=(("escalate", "UserInputAction", []),))
+    SCRIPT.append(says(calls=[ToolCall(id="c1", name="escalate", arguments={})]))
+
+    _trigger.trigger_execution(data=[{"seed": 1}])
+
+    call = AutomationAction.objects.exclude(parent__isnull=True).latest("id")
+    assert call.state == WAITING
+    assert call.requires_interaction, "it is a task for a person, and shows up as one"
+
+
+@pytest.mark.django_db
+def test_a_finished_tool_call_does_not_start_the_next_tool(run_setup, settings):
+    """Tools are dispatched by their agent, never by the plugin tree.
+
+    The default ``get_next_actions`` starts whatever plugin comes next, which
+    for a tool is the tool beside it — so an agent's second tool would run
+    because the first one did, with no model having asked for it.
+    """
+    _trigger, placeholder = run_setup
+    build_agent(placeholder, settings, tools=(("echo", "ActionPlugin", []), ("ping", "ActionPlugin", [])))
+    SCRIPT.append(says(calls=[ToolCall(id="c1", name="echo", arguments={})]))
+    SCRIPT.append(says(text="Done."))
+
+    _trigger.trigger_execution(data=[{"seed": 1}])
+
+    agent = agent_action()
+    assert agent.state == COMPLETED
+    calls = agent.children.all()
+    assert calls.count() == 1, "only the tool the model asked for ran"
+    assert (calls.first().scratch or {})["tool_call"]["name"] == "echo"
+
+
+@pytest.mark.django_db
+def test_the_approval_form_names_the_automatic_choice(run_setup, settings):
+    """ "Unknown" is Django's word for an unset boolean, and a bad one here."""
+    from djangocms_automation.ai.cms_plugins import AgentToolForm
+
+    choices = dict(AgentToolForm().fields["requires_approval"].choices)
+    assert "Automatic" in str(choices[""])
+    assert AgentToolForm({"requires_approval": ""}).fields["requires_approval"].clean("") is None

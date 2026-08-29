@@ -16,6 +16,7 @@ from django.db import models
 from django.utils.timezone import now
 from django.utils.translation import gettext_lazy as _
 
+from ..engine import ActionPause
 from ..instances import COMPLETED, FAILED, WAITING, AutomationAction
 from ..models import AutomationPluginModel
 from . import llm
@@ -62,9 +63,14 @@ class AgentToolPluginModel(AutomationPluginModel):
         ),
     )
     requires_approval = models.BooleanField(
-        default=False,
+        default=None,
+        null=True,
+        blank=True,
         verbose_name=_("Requires approval"),
-        help_text=_("Pause for a person to approve each call before it runs."),
+        help_text=_(
+            "Pause for a person to approve each call before it runs. Left unset, an action "
+            "whose effects cannot be taken back requires approval and everything else does not."
+        ),
     )
 
     class Meta:
@@ -112,6 +118,19 @@ class AgentToolPluginModel(AutomationPluginModel):
         plugin = self._action_plugin()
         return bool(plugin and plugin.plugin_type in DESTRUCTIVE_PLUGINS)
 
+    def needs_approval(self) -> bool:
+        """Whether a person has to see this call before it runs.
+
+        Resolved when the question is asked, not when the tool is saved. An
+        editor adds the tool and *then* drops an action into it, so at save
+        time the tool wraps nothing and any decision made there is a decision
+        about emptiness. Deciding late also means moving a different action
+        into an existing tool cannot silently drop the gate.
+        """
+        if self.requires_approval is None:
+            return self.is_destructive()
+        return self.requires_approval
+
     # -- the contract ------------------------------------------------------
 
     def get_tool_spec(self) -> ToolSpec:
@@ -127,21 +146,30 @@ class AgentToolPluginModel(AutomationPluginModel):
             name=self.tool_name,
             description=self.tool_description,
             parameters=parameters,
-            requires_approval=self.requires_approval,
+            requires_approval=self.needs_approval(),
             destructive=self.is_destructive(),
         )
 
-    def run(self, call, action: AutomationAction, rows: list) -> ToolResult:
+    def run(self, call, action: AutomationAction, rows: list) -> tuple[str, ToolResult | None, list]:
         """Validate the model's arguments and run the wrapped action.
 
-        The action is called directly rather than scheduled as its own step.
-        That keeps one tool call to one execution record, which is what makes an
-        agent's history readable; an action needing several steps of its own is
-        a workflow, and belongs behind a sub-workflow rather than a tool.
+        The action is run in this node's own execution rather than scheduled as
+        a further step, which is what keeps one tool call to one execution
+        record — the thing that makes an agent's history readable.
+
+        It is run through :meth:`execute`, not :meth:`perform`. ``perform`` is
+        where most actions put their work, but not all of them: *Wait for User*
+        pauses from ``execute`` and leaves ``perform`` as the base pass-through,
+        so calling ``perform`` would make an escalation tool report success
+        without anyone having seen it. Going through ``execute`` also means a
+        wrapped action that wants to wait can, and this node waits with it.
+
+        :returns: The state this tool call reached, the result to report to the
+            model (``None`` while waiting for a person), and the output rows.
         """
         plugin = self._action_plugin()
         if plugin is None:
-            return ToolResult(call_id=call.id, content="This tool has no action to run.", is_error=True)
+            return COMPLETED, ToolResult(call_id=call.id, content="This tool has no action to run.", is_error=True), []
 
         form = self._data_form()
         exposed = list(self.exposed_fields or [])
@@ -149,46 +177,119 @@ class AgentToolPluginModel(AutomationPluginModel):
             arguments = validate_arguments(form, call.arguments, allowed=exposed) if form else {}
         except ToolValidationError as exc:
             # Handed back for the model to correct rather than failing the run.
-            return ToolResult(call_id=call.id, content=str(exc), is_error=True)
+            return COMPLETED, ToolResult(call_id=call.id, content=str(exc), is_error=True), []
 
         # The action resolves its own inputs, so the model's values are handed
         # to it on the instance rather than as an argument. No action needs to
         # know it is being used as a tool.
         plugin._input_overrides = arguments
         try:
-            output = plugin.perform(action, rows)
+            state, output = plugin.execute(action, rows)
+        except ActionPause:
+            # The engine's own pause signal — a rate limit, a backoff. It is
+            # not an observation for the model; it means "run me again later",
+            # and only the engine can do that.
+            raise
         except Exception as exc:  # noqa: BLE001 — a failing tool is an observation
-            return ToolResult(call_id=call.id, content=f"{type(exc).__name__}: {exc}", is_error=True)
+            return COMPLETED, ToolResult(call_id=call.id, content=f"{type(exc).__name__}: {exc}", is_error=True), []
 
         rows_out = output if isinstance(output, list) else [{"value": output}]
-        return ToolResult(call_id=call.id, content=str(rows_out), rows=rows_out)
+        if state == WAITING:
+            # The wrapped action wants a person. It has set whatever it needs on
+            # this action to say so; this node simply waits with it, and reports
+            # to the model once that person has answered.
+            return WAITING, None, rows_out
+        if state == FAILED:
+            return COMPLETED, ToolResult(call_id=call.id, content=str(output), is_error=True), []
+        return COMPLETED, ToolResult(call_id=call.id, content=str(rows_out), rows=rows_out), rows_out
 
     # -- execution ---------------------------------------------------------
+
+    #: A tool call waiting for approval has not run yet, so resuming it means
+    #: "go ahead" rather than "you are done".
+    resume_reenters = True
+
+    def get_next_actions(self, action) -> list:
+        """Nothing follows a tool call except its agent.
+
+        The default walks the plugin tree and starts whatever comes next, which
+        for a tool is the sibling tool — an agent's second tool would run
+        because its first one did, with no call behind it and no model having
+        asked. Tools are dispatched by their agent or not at all; a finished one
+        just wakes it.
+        """
+        return []
+
+    def on_resume(self, action, user, data) -> None:
+        """Write down the person's decision before this node runs again.
+
+        Consent cannot be inferred from the node's own state: a worker that
+        crashed between pausing and being recovered leaves a row
+        indistinguishable from an approved one, and the whole point of the gate
+        is that the difference matters. So it is recorded, in the transaction
+        that resumes.
+        """
+        scratch = dict(action.scratch or {})
+        if scratch.get("awaiting_approval"):
+            scratch["approved"] = True
+            scratch["approved_by"] = getattr(user, "pk", None)
+        elif scratch.get("awaiting_input"):
+            scratch["input"] = data or {}
+        AutomationAction.objects.filter(pk=action.pk).update(scratch=scratch)
+        action.scratch = scratch
 
     def execute(self, action, data, single_step=False, plugin_dict=None):
         """Run one tool call, pausing first if it needs a person.
 
-        The approval gate is the existing human-in-the-loop pause, so an agent's
-        tool call appears in the same *Open tasks* list as any other waiting
-        step, with the arguments the model chose visible on it.
+        A call passes through up to three of this node's executions: pause for
+        approval, run, and — if the wrapped action itself waits for someone —
+        report what that person said. Each pause is the engine's ordinary
+        human-in-the-loop wait, so an agent's tool call appears in the same
+        *Open tasks* list as any other waiting step, with the arguments the
+        model chose visible on it.
         """
-        scratch = action.scratch if isinstance(action.scratch, dict) else {}
+        scratch = dict(action.scratch or {})
         raw = scratch.get("tool_call") or {}
         call = llm.ToolCall(id=raw.get("id", ""), name=raw.get("name", ""), arguments=raw.get("arguments") or {})
 
-        if self.requires_approval and not scratch.get("approved"):
+        # The wrapped action was waiting for a person, and that person has
+        # answered. What they said is what the model hears back.
+        if scratch.get("awaiting_input"):
+            answer = scratch.get("input") or {}
+            rows = data or []
+            self._record(action, scratch, ToolResult(call_id=call.id, content=str(answer or rows)))
+            return COMPLETED, rows
+
+        if self.needs_approval() and not scratch.get("approved"):
             action.requires_interaction = True
-            AutomationAction.objects.filter(pk=action.pk).update(scratch={**scratch, "awaiting_approval": True})
+            scratch["awaiting_approval"] = True
+            AutomationAction.objects.filter(pk=action.pk).update(scratch=scratch)
+            action.scratch = scratch
             return WAITING, {"tool": call.name, "arguments": call.arguments}
 
-        result = self.run(call, action, data or [])
-        AutomationAction.objects.filter(pk=action.pk).update(
-            scratch={
-                **scratch,
-                "tool_result": {"call_id": call.id, "content": result.content, "is_error": result.is_error},
-            }
-        )
-        return COMPLETED, result.rows
+        state, result, rows = self.run(call, action, data or [])
+        if state == WAITING:
+            # The wrapped action wants a person of its own. It has already set
+            # what it needs on this action to say so; this node waits with it.
+            scratch["awaiting_input"] = True
+            scratch.pop("awaiting_approval", None)
+            AutomationAction.objects.filter(pk=action.pk).update(scratch=scratch)
+            action.scratch = scratch
+            return WAITING, {"tool": call.name}
+
+        self._record(action, scratch, result)
+        return COMPLETED, rows
+
+    def _record(self, action, scratch, result: ToolResult) -> None:
+        """Leave the observation where the agent will look for it."""
+        scratch = {
+            **scratch,
+            "tool_result": {"call_id": result.call_id, "content": result.content, "is_error": result.is_error},
+        }
+        scratch.pop("awaiting_input", None)
+        scratch.pop("awaiting_approval", None)
+        AutomationAction.objects.filter(pk=action.pk).update(scratch=scratch)
+        action.scratch = scratch
 
 
 class AgentPluginModel(AutomationPluginModel):
@@ -317,11 +418,8 @@ class AgentPluginModel(AutomationPluginModel):
         by_name = {tool.tool_name: tool for tool in tools}
         wire = [tool.get_tool_spec().to_wire() for tool in tools]
 
-        # A model naming a tool that does not exist has asked for nothing this
-        # node can dispatch, so suspending would leave the agent waiting on a
-        # child that never arrives. It is told what it does have and asked
-        # again, here, with the budget checked each time round so a model that
-        # keeps guessing still stops.
+        # A model naming a tool that does not exist is told what it does have
+        # and asked again, here, with the budget checked each time round.
         while True:
             try:
                 budget.check(state)
@@ -342,17 +440,23 @@ class AgentPluginModel(AutomationPluginModel):
 
             state.record_reply(reply)
 
-            # One call per turn: easier to reason about, to approve, and to read
-            # back afterwards. The engine could dispatch several — the join
-            # logic already supports it — but nothing yet needs it.
-            wanted = [call for call in reply.tool_calls if call.name in by_name][:1]
+            # Every call the model asked for is answered, and all of them are
+            # dispatched. A provider rejects a conversation whose assistant
+            # turn requests a tool that nothing replies to, so dropping the
+            # extras would poison the next request rather than simplify it.
+            wanted = [call for call in reply.tool_calls if call.name in by_name]
             unknown = [call for call in reply.tool_calls if call.name not in by_name]
-            if unknown and not wanted:
+            for call in unknown:
                 state.record_observation(
-                    unknown[0].id,
-                    f"No tool named {unknown[0].name!r}. Available: {', '.join(sorted(by_name))}.",
+                    call.id,
+                    f"No tool named {call.name!r}. Available: {', '.join(sorted(by_name))}.",
                     is_error=True,
                 )
+            if unknown and not wanted:
+                # Nothing to dispatch, so suspending would leave this node
+                # waiting on a child that never arrives. It is asked again
+                # here, against the same budget, so a model that keeps
+                # guessing still stops.
                 continue
             break
 

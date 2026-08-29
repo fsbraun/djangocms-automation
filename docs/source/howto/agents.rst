@@ -69,15 +69,24 @@ Write what the tool does and when to use it, not what it is:
 Approval before anything irreversible
 -------------------------------------
 
-Any tool can be set to require approval. The call then pauses as a normal
-human-in-the-loop step: it appears under *Automations → Execution Instances →
-Open tasks*, showing the tool name and the arguments the model chose, and runs
-only once someone permitted resumes it.
+Every tool has an approval setting with three states, and it defaults to
+**Automatic**: a tool wrapping an action whose effects cannot be taken back —
+creating or updating records, sending mail — needs approval, and everything else
+does not. **Always ask** and **Never ask** override that.
 
-Tools wrapping actions whose effects cannot be taken back — creating or updating
-records, sending mail — default to requiring approval when you add them. Turn it
-off deliberately if you mean to; the default is set that way because the
-opposite mistake cannot be undone.
+Leaving it automatic is worth preferring over setting it yourself, because the
+decision is then made when the call happens rather than when you saved the form.
+Swap the action inside a tool for a more dangerous one and the gate appears on
+its own.
+
+An approval pauses the call as a normal human-in-the-loop step: it appears under
+*Automations → Execution Instances → Open tasks*, showing the tool name and the
+arguments the model chose, and runs only once someone permitted resumes it. The
+call has not run at that point — approving is what runs it.
+
+A tool can also wrap *Wait for User*, which is how an agent escalates: the tool
+call itself waits for a person, and what they answer is what the model hears
+back.
 
 Limits
 ------

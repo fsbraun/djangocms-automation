@@ -768,6 +768,27 @@ def resume_action(action_id: int, user, data: dict | None = None) -> AutomationA
         action.refresh_from_db()
         return action
 
+    # Some nodes pause *before* doing their work, so resuming them means "go
+    # ahead" rather than "you are done". Those re-enter: the decision is
+    # recorded, the action goes back to PENDING as a continuation — not a
+    # retry, it has not failed at anything — and it runs again.
+    if getattr(plugin, "resume_reenters", False):
+        with transaction.atomic():
+            plugin.on_resume(action, user, data)
+            woken = transition_action(
+                action.pk,
+                PENDING,
+                allowed_from=(WAITING,),
+                message="Resumed by user",
+                field_updates={"requires_interaction": False},
+                metadata={"resumed_by": getattr(user, "pk", None)},
+                continuation=True,
+            )
+            if woken is None:
+                raise ValueError("Action is no longer waiting.")
+            enqueue_action(action.pk, data=rows)
+        return woken
+
     # The resume and what follows it commit together, for the same reason as an
     # action's outcome: a resume that lands without its continuation leaves a
     # completed task and a run with nothing queued behind it.
