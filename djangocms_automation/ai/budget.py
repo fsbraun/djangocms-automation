@@ -68,6 +68,27 @@ class AgentBudget:
                     f"Agent stopped after {int(elapsed)} seconds, over its {self.deadline_seconds} second limit."
                 )
 
+    def allow(self, state, calls: list) -> list:
+        """Trim a turn's tool calls to what this run may still spend.
+
+        The tool-call limit bounds *side effects*, so it has to be applied
+        before the calls are dispatched. Checking it at the start of the next
+        turn is checking it after they have already run — which is the thing the
+        limit exists to prevent. A model that asks for three calls with one left
+        gets one, and is told the other two did not run.
+
+        :raises BudgetExceeded: If none of them may run.
+        """
+        if not self.max_tool_calls:
+            return list(calls)
+        remaining = max(self.max_tool_calls - state.tool_calls, 0)
+        if remaining == 0 and calls:
+            raise BudgetExceeded(
+                f"Agent stopped after {state.tool_calls} tool calls. "
+                f"Its tools may not be giving it what it needs to finish."
+            )
+        return list(calls)[:remaining]
+
 
 def _parse(timestamp: str):
     """Read an ISO timestamp, falling back to now if it is unreadable."""

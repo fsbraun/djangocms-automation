@@ -80,9 +80,10 @@ Swap the action inside a tool for a more dangerous one and the gate appears on
 its own.
 
 An approval pauses the call as a normal human-in-the-loop step: it appears under
-*Automations → Execution Instances → Open tasks*, showing the tool name and the
-arguments the model chose, and runs only once someone permitted resumes it. The
-call has not run at that point — approving is what runs it.
+*Automations → Execution Instances → Open tasks*, naming the tool, listing the
+arguments the model chose, and saying so when the action cannot be undone. It
+runs only once someone permitted resumes it — the call has not happened at that
+point, and approving is what makes it happen.
 
 A tool can also wrap *Wait for User*, which is how an agent escalates: the tool
 call itself waits for a person, and what they answer is what the model hears
@@ -104,7 +105,9 @@ differently:
    * - Maximum turns
      - A model that will not conclude.
    * - Maximum tool calls
-     - One that thrashes between tools without progressing.
+     - One that thrashes between tools without progressing. Applied before the
+       calls run, so a turn asking for more than the run can afford has the
+       excess refused rather than executed.
    * - Maximum tokens
      - A conversation growing faster than the work.
    * - Deadline

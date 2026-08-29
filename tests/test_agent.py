@@ -499,3 +499,73 @@ def test_the_approval_form_names_the_automatic_choice(run_setup, settings):
     choices = dict(AgentToolForm().fields["requires_approval"].choices)
     assert "Automatic" in str(choices[""])
     assert AgentToolForm({"requires_approval": ""}).fields["requires_approval"].clean("") is None
+
+
+@pytest.mark.django_db
+def test_a_turn_cannot_spend_more_tool_calls_than_it_has(run_setup, settings):
+    """The budget bounds side effects, so it has to be applied before dispatch.
+
+    Checking it only at the start of the next turn is checking it after the
+    calls have already run, which is exactly what the limit exists to prevent.
+    """
+    _trigger, placeholder = run_setup
+    build_agent(
+        placeholder,
+        settings,
+        tools=(("echo", "ActionPlugin", []), ("ping", "ActionPlugin", [])),
+        max_tool_calls=1,
+    )
+    SCRIPT.append(
+        says(calls=[ToolCall(id="c1", name="echo", arguments={}), ToolCall(id="c2", name="ping", arguments={})])
+    )
+    SCRIPT.append(says(text="Done."))
+
+    _trigger.trigger_execution(data=[{"seed": 1}])
+
+    agent = agent_action()
+    assert agent.children.count() == 1, "the second call was over the limit and must not have run"
+    dispatched = [m for m in AgentState.load(agent).messages if m.get("role") == "tool"]
+    assert len(dispatched) == 2, "the model is still told what happened to both"
+
+
+@pytest.mark.django_db
+def test_an_approver_can_see_what_they_are_approving(run_setup, settings, admin_client):
+    """A gate nobody can see through is not a gate.
+
+    The point of pausing is that a person decides, and they cannot decide from
+    an em dash: the page has to name the tool and show the arguments the model
+    chose.
+    """
+    from djangocms_automation.ai.models import AgentToolPluginModel
+
+    _trigger, placeholder = run_setup
+    build_agent(placeholder, settings, tools=(("send_mail", "MailAction", ["subject"]),))
+    AgentToolPluginModel.objects.filter(tool_name="send_mail").update(requires_approval=True)
+    SCRIPT.append(says(calls=[ToolCall(id="c1", name="send_mail", arguments={"subject": "Ship it"})]))
+
+    _trigger.trigger_execution(data=[{"seed": 1}])
+
+    page = admin_client.get("/admin/djangocms_automation/automationinstance/open-tasks/")
+    body = page.content.decode()
+    assert "send_mail" in body, "the tool is named"
+    assert "Ship it" in body, "the arguments the model chose are shown"
+
+
+@pytest.mark.django_db
+def test_a_waiting_tool_keeps_the_note_written_for_the_person(run_setup, settings):
+    """Wait for User exists to tell someone what is needed. Losing the note
+    leaves them a task with no instructions."""
+    from djangocms_automation.models import BaseActionPluginModel
+
+    _trigger, placeholder = run_setup
+    build_agent(placeholder, settings, tools=(("escalate", "UserInputAction", []),))
+    BaseActionPluginModel.objects.filter(plugin_type="UserInputAction").update(
+        config={"note": "Please check this refund."}
+    )
+    SCRIPT.append(says(calls=[ToolCall(id="c1", name="escalate", arguments={})]))
+
+    _trigger.trigger_execution(data=[{"seed": 1}])
+
+    call = AutomationAction.objects.exclude(parent__isnull=True).latest("id")
+    assert call.state == WAITING
+    assert call.result.get("note") == "Please check this refund."

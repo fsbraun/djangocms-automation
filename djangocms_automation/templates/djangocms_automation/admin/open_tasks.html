@@ -8,7 +8,7 @@
     <thead>
         <tr>
             <th>{% trans "Automation" %}</th>
-            <th>{% trans "Note" %}</th>
+            <th>{% trans "What is waiting" %}</th>
             <th>{% trans "Created" %}</th>
             <th></th>
         </tr>
@@ -17,7 +17,30 @@
         {% for task in tasks %}
         <tr>
             <td>{{ task.automation_instance.automation_content.automation.name }}</td>
-            <td>{% if task.result.note %}{{ task.result.note }}{% else %}&mdash;{% endif %}</td>
+            <td>
+                {% if task.result.note %}<p>{{ task.result.note }}</p>{% endif %}
+                {% comment %}
+                An agent's tool call is a decision someone is being asked to
+                make, so the page has to say what it is: which tool wants to
+                run, with which arguments, and whether it can be undone.
+                {% endcomment %}
+                {% if task.result.tool %}
+                <p>
+                    {% blocktrans with tool=task.result.tool %}Tool: <code>{{ tool }}</code>{% endblocktrans %}
+                    {% if task.result.destructive %}
+                    <strong>{% trans "This cannot be undone." %}</strong>
+                    {% endif %}
+                </p>
+                {% if task.result.arguments %}
+                <table>
+                    {% for name, value in task.result.arguments.items %}
+                    <tr><th>{{ name }}</th><td>{{ value }}</td></tr>
+                    {% endfor %}
+                </table>
+                {% endif %}
+                {% endif %}
+                {% if not task.result.note and not task.result.tool %}&mdash;{% endif %}
+            </td>
             <td>{{ task.created }}</td>
             <td>
                 <form method="post" action="{% url 'admin:djangocms_automation_resume_action' task.pk %}">

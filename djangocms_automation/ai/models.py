@@ -165,7 +165,8 @@ class AgentToolPluginModel(AutomationPluginModel):
         wrapped action that wants to wait can, and this node waits with it.
 
         :returns: The state this tool call reached, the result to report to the
-            model (``None`` while waiting for a person), and the output rows.
+            model (``None`` while waiting for a person), and the output — rows
+            for a finished call, the wrapped action's own output while it waits.
         """
         plugin = self._action_plugin()
         if plugin is None:
@@ -193,12 +194,13 @@ class AgentToolPluginModel(AutomationPluginModel):
         except Exception as exc:  # noqa: BLE001 — a failing tool is an observation
             return COMPLETED, ToolResult(call_id=call.id, content=f"{type(exc).__name__}: {exc}", is_error=True), []
 
-        rows_out = output if isinstance(output, list) else [{"value": output}]
         if state == WAITING:
             # The wrapped action wants a person. It has set whatever it needs on
             # this action to say so; this node simply waits with it, and reports
-            # to the model once that person has answered.
-            return WAITING, None, rows_out
+            # to the model once that person has answered. Its output is passed
+            # back untouched, because it is what that person is meant to read.
+            return WAITING, None, output
+        rows_out = output if isinstance(output, list) else [{"value": output}]
         if state == FAILED:
             return COMPLETED, ToolResult(call_id=call.id, content=str(output), is_error=True), []
         return COMPLETED, ToolResult(call_id=call.id, content=str(rows_out), rows=rows_out), rows_out
@@ -265,20 +267,35 @@ class AgentToolPluginModel(AutomationPluginModel):
             scratch["awaiting_approval"] = True
             AutomationAction.objects.filter(pk=action.pk).update(scratch=scratch)
             action.scratch = scratch
-            return WAITING, {"tool": call.name, "arguments": call.arguments}
+            return WAITING, self._for_the_person(call)
 
-        state, result, rows = self.run(call, action, data or [])
+        state, result, output = self.run(call, action, data or [])
         if state == WAITING:
             # The wrapped action wants a person of its own. It has already set
-            # what it needs on this action to say so; this node waits with it.
+            # what it needs on this action to say so; this node waits with it,
+            # keeping whatever the action wrote for that person to read.
             scratch["awaiting_input"] = True
             scratch.pop("awaiting_approval", None)
             AutomationAction.objects.filter(pk=action.pk).update(scratch=scratch)
             action.scratch = scratch
-            return WAITING, {"tool": call.name}
+            waiting = output if isinstance(output, dict) else {}
+            return WAITING, {**waiting, **self._for_the_person(call)}
 
         self._record(action, scratch, result)
-        return COMPLETED, rows
+        return COMPLETED, output
+
+    def _for_the_person(self, call) -> dict:
+        """What the *Open tasks* page needs in order to be worth reading.
+
+        Someone approving a call is being asked to make a decision, and cannot
+        make it from the fact that a decision is due. They need to know which
+        tool wants to run, with what, and whether it can be taken back.
+        """
+        return {
+            "tool": call.name,
+            "arguments": call.arguments,
+            "destructive": self.is_destructive(),
+        }
 
     def _record(self, action, scratch, result: ToolResult) -> None:
         """Leave the observation where the agent will look for it."""
@@ -424,8 +441,7 @@ class AgentPluginModel(AutomationPluginModel):
             try:
                 budget.check(state)
             except BudgetExceeded as exc:
-                state.save(action)
-                return FAILED, {"error": str(exc), "turns": state.turn, "tool_calls": state.tool_calls}
+                return self._out_of_budget(action, state, exc)
 
             try:
                 reply = llm.complete(
@@ -440,10 +456,10 @@ class AgentPluginModel(AutomationPluginModel):
 
             state.record_reply(reply)
 
-            # Every call the model asked for is answered, and all of them are
-            # dispatched. A provider rejects a conversation whose assistant
-            # turn requests a tool that nothing replies to, so dropping the
-            # extras would poison the next request rather than simplify it.
+            # Every call the model asked for is answered, whether or not it
+            # runs. A provider rejects a conversation whose assistant turn
+            # requests a tool that nothing replies to, so an unanswered call
+            # poisons the next request rather than simplifying it.
             wanted = [call for call in reply.tool_calls if call.name in by_name]
             unknown = [call for call in reply.tool_calls if call.name not in by_name]
             for call in unknown:
@@ -452,6 +468,16 @@ class AgentPluginModel(AutomationPluginModel):
                     f"No tool named {call.name!r}. Available: {', '.join(sorted(by_name))}.",
                     is_error=True,
                 )
+
+            # The tool-call budget is spent before the next turn, not at it.
+            try:
+                allowed = budget.allow(state, wanted)
+            except BudgetExceeded as exc:
+                return self._out_of_budget(action, state, exc)
+            for call in wanted[len(allowed) :]:
+                state.record_observation(call.id, "Not run: this run's tool-call budget is spent.", is_error=True)
+            wanted = allowed
+
             if unknown and not wanted:
                 # Nothing to dispatch, so suspending would leave this node
                 # waiting on a child that never arrives. It is asked again
@@ -467,6 +493,11 @@ class AgentPluginModel(AutomationPluginModel):
 
         state.save(action)
         return COMPLETED, [{"text": reply.text, "turns": state.turn, "usage": state.usage}]
+
+    def _out_of_budget(self, action, state, exc):
+        """Stop the run, keeping the conversation that explains why."""
+        state.save(action)
+        return FAILED, {"error": str(exc), "turns": state.turn, "tool_calls": state.tool_calls}
 
     def get_next_actions(self, action):
         """Dispatch the tool calls this turn asked for.
