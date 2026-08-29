@@ -30,7 +30,10 @@ dependencies = [
   "jsonschema>=4.22",
 ]
 optional-dependencies.llm = [
-  "litellm>=1.60",
+  # Capped deliberately: litellm ships around 35 releases a month and has made
+  # breaking changes inside 1.x. The upper bound is a decision to review the
+  # wrapper's contract test before moving, not a claim that 1.110 breaks.
+  "litellm>=1.98,<1.110",
 ]
 optional-dependencies.test = [
   "coverage",
@@ -55,7 +58,7 @@ dynamic.version = { attr = "djangocms_automation.__version__" }
 [tool.ruff]
 target-version = "py312"
 line-length = 119
-exclude = [ "djangocms_automation/migrations" ]
+exclude = [ "**/migrations" ]
 lint.ignore = [
   # Django, django CMS and DRF all declare configuration as plain mutable class
   # attributes (`list_display`, `child_classes`, `fieldsets`, ...). Annotating
