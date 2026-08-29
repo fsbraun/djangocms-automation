@@ -1161,6 +1161,12 @@ def replay_action(action_id: int) -> AutomationAction | None:
     if original is None or original.state not in (FAILED, CANCELED):
         return None
 
+    # Most of what an action needs is its input, which is seeded below. A node
+    # whose instruction lives on itself rather than in the data says so, and
+    # says which part of it survives a replay.
+    plugin = build_plugin_map(original.automation_instance.automation_content_id).get(original.plugin_ptr)
+    carried = plugin.scratch_for_replay(dict(original.scratch or {})) if plugin is not None else {}
+
     with transaction.atomic():
         replacement = AutomationAction.objects.create(
             previous=original.previous,
@@ -1169,6 +1175,7 @@ def replay_action(action_id: int) -> AutomationAction | None:
             plugin_ptr=original.plugin_ptr,
             max_attempts=original.max_attempts,
             replayed_from=original,
+            scratch=carried,
             finished=None,
         )
         _reopen_ancestors(original, replacement.pk)

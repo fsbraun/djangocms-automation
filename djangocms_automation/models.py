@@ -274,6 +274,22 @@ class AutomationPluginModel(CMSPlugin):
     #: so it declares re-entry and is enqueued to run again instead.
     resume_reenters = False
 
+    def scratch_for_replay(self, scratch: dict) -> dict:
+        """What a replayed action needs to carry over from the one it replaces.
+
+        A replacement is seeded from the failed attempt's *input*, which is
+        enough for most nodes: what they were asked to do is in the data. It is
+        not enough for a node whose instruction lives on itself — an agent's
+        tool call is the request a model made, not a data row — and such a node
+        replays as a blank without it.
+
+        Nothing is carried by default. The failed node's working state is the
+        state that failed, and a replay is a new attempt, not a resumption of
+        the old one; a node opts in to the specific parts that identify *which*
+        piece of work this is.
+        """
+        return {}
+
     def on_resume(self, action: AutomationAction, user, data: dict | None) -> None:
         """Record a person's decision, in the transaction that resumes.
 

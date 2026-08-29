@@ -181,6 +181,18 @@ making a new execution decision, so the engine creates a new action linked by
 reopened so the replacement can report back through its joins; superseded
 children are excluded when those joins evaluate their result.
 
+The replacement is seeded with the input the failed attempt received, and with
+nothing else. That is enough for most nodes, because what they were asked to do
+is in the data — but not for a node whose instruction lives on itself. An
+agent's tool call is a request a model made, held on the node rather than passed
+to it, and a replacement without it is a blank call answering a transcript that
+is waiting for a specific one. Such a node implements ``scratch_for_replay`` and
+names the parts that identify which piece of work this is. It names only those:
+the failed node's working state is the state that failed, and an approval in
+particular was granted to a call that then died — replaying is an operator
+choosing to run it again, which is a decision for a person to confirm afresh
+rather than for the failed row to grant in advance.
+
 How racing conditions are contained
 ------------------------------------
 

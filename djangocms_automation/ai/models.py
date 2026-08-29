@@ -211,6 +211,19 @@ class AgentToolPluginModel(AutomationPluginModel):
     #: "go ahead" rather than "you are done".
     resume_reenters = True
 
+    def scratch_for_replay(self, scratch: dict) -> dict:
+        """The call itself, and nothing else.
+
+        A replayed tool call has to be the same call — the model asked for a
+        particular tool with particular arguments, and the transcript is waiting
+        for an answer carrying that id. Everything else is deliberately dropped.
+        An approval was granted to a call that then failed; replaying is an
+        operator running it again, and that decision is theirs to have someone
+        confirm, not the failed row's to grant in advance.
+        """
+        call = scratch.get("tool_call")
+        return {"tool_call": call} if call else {}
+
     def get_next_actions(self, action) -> list:
         """Nothing follows a tool call except its agent.
 

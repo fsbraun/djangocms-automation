@@ -569,3 +569,63 @@ def test_a_waiting_tool_keeps_the_note_written_for_the_person(run_setup, setting
     call = AutomationAction.objects.exclude(parent__isnull=True).latest("id")
     assert call.state == WAITING
     assert call.result.get("note") == "Please check this refund."
+
+
+@pytest.mark.django_db
+def test_replaying_a_tool_call_keeps_the_call_it_was(run_setup, settings):
+    """A replayed tool call has to be the same call.
+
+    The engine seeds a replacement from the failed attempt's input, but a tool
+    call is not in its input — it is the request the model made, held on the
+    node. Without it the replacement runs an empty call and answers the
+    provider with an id belonging to nothing.
+    """
+    from djangocms_automation.ai.models import AgentToolPluginModel
+    from djangocms_automation.engine import fail_action, replay_action
+
+    _trigger, placeholder = run_setup
+    build_agent(placeholder, settings, tools=(("send_mail", "MailAction", ["subject"]),))
+    AgentToolPluginModel.objects.filter(tool_name="send_mail").update(requires_approval=True)
+    SCRIPT.append(says(calls=[ToolCall(id="c1", name="send_mail", arguments={"subject": "Ship it"})]))
+
+    _trigger.trigger_execution(data=[{"seed": 1}])
+
+    call = AutomationAction.objects.exclude(parent__isnull=True).latest("id")
+    fail_action(call, "the worker died", allowed_from=(WAITING,))
+    call.refresh_from_db()
+    assert call.state == FAILED and call.dead_lettered
+
+    replacement = replay_action(call.pk)
+
+    assert replacement.scratch["tool_call"]["id"] == "c1"
+    assert replacement.scratch["tool_call"]["name"] == "send_mail"
+    assert replacement.scratch["tool_call"]["arguments"] == {"subject": "Ship it"}
+
+
+@pytest.mark.django_db
+def test_a_replayed_call_has_to_be_approved_again(run_setup, settings):
+    """Approval is granted to a call, not to a tool.
+
+    Replaying is an operator deciding to run something again; carrying the old
+    approval forward would let that happen without anyone seeing the call.
+    """
+    from djangocms_automation.ai.models import AgentToolPluginModel
+    from djangocms_automation.engine import fail_action, replay_action
+
+    _trigger, placeholder = run_setup
+    build_agent(placeholder, settings, tools=(("send_mail", "MailAction", ["subject"]),))
+    AgentToolPluginModel.objects.filter(tool_name="send_mail").update(requires_approval=True)
+    SCRIPT.append(says(calls=[ToolCall(id="c1", name="send_mail", arguments={"subject": "Ship it"})]))
+
+    _trigger.trigger_execution(data=[{"seed": 1}])
+
+    call = AutomationAction.objects.exclude(parent__isnull=True).latest("id")
+    AutomationAction.objects.filter(pk=call.pk).update(scratch={**call.scratch, "approved": True})
+    call.refresh_from_db()
+    fail_action(call, "the worker died", allowed_from=(WAITING,))
+
+    replacement = replay_action(call.pk)
+
+    assert "approved" not in replacement.scratch
+    replacement.refresh_from_db()
+    assert replacement.requires_interaction, "it asks again"
