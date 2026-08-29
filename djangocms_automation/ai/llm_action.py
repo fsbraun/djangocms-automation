@@ -10,10 +10,10 @@ from django.conf import settings
 from django.utils.timezone import now
 from django.utils.translation import gettext_lazy as _
 
-from .. import llm
 from ..engine import ActionPause
 from ..models import BaseActionPluginModel
 from ..utilities.templates import safe_render, validate_template
+from . import llm
 
 #: Give up after this many rate-limit pauses.
 MAX_LLM_RETRIES = 5

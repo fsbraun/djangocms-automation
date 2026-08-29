@@ -30,6 +30,7 @@ INSTALLED_APPS = [
     "djangocms_versioning",
     "djangocms_form_builder",
     "djangocms_automation",
+    "djangocms_automation.ai",
     "demoproject",
 ]
 

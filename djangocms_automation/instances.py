@@ -327,6 +327,16 @@ class AutomationAction(models.Model):
             "retry attempts: a split or agent that re-enters many times has not failed even once."
         ),
     )
+    scratch = models.JSONField(
+        default=dict,
+        blank=True,
+        verbose_name=_("Scratch state"),
+        help_text=_(
+            "Working state a node keeps between re-entries: an agent's conversation so far, "
+            "its accumulated usage, the tool calls it has dispatched. Private to the node, "
+            "unlike `result`, which the engine overwrites when a failure propagates."
+        ),
+    )
     input_data = models.JSONField(
         null=True,
         blank=True,

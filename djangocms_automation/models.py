@@ -821,7 +821,7 @@ class BaseActionPluginModel(AutomationPluginModel):
             name for name, field in data_form.base_fields.items() if isinstance(field.widget, django_forms.Textarea)
         }
 
-    def resolve_inputs(self, row: dict | None, rows: list) -> dict:
+    def resolve_inputs(self, row: dict | None, rows: list, overrides: dict | None = None) -> dict:
         """Resolve all configured inputs against a data row.
 
         Expression fields are resolved with
@@ -833,6 +833,12 @@ class BaseActionPluginModel(AutomationPluginModel):
 
         :param row: The current data row (or None).
         :param rows: All data rows.
+        :param overrides: Values to use as they are, instead of resolving the
+            configured expression for those keys. An editor's inputs are
+            expressions over the automation's data; a value supplied at call
+            time — by a model calling this action as a tool — is already the
+            literal, and running it through the resolver would read it as a
+            data path.
         :returns: Mapping of config field name to resolved value.
         """
         from .utilities.expressions import resolve_expression
@@ -840,14 +846,25 @@ class BaseActionPluginModel(AutomationPluginModel):
 
         context = {**(row or {}), "data": rows}
         template_fields = self._template_fields()
+        # An action's ``perform`` resolves its own inputs, so a caller supplying
+        # values cannot pass them down through it. Setting them on the instance
+        # is what lets any existing action be called as a tool without being
+        # changed to know about tools.
+        overrides = overrides or getattr(self, "_input_overrides", None) or {}
         resolved = {}
         for key, value in (self.config or {}).items():
-            if value is None or value == "":
+            if key in overrides:
+                resolved[key] = overrides[key]
+            elif value is None or value == "":
                 resolved[key] = None
             elif key in template_fields:
                 resolved[key] = safe_render(str(value), context)
             else:
                 resolved[key] = resolve_expression(str(value), context)
+        # An override for something the editor never configured is still an
+        # input the action should receive.
+        for key, value in overrides.items():
+            resolved.setdefault(key, value)
         return resolved
 
     def execute(

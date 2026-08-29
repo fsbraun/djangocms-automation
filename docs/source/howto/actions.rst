@@ -67,6 +67,25 @@ Runs a prompt against a large language model. Provider-independent via
 
     pip install djangocms-automation[llm]
 
+Everything that talks to a language model lives in its own app, so add it to
+``INSTALLED_APPS`` alongside the main one:
+
+.. code-block:: python
+
+    INSTALLED_APPS = [
+        ...
+        "djangocms_automation",
+        "djangocms_automation.ai",
+    ]
+
+.. note::
+   The LLM Prompt plugin is registered by that app, so without the line the
+   plugin is not offered in the editor at all.
+
+Keeping it separate is deliberate: a project that never calls a model does not
+install ``litellm`` — around fifty packages, including the AWS SDK — and does
+not load the app at all.
+
 Configure the models automations may use (LiteLLM model strings,
 ``<provider>/<model>``) and store an API key per provider under
 *Automations → Secrets* in the admin:
@@ -94,6 +113,37 @@ Rate limits pause the action and it is retried automatically by the
 fail the run with the error recorded on the action.
 
 Wait for User
+Tool calling
+~~~~~~~~~~~~
+
+:func:`djangocms_automation.llm.complete` also accepts a conversation and a set
+of tools, which is what the agent work in phase 1 is built on::
+
+    result = complete(
+        model="anthropic/claude-opus-4-8",
+        messages=conversation,
+        tools=[tool.to_wire() for tool in tools],
+        timeout=120,
+    )
+    if result.wants_tools:
+        for call in result.tool_calls:
+            ...  # call.name, call.arguments — untrusted until validated
+
+``prompt`` and ``messages`` are alternatives: the first is the single-turn form
+this action uses, the second carries an agent's conversation so far, including
+the assistant's earlier tool requests and the results that came back.
+
+Two behaviours are deliberate. Giving tools to a model that cannot use them
+raises :class:`~djangocms_automation.llm.LLMToolsUnsupported` rather than
+quietly dropping them — a model whose tools were ignored writes confident prose
+instead of doing the work, which is far harder to diagnose. And arguments that
+are not valid JSON become an empty set rather than an error, so the tool's own
+schema check reports something the model can correct instead of failing the run.
+
+Always pass ``timeout`` when an agent is driving: without one a hung provider
+call holds its worker, and its action's lease, until something else gives up.
+
+
 -------------
 
 Pauses the automation until a permitted user resumes it. Configure an

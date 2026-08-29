@@ -10,7 +10,7 @@ This module owns the orchestration of automation runs:
 * pausing and reviving actions.
 
 Module responsibilities: :mod:`.instances` holds the runtime state models,
-:mod:`.models` holds the graph-node (plugin) models with their node-local
+:mod:`djangocms_automation.models` holds the graph-node (plugin) models with their node-local
 ``execute``/``get_next_actions`` behavior, and :mod:`.tasks` holds only the
 ``django.tasks`` entry points delegating here.
 

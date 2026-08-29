@@ -4,8 +4,8 @@ from django import forms as django_forms
 from django.utils.translation import gettext as _
 
 from . import forms, models
-from .actions import llm_action, model_actions, user_input
 from .actions import mail as actions_mail
+from .actions import model_actions, user_input
 from .constants import Module
 from .utilities.expressions import validate_expression
 from .utilities.templates import validate_template
@@ -338,17 +338,6 @@ class QueryModelAction(ActionPlugin):
 
     model = model_actions.QueryModelActionModel
     data_form = model_actions.QueryModelActionForm
-    convert_data_form = False
-
-
-@register_automation_plugin
-class LLMAction(ActionPlugin):
-    name = _("LLM Prompt")
-    module = Module.AI
-    icon = "bi-stars"
-
-    model = llm_action.LLMActionPluginModel
-    data_form = llm_action.LLMActionForm
     convert_data_form = False
 
 

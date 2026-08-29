@@ -99,10 +99,12 @@ conditions so recovery can be watched rather than only trusted.
 
 - **Send Email** — one email per data row via Django's email framework.
 - **Create / Update / Query Records** — Django model CRUD, gated by the `AUTOMATION_ALLOWED_MODELS` setting.
-- **LLM Prompt** — provider-independent LLM calls via [LiteLLM](https://docs.litellm.ai/) (`pip install djangocms-automation[llm]`, models via `AUTOMATION_LLM_MODELS`, API keys in the admin *Secrets* store).
+- **LLM Prompt** — provider-independent LLM calls via [LiteLLM](https://docs.litellm.ai/). Install with `pip install djangocms-automation[llm]` and add `"djangocms_automation.ai"` to `INSTALLED_APPS`; models via `AUTOMATION_LLM_MODELS`, API keys in the admin *Secrets* store.
 - **Wait for User** — human-in-the-loop pause/resume from the admin.
 
-Flow control includes conditionals (If/Then/Else with a visual condition builder), parallel splits with automatic joins, and timer/form/manual/code/webhook triggers.
+- **Agent** — an LLM that chooses and calls the tools you give it, looping until it has an answer. Each tool wraps one of the actions above, and you decide which of that action's inputs the model may fill: it can write an email's subject and body while the recipient stays bound to your expression. Every tool call is a first-class execution step — inspectable, retryable, and pausable for human approval before anything irreversible runs. Bounded by turns, tool calls, tokens and wall clock; reaching a limit fails the run rather than returning a confident half-answer.
+
+Flow control includes conditionals (If/Then/Else with a visual condition builder), while loops with a bounded iteration count, parallel splits with automatic joins, and timer/form/manual/code/webhook triggers.
 
 ### Webhooks
 

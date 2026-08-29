@@ -1,0 +1,14 @@
+{% load cms_tags i18n %}
+<div class="automation-step">
+    <div class="automation-agent-tool automation-item">
+        {% include "djangocms_automation/includes/errors.html" with errors=instance.messages %}
+        <div class="card-title">
+            <svg width="16" height="16"><use xlink:href="#bi-plug"></use></svg>
+            {{ instance.tool_name|default:title }}
+            {% if instance.requires_approval %}<span class="tool-approval" title="{% translate 'Requires approval' %}">&#9202;</span>{% endif %}
+        </div>
+        {% for plugin in instance.child_plugin_instances %}
+            {% with parentloop=forloop parent=instance %}{% render_plugin plugin %}{% endwith %}
+        {% endfor %}
+    </div>
+</div>

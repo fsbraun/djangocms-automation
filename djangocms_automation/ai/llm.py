@@ -34,6 +34,8 @@ __all__ = [
     "LLMError",
     "LLMRateLimited",
     "LLMResult",
+    "LLMToolsUnsupported",
+    "ToolCall",
     "complete",
     "get_allowed_llm_models",
     "get_api_key",
@@ -44,12 +46,36 @@ class LLMError(Exception):
     """A non-retryable LLM failure (configuration, API, or network error)."""
 
 
+class LLMToolsUnsupported(LLMError):
+    """The configured model cannot be given tools.
+
+    Raised rather than dropping the tools and completing anyway: an agent whose
+    tools were silently ignored produces confident prose instead of doing the
+    work, which is far harder to diagnose than a configuration error.
+    """
+
+
 class LLMRateLimited(LLMError):
     """The provider rate-limited the request; retry after ``retry_after`` seconds."""
 
     def __init__(self, retry_after: int = 60, message: str = "Rate limited"):
         self.retry_after = max(int(retry_after), 1)
         super().__init__(message)
+
+
+@dataclass(frozen=True)
+class ToolCall:
+    """One tool invocation the model asked for.
+
+    Lives here rather than with the tool contract because it is a property of
+    the model's reply: the wrapper's job is to turn each provider's shape into
+    this one. ``arguments`` is whatever the model produced and is **untrusted**
+    — the tool contract validates it before anything runs.
+    """
+
+    id: str
+    name: str
+    arguments: dict[str, Any]
 
 
 @dataclass
@@ -60,6 +86,15 @@ class LLMResult:
     json: Any | None
     model: str
     usage: dict = field(default_factory=dict)
+    #: Tool invocations the model requested, in the order it asked for them.
+    tool_calls: list[ToolCall] = field(default_factory=list)
+    #: Why the model stopped: ``"tool_calls"``, ``"stop"``, ``"length"``, ...
+    finish_reason: str = ""
+
+    @property
+    def wants_tools(self) -> bool:
+        """Whether the model is asking to run tools rather than answering."""
+        return bool(self.tool_calls)
 
 
 def get_allowed_llm_models() -> list[str]:
@@ -72,7 +107,7 @@ def get_api_key(service: str) -> str:
 
     :raises LLMError: If no active key is stored for the service.
     """
-    from .models import APIKey
+    from ..models import APIKey
 
     api_key = APIKey.objects.filter(service=service, is_active=True).order_by("-updated").first()
     if api_key is None:
@@ -92,26 +127,86 @@ def _get_litellm():
     return litellm
 
 
+def _tool_calls_from(message) -> list[ToolCall]:
+    """Normalize a provider's tool-call shape into :class:`ToolCall` objects.
+
+    Arguments arrive as a JSON string. A model that emits malformed JSON is a
+    normal occurrence, not an exception: it becomes an empty argument set, which
+    the tool contract then rejects against the tool's schema and reports back to
+    the model as a correctable error rather than failing the run.
+    """
+    calls = []
+    for raw in getattr(message, "tool_calls", None) or []:
+        function = getattr(raw, "function", None)
+        if function is None:
+            continue
+        raw_arguments = getattr(function, "arguments", None) or "{}"
+        try:
+            arguments = json.loads(raw_arguments) if isinstance(raw_arguments, str) else dict(raw_arguments)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            arguments = {}
+        if not isinstance(arguments, dict):
+            arguments = {}
+        calls.append(
+            ToolCall(
+                id=str(getattr(raw, "id", "") or ""),
+                name=str(getattr(function, "name", "") or ""),
+                arguments=arguments,
+            )
+        )
+    return calls
+
+
+def _supports_tools(litellm, model: str) -> bool:
+    """Check whether a model can be given tools, tolerating an unknown model."""
+    try:
+        return bool(litellm.supports_function_calling(model=model))
+    except Exception:  # noqa: BLE001 — an unrecognised model is not a reason to refuse
+        return True
+
+
 def complete(
     *,
     model: str,
-    prompt: str,
+    prompt: str | None = None,
     system: str | None = None,
+    messages: list[dict] | None = None,
     schema: dict | None = None,
+    tools: list[dict] | None = None,
+    tool_choice: str | dict | None = None,
     max_tokens: int = 16000,
+    timeout: float | None = None,
 ) -> LLMResult:
-    """Run a single LLM completion.
+    """Run one LLM completion, optionally offering it tools.
+
+    Two ways to call it. ``prompt`` (with an optional ``system``) is the
+    single-turn form the LLM Prompt action uses. ``messages`` is the multi-turn
+    form an agent needs, carrying the conversation so far — including the
+    assistant's previous tool requests and the results that came back.
 
     :param model: LiteLLM model string, ``"<provider>/<model>"``. Must be in
         ``AUTOMATION_LLM_MODELS``.
-    :param prompt: The user prompt.
-    :param system: Optional system prompt.
+    :param prompt: The user prompt, for the single-turn form.
+    :param system: Optional system prompt, for the single-turn form.
+    :param messages: The conversation so far, for the multi-turn form. Mutually
+        exclusive with ``prompt``.
     :param schema: Optional JSON schema; when given, the response is
         constrained to valid JSON matching it and parsed into ``result.json``.
+    :param tools: Tool definitions the model may call, in the provider-neutral
+        ``{"type": "function", "function": {...}}`` shape.
+    :param tool_choice: ``"auto"``, ``"none"``, ``"required"``, or a specific
+        tool. Left to the provider's default when omitted.
     :param max_tokens: Response token cap.
+    :param timeout: Seconds to wait for the provider. Without one a hung call
+        holds its worker — and its action's lease — until something else gives
+        up, so an agent should always set it.
+    :raises LLMToolsUnsupported: If tools are given to a model that cannot use them.
     :raises LLMRateLimited: On provider rate limits (retry later).
     :raises LLMError: On any other provider/configuration error.
     """
+    if (prompt is None) == (messages is None):
+        raise LLMError("Pass either 'prompt' or 'messages' to complete(), not both and not neither.")
+
     allowed = get_allowed_llm_models()
     if model not in allowed:
         raise LLMError(f"Model '{model}' is not allowed for automations. Add it to the AUTOMATION_LLM_MODELS setting.")
@@ -119,10 +214,16 @@ def complete(
     api_key = get_api_key(service)
     litellm = _get_litellm()
 
-    messages = []
-    if system:
-        messages.append({"role": "system", "content": system})
-    messages.append({"role": "user", "content": prompt})
+    if tools and not _supports_tools(litellm, model):
+        raise LLMToolsUnsupported(
+            f"Model '{model}' does not support tool calling. Choose a model that does, or remove the tools."
+        )
+
+    if messages is None:
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
 
     kwargs: dict[str, Any] = {
         "model": model,
@@ -135,6 +236,12 @@ def complete(
             "type": "json_schema",
             "json_schema": {"name": "output", "schema": schema, "strict": True},
         }
+    if tools:
+        kwargs["tools"] = tools
+        if tool_choice is not None:
+            kwargs["tool_choice"] = tool_choice
+    if timeout is not None:
+        kwargs["timeout"] = timeout
 
     try:
         response = litellm.completion(**kwargs)
@@ -152,9 +259,14 @@ def complete(
     except Exception as exc:  # litellm maps provider errors to OpenAI-style exceptions
         raise LLMError(f"LLM error from '{service}': {exc}") from exc
 
-    text = response.choices[0].message.content or ""
+    choice = response.choices[0]
+    message = choice.message
+    text = getattr(message, "content", None) or ""
+    tool_calls = _tool_calls_from(message)
+
     parsed = None
-    if schema:
+    # A reply that asks for tools carries no answer to parse, even under a schema.
+    if schema and not tool_calls:
         try:
             parsed = json.loads(text)
         except json.JSONDecodeError as exc:
@@ -167,4 +279,11 @@ def complete(
             "input_tokens": getattr(raw_usage, "prompt_tokens", None),
             "output_tokens": getattr(raw_usage, "completion_tokens", None),
         }
-    return LLMResult(text=text, json=parsed, model=getattr(response, "model", model), usage=usage)
+    return LLMResult(
+        text=text,
+        json=parsed,
+        model=getattr(response, "model", model),
+        usage=usage,
+        tool_calls=tool_calls,
+        finish_reason=str(getattr(choice, "finish_reason", "") or ""),
+    )
