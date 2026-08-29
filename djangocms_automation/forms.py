@@ -15,7 +15,7 @@ from django import forms
 from django.utils.translation import gettext_lazy as _
 
 from . import widgets
-from .models import AutomationTrigger, ConditionalPluginModel
+from .models import AutomationTrigger, ConditionalPluginModel, LoopPluginModel
 from .triggers import trigger_registry
 
 
@@ -109,6 +109,17 @@ class ConditionalPluginForm(forms.ModelForm):
 
     class Meta:
         model = ConditionalPluginModel
+        fields = "__all__"
+        widgets = {
+            "condition": widgets.ConditionBuilderWidget,
+        }
+
+
+class LoopPluginForm(forms.ModelForm):
+    """Custom form for LoopPlugin with ConditionBuilderWidget for condition field."""
+
+    class Meta:
+        model = LoopPluginModel
         fields = "__all__"
         widgets = {
             "condition": widgets.ConditionBuilderWidget,

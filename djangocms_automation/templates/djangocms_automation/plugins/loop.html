@@ -1,0 +1,26 @@
+{% load cms_tags i18n %}
+{% comment %}
+One branch: the steps to repeat, centred under the test. Both of the loop's
+other edges — the return to the test and the exit past it — are drawn around
+the outside of that branch by the connector script, so neither needs a lane of
+its own taking up space.
+{% endcomment %}
+<div class="automation-group automation-loop-group">
+    {% include "djangocms_automation/includes/add.html" %}
+    <div class="automation-loop automation-item{% if empty %} empty{% endif %}">
+        {% include "djangocms_automation/includes/errors.html" with errors=instance.messages %}
+        <svg width="16" height="16"><use xlink:href="#bi-arrow-repeat"></use></svg>
+        {% if title %}<div class="automation-title">{{ instance.question|default:title }}</div>{% endif %}
+        <div class="loop-repeat">{% translate "Repeat" %}</div>
+        <div class="loop-exit">{% translate "Done" %}</div>
+    </div>
+    <div class="automation-branches">
+        <div class="automation-branch loop-body">
+            {% for plugin in instance.child_plugin_instances %}
+                {% with parentloop=forloop parent=instance %}{% render_plugin plugin %}{% endwith %}
+            {% empty %}
+                {% include "djangocms_automation/plugins/noop.html" %}
+            {% endfor %}
+        </div>
+    </div>
+</div>

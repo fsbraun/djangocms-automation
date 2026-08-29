@@ -15,6 +15,8 @@
     const CONNECTOR_WIDTH = 2;
     const CORNER_RADIUS = 5;
     const VERTICAL_OFFSET = 20;
+    // How far outside a loop's body its return edge is routed.
+    const LOOP_CHANNEL = 40;
 
     class AutomationConnectors {
         constructor(container) {
@@ -107,15 +109,42 @@
                 if (currentNode.classList.contains('automation-group')) {
                     const branches = currentNode.querySelectorAll('& > .automation-branches > .automation-branch');
                     for (let branch of branches) {
-                        this.drawBranchConnector(currentItem, branch.querySelector('.automation-item'), branch.dataset.branchType, {branch: true});
-                        this.processFlow(branch, nextItem || reconnect);
+                        // A loop's body returns to its own test rather than
+                        // continuing past it; every other branch rejoins the
+                        // flow after the group.
+                        const returnsToTest = branch.classList.contains('loop-body');
+                        if (returnsToTest) {
+                            // The body sits directly under the test, so the
+                            // repeat edge drops out of its bottom rather than
+                            // leaving sideways as a conditional's branches do.
+                            this.drawElbowConnector(currentItem, branch.querySelector('.automation-item'));
+                        } else {
+                            this.drawBranchConnector(currentItem, branch.querySelector('.automation-item'), branch.dataset.branchType, {branch: true});
+                        }
+                        this.processFlow(branch, returnsToTest ? currentItem : (nextItem || reconnect));
+                    }
+                    if (currentNode.classList.contains('automation-loop-group')) {
+                        // The exit is drawn rather than given a lane of its own:
+                        // an empty lane cannot be narrower than the margins of
+                        // the node inside it, and that width pushes the body off
+                        // centre under the test.
+                        const target = nextItem || reconnect;
+                        if (target) {
+                            this.drawLoopExitConnector(currentItem, target, currentNode.querySelector('.loop-body'));
+                        }
                     }
                 } else if (nextItem && !currentNode.classList.contains('end')) {
                     this.drawElbowConnector(currentItem, nextItem);
                 }
             }
             if (reconnect && currentNode?.classList.contains('automation-step')) {
-                if (!currentNode?.classList.contains('end')) this.drawElbowConnector(currentItem, reconnect);
+                if (!currentNode?.classList.contains('end')) {
+                    if (container.classList.contains('loop-body')) {
+                        this.drawLoopBackConnector(currentItem, reconnect);
+                    } else {
+                        this.drawElbowConnector(currentItem, reconnect);
+                    }
+                }
             }
         }
 
@@ -124,6 +153,75 @@
             const to = this.getConnectionPoint(toElement, 'top');
 
             const path = this.createElbowPath(from, to);
+            this.addPath(path, options);
+        }
+
+        // The two edges that run down the outside of a loop's body: the return
+        // to the test on the left, and the exit past the loop on the right.
+        // Both need the body's real extent, which is the extent of the items in
+        // it — the branch box is a flex lane and can be far wider.
+        bodyEdge(body, side) {
+            const containerRect = this.container.getBoundingClientRect();
+            const items = body ? body.querySelectorAll('.automation-item') : [];
+            let edge = null;
+            for (const item of items) {
+                const rect = item.getBoundingClientRect();
+                const value = side === 'left' ? rect.left - containerRect.left : rect.right - containerRect.left;
+                if (edge === null) {
+                    edge = value;
+                } else {
+                    edge = side === 'left' ? Math.min(edge, value) : Math.max(edge, value);
+                }
+            }
+            return edge;
+        }
+
+        drawLoopExitConnector(fromElement, toElement, body, options = {}) {
+            if (!fromElement || !toElement) return;
+
+            const from = this.getConnectionPoint(fromElement, 'right');
+            const to = this.getConnectionPoint(toElement, 'top');
+            const bodyRight = this.bodyEdge(body, 'right');
+            const channelX = Math.max(from.x, bodyRight === null ? from.x : bodyRight) + LOOP_CHANNEL;
+            const turnY = to.y - VERTICAL_OFFSET;
+            const r = CORNER_RADIUS;
+
+            let path = `M ${from.x},${from.y} L ${channelX - r},${from.y}`;
+            path += ` Q ${channelX},${from.y} ${channelX},${from.y + r}`;
+            path += ` L ${channelX},${turnY - r}`;
+            path += ` Q ${channelX},${turnY} ${channelX - r},${turnY}`;
+            path += ` L ${to.x + r},${turnY}`;
+            path += ` Q ${to.x},${turnY} ${to.x},${turnY + r}`;
+            path += ` L ${to.x},${to.y}`;
+
+            this.addPath(path, options);
+        }
+
+        drawLoopBackConnector(fromElement, toElement, options = {}) {
+            // The return edge of a loop: down out of the last repeated step,
+            // around the outside of the body, and back up into the side of the
+            // test. Routed outside rather than straight up so it never crosses
+            // the steps it is returning past.
+            if (!fromElement || !toElement) return;
+
+            const from = this.getConnectionPoint(fromElement, 'bottom');
+            const to = this.getConnectionPoint(toElement, 'left');
+
+            // Hug the repeated steps rather than the branch box: the branch is a
+            // flex lane that can be far wider than its contents, so measuring it
+            // would fling the return path across the diagram.
+            const bodyLeft = this.bodyEdge(fromElement.closest('.loop-body'), 'left');
+            const channelX = Math.min(to.x, bodyLeft === null ? to.x : bodyLeft) - LOOP_CHANNEL;
+            const r = CORNER_RADIUS;
+
+            let path = `M ${from.x},${from.y} L ${from.x},${from.y + VERTICAL_OFFSET - r}`;
+            path += ` Q ${from.x},${from.y + VERTICAL_OFFSET} ${from.x - r},${from.y + VERTICAL_OFFSET}`;
+            path += ` L ${channelX + r},${from.y + VERTICAL_OFFSET}`;
+            path += ` Q ${channelX},${from.y + VERTICAL_OFFSET} ${channelX},${from.y + VERTICAL_OFFSET - r}`;
+            path += ` L ${channelX},${to.y + r}`;
+            path += ` Q ${channelX},${to.y} ${channelX + r},${to.y}`;
+            path += ` L ${to.x},${to.y}`;
+
             this.addPath(path, options);
         }
 

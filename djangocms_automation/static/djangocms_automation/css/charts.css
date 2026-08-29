@@ -141,7 +141,7 @@ body {
         min-height: 0;
     }
 
-    .automation-if, .automation-split {
+    .automation-if, .automation-split, .automation-loop {
         border-radius: 0;
         border: none;
         background: none;
@@ -175,16 +175,41 @@ body {
         > svg {
             top: 33px;
         }
-        .then-branch, .else-branch {
+        .then-branch, .else-branch, .loop-repeat, .loop-exit {
             position: absolute;
             inset-inline-end: 100%;
             font-size: 80%;
             bottom: 25px;
         }
-        .else-branch {
+        .else-branch, .loop-exit {
             inset-inline-start: 100%;
         }
     }
+
+    /* A loop is drawn like a conditional: the test, the steps to repeat, and a
+       second, empty branch that carries the flow on past the loop. The only
+       edge that differs is the return from the last repeated step back up to
+       the test, which the connector script draws. */
+    .automation-loop-group {
+        > .automation-branches {
+            /* Centre the repeated steps under the test rather than spreading
+               them across the diagram, so the "Repeat" edge is a straight drop
+               out of the bottom of the diamond. */
+            justify-content: center;
+
+            > .automation-branch.loop-body {
+                flex: 0 0 auto !important;
+                /* Clearance under the last repeated step, so the return path
+                   and the exit path have separate lanes to run along instead of
+                   meeting below the body. */
+                padding-bottom: 45px;
+                /* A little room either side for the two edges that run down the
+                   outside of the body. */
+                padding-inline: 6px;
+            }
+        }
+    }
+
     .automation-join {
         width: 30px;
         height: 30px;

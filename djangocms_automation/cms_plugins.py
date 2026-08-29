@@ -113,6 +113,44 @@ class ElsePlugin(AutomationPlugin):
 
 
 @register_automation_plugin
+class AutomationLoop(AutomationPlugin):
+    name = _("Loop")
+    module = Module.FLOW
+    icon = "bi-arrow-repeat"
+    model = models.LoopPluginModel
+    form = forms.LoopPluginForm
+    render_template = "djangocms_automation/plugins/loop.html"
+
+    show_add_form = True
+
+    # The body sits directly under the loop. A container child would only earn
+    # its place if there were sibling branches to tell apart, as with a split's
+    # paths or a conditional's yes/no; a loop has exactly one body.
+    allow_children = True
+
+    fieldsets = (
+        (
+            None,
+            {
+                "fields": (
+                    "question",
+                    "condition",
+                    "max_iterations",
+                )
+            },
+        ),
+        (_("Comment"), {"classes": ("collapse",), "fields": ("comment",)}),
+    )
+
+    def render(self, context, instance, placeholder):
+        context = super().render(context, instance, placeholder)
+        # A loop's children *are* its body, unlike a conditional's, which are
+        # branch containers that must themselves hold something.
+        context.update({"empty": not instance.child_plugin_instances})
+        return context
+
+
+@register_automation_plugin
 class AutomationSplit(AutomationPlugin):
     name = _("Split")
     module = Module.FLOW
