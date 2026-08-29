@@ -70,6 +70,32 @@ class CountdownPlugin(CMSPluginBase):
     render_template = "djangocms_automation/plugins/action.html"
 
 
+#: Controls FlakyBodyModel: fail the next run, and count the successful ones.
+BODY_RUNS: dict = {"ok": 0, "fail_next": False}
+
+
+class FlakyBodyModel(BaseActionPluginModel):
+    """Fails on demand, so a failed iteration can be replayed."""
+
+    class Meta:
+        proxy = True
+        app_label = "djangocms_automation"
+
+    def perform(self, action, rows):
+        if BODY_RUNS.get("fail_next"):
+            raise ValueError("body failed on purpose")
+        BODY_RUNS["ok"] += 1
+        row = rows[0] if rows and isinstance(rows[0], dict) else {}
+        return [{**row, "remaining": int(row.get("remaining", 0)) - 1}]
+
+
+@plugin_pool.register_plugin
+class FlakyBodyPlugin(CMSPluginBase):
+    model = FlakyBodyModel
+    name = "Flaky Body Plugin"
+    render_template = "djangocms_automation/plugins/action.html"
+
+
 @plugin_pool.register_plugin
 class LoopFailurePlugin(CMSPluginBase):
     model = LoopFailureModel
@@ -315,3 +341,69 @@ def test_a_multi_step_body_runs_in_order_each_iteration(run_setup, settings):
     # "is this iteration still running" stays a single query over the children.
     assert loop.children.count() == 4
     assert AutomationAction.objects.filter(automation_instance=loop.automation_instance).count() == 5
+
+
+# --------------------------------------------------------------------------
+# Replaying a failed iteration
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_replaying_a_failed_iteration_does_not_repeat_it(run_setup, settings):
+    """A replayed iteration replaces one; it must not start a fresh loop.
+
+    The loop's iteration count cannot live in its ``result``: failure
+    propagation overwrites that with ``{"failed_action_id": ...}`` when the body
+    dies. A loop coming back from a replay would find no count, take itself for
+    a first pass, throw away the replayed step's output and run the body again —
+    duplicating its side effects and starting ``max_iterations`` over.
+    """
+    from djangocms_automation import engine
+
+    trigger, placeholder = run_setup
+    build_loop(placeholder, settings, GREATER_THAN_ZERO, body_plugins=("FlakyBodyPlugin",), max_iterations=1)
+
+    BODY_RUNS["ok"] = 0
+    BODY_RUNS["fail_next"] = True
+    trigger.trigger_execution(data=[{"remaining": 1}])
+
+    loop = loop_action()
+    failed = loop.children.filter(state=FAILED).first()
+    assert failed is not None, "the body failed as the test intended"
+    assert BODY_RUNS["ok"] == 0
+
+    # The loop's own counter has been overwritten by failure propagation.
+    loop.refresh_from_db()
+    assert "iteration" not in (loop.result or {})
+
+    BODY_RUNS["fail_next"] = False
+    engine.replay_action(failed.pk)
+
+    loop.refresh_from_db()
+    assert BODY_RUNS["ok"] == 1, "the body ran once more than once"
+    assert loop.state == COMPLETED
+    assert loop.children.filter(replays__isnull=True, state=COMPLETED).count() == 1
+
+
+@pytest.mark.django_db
+def test_a_replayed_iteration_does_not_reset_the_bound(run_setup, settings):
+    """max_iterations counts iterations, and a replay replaces one."""
+    from djangocms_automation import engine
+
+    trigger, placeholder = run_setup
+    build_loop(placeholder, settings, GREATER_THAN_ZERO, body_plugins=("FlakyBodyPlugin",), max_iterations=1)
+
+    BODY_RUNS["ok"] = 0
+    BODY_RUNS["fail_next"] = True
+    trigger.trigger_execution(data=[{"remaining": 5}])  # would loop forever unbounded
+
+    loop = loop_action()
+    failed = loop.children.filter(state=FAILED).first()
+    BODY_RUNS["fail_next"] = False
+    engine.replay_action(failed.pk)
+
+    loop.refresh_from_db()
+    # One iteration is all the bound allows, replay included.
+    assert BODY_RUNS["ok"] == 1
+    assert loop.state == FAILED
+    assert "exceeded 1 iterations" in loop.result["error"]

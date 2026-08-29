@@ -510,6 +510,11 @@ class LoopPluginModel(AutomationPluginModel):
             plugin, _unused = plugin.get_plugin_instance()
         return plugin.uuid
 
+    def _body_start_uuid(self):
+        """Get the uuid of the first plugin in the body, which each iteration spawns."""
+        body = self._body()
+        return self._uuid_of(body[0]) if body else None
+
     def _body_end_uuid(self):
         """Get the uuid of the last plugin in the body, whose output carries forward."""
         body = self._body()
@@ -549,18 +554,27 @@ class LoopPluginModel(AutomationPluginModel):
             return output
         return self._carried(action, rows)
 
-    @staticmethod
-    def _iteration(action: AutomationAction) -> int:
-        """Read the iteration recorded on the action.
+    def _iteration(self, action: AutomationAction) -> int:
+        """How many iterations this loop has started, counted from its children.
 
-        Kept in ``result`` because the object that ``execute`` annotates is not
-        the one ``get_next_actions`` receives — the engine hands over the row it
-        transitioned. The conditional node carries its branch choice the same
-        way.
+        Derived rather than stored. The obvious place to keep a counter is the
+        action's ``result``, as the conditional keeps its branch choice — but
+        ``result`` does not belong to the node alone: failure propagation
+        overwrites it with ``{"failed_action_id": ...}`` when a branch dies. A
+        loop whose body failed and was then replayed would come back with its
+        counter gone, mistake itself for a first pass, discard the replayed
+        step's output and run the body again — duplicating whatever side effects
+        it has, and starting ``max_iterations`` over.
+
+        Every iteration spawns exactly one action for the first plugin of the
+        body, so counting those is the same number and cannot be clobbered.
+        Superseded actions are excluded, so a replay replaces an iteration
+        rather than adding one.
         """
-        if isinstance(action.result, dict):
-            return int(action.result.get("iteration", 0))
-        return 0
+        start_uuid = self._body_start_uuid()
+        if start_uuid is None:
+            return 0
+        return action.children.filter(replays__isnull=True, plugin_ptr=start_uuid).count()
 
     def execute(
         self,
