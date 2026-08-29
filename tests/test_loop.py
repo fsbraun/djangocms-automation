@@ -460,3 +460,110 @@ def test_replaying_a_failed_branch_inside_a_loop_keeps_the_iteration(run_setup, 
     assert BODY_RUNS["ok"] == 1, "the branch ran more than once"
     assert loop_row.state == COMPLETED, f"the loop did not finish: {loop_row.result}"
     assert AutomationInstance.objects.latest("id").data[0]["remaining"] == 0
+
+
+# --------------------------------------------------------------------------
+# Editor rendering
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_the_loop_is_marked_empty_only_when_it_has_no_children(run_setup, settings):
+    """The ``empty`` class is what the editor greys the node with.
+
+    A loop's children *are* its body, unlike a conditional's, whose children are
+    branch containers that must themselves hold something. Reusing the
+    conditional's test here marked every loop empty, however full.
+    """
+    from djangocms_automation.cms_plugins import AutomationLoop
+
+    _trigger, placeholder = run_setup
+    loop = build_loop(placeholder, settings, GREATER_THAN_ZERO)
+    plugin = AutomationLoop()
+
+    filled = LoopPluginModel.objects.get(pk=loop.pk)
+    filled.child_plugin_instances = list(filled.cmsplugin_set.all())
+    assert plugin.render({}, filled, None)["empty"] is False
+
+    emptied = LoopPluginModel.objects.get(pk=loop.pk)
+    emptied.child_plugin_instances = []
+    assert plugin.render({}, emptied, None)["empty"] is True
+
+
+@pytest.mark.django_db
+def test_a_body_of_only_leaf_plugins_is_not_empty(run_setup, settings):
+    """The specific shape the conditional's test got wrong.
+
+    An action with no modifiers has no children of its own, so "do any of my
+    children have children?" answers no for a perfectly full loop.
+    """
+    from djangocms_automation.cms_plugins import AutomationLoop
+
+    _trigger, placeholder = run_setup
+    loop = build_loop(placeholder, settings, GREATER_THAN_ZERO, body_plugins=("CountdownPlugin",))
+    instance = LoopPluginModel.objects.get(pk=loop.pk)
+    instance.child_plugin_instances = list(instance.cmsplugin_set.all())
+
+    assert all(not child.cmsplugin_set.exists() for child in instance.child_plugin_instances)
+    assert AutomationLoop().render({}, instance, None)["empty"] is False
+
+
+# --------------------------------------------------------------------------
+# Replaying the other branch
+# --------------------------------------------------------------------------
+
+
+#: "flag > 0" — used to steer a conditional down its Else branch.
+FLAG_SET = {"logic": "and", "conditions": [{"field": "flag", "operator": ">", "value": "0"}]}
+
+
+@pytest.mark.django_db
+def test_replaying_a_failed_else_branch_inside_a_loop(run_setup, settings):
+    """The same replay, down the branch the previous test does not take.
+
+    Deriving the branch from the spawned action has to answer ``False`` as
+    deliberately as it answers ``True``. Falling back to a default would look
+    correct here by accident, so this pins the Else side against a later change
+    to that default or an inverted derivation.
+    """
+    from djangocms_automation import engine
+
+    trigger, placeholder = run_setup
+    loop = add_plugin(
+        placeholder=placeholder,
+        plugin_type="AutomationLoop",
+        language=settings.LANGUAGE_CODE,
+        condition=GREATER_THAN_ZERO,
+        max_iterations=1,
+    )
+    conditional = add_plugin(
+        placeholder=placeholder,
+        plugin_type="AutomationIf",
+        language=settings.LANGUAGE_CODE,
+        target=loop,
+        condition=FLAG_SET,
+    )
+    yes = add_plugin(
+        placeholder=placeholder, plugin_type="ThenPlugin", language=settings.LANGUAGE_CODE, target=conditional
+    )
+    add_plugin(placeholder=placeholder, plugin_type="ActionPlugin", language=settings.LANGUAGE_CODE, target=yes)
+    no = add_plugin(
+        placeholder=placeholder, plugin_type="ElsePlugin", language=settings.LANGUAGE_CODE, target=conditional
+    )
+    add_plugin(placeholder=placeholder, plugin_type="FlakyBodyPlugin", language=settings.LANGUAGE_CODE, target=no)
+
+    BODY_RUNS["ok"] = 0
+    BODY_RUNS["fail_next"] = True
+    # flag is 0, so the conditional takes Else, where the failing step sits.
+    trigger.trigger_execution(data=[{"remaining": 1, "flag": 0}])
+
+    failed = AutomationAction.objects.filter(state=FAILED, children__isnull=True).order_by("id").first()
+    assert failed is not None, "the Else branch step failed as the test intended"
+
+    BODY_RUNS["fail_next"] = False
+    engine.replay_action(failed.pk)
+
+    loop_row = loop_action()
+    assert BODY_RUNS["ok"] == 1, "the Else step ran more than once"
+    assert loop_row.state == COMPLETED, f"the loop did not finish: {loop_row.result}"
+    assert AutomationInstance.objects.latest("id").data[0]["remaining"] == 0
