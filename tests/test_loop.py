@@ -407,3 +407,56 @@ def test_a_replayed_iteration_does_not_reset_the_bound(run_setup, settings):
     assert BODY_RUNS["ok"] == 1
     assert loop.state == FAILED
     assert "exceeded 1 iterations" in loop.result["error"]
+
+
+@pytest.mark.django_db
+def test_replaying_a_failed_branch_inside_a_loop_keeps_the_iteration(run_setup, settings):
+    """A conditional inside a loop must survive a replay of its branch.
+
+    The conditional records which branch it chose in its ``result``, and failure
+    propagation overwrites that when the branch dies. Read back after a replay
+    it looks like ``False``, so the conditional joins on the wrong branch and
+    hands the loop stale data — and the loop, seeing its input unchanged,
+    repeats the iteration and hits its bound.
+    """
+    from djangocms_automation import engine
+
+    trigger, placeholder = run_setup
+    loop = add_plugin(
+        placeholder=placeholder,
+        plugin_type="AutomationLoop",
+        language=settings.LANGUAGE_CODE,
+        condition=GREATER_THAN_ZERO,
+        max_iterations=1,
+    )
+    conditional = add_plugin(
+        placeholder=placeholder,
+        plugin_type="AutomationIf",
+        language=settings.LANGUAGE_CODE,
+        target=loop,
+        condition=GREATER_THAN_ZERO,
+    )
+    yes = add_plugin(
+        placeholder=placeholder, plugin_type="ThenPlugin", language=settings.LANGUAGE_CODE, target=conditional
+    )
+    add_plugin(placeholder=placeholder, plugin_type="FlakyBodyPlugin", language=settings.LANGUAGE_CODE, target=yes)
+    add_plugin(placeholder=placeholder, plugin_type="ElsePlugin", language=settings.LANGUAGE_CODE, target=conditional)
+
+    BODY_RUNS["ok"] = 0
+    BODY_RUNS["fail_next"] = True
+    trigger.trigger_execution(data=[{"remaining": 1}])
+
+    # The leaf failure: the step inside the branch, not the conditional above it.
+    # Replaying the conditional would sidestep the bug, because a fresh
+    # conditional re-evaluates its condition instead of recalling its choice.
+    failed = AutomationAction.objects.filter(state=FAILED, children__isnull=True).order_by("id").first()
+    assert failed is not None, "the branch step failed as the test intended"
+    assert failed.parent is not None and failed.parent.parent_id is not None, "it sits under the conditional"
+
+    BODY_RUNS["fail_next"] = False
+    engine.replay_action(failed.pk)
+
+    loop_row = loop_action()
+    assert BODY_RUNS["ok"] == 1, "the branch ran more than once"
+    assert loop_row.state == COMPLETED, f"the loop did not finish: {loop_row.result}"
+    assert AutomationInstance.objects.latest("id").data[0]["remaining"] == 0

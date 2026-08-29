@@ -279,6 +279,13 @@ class AutomationPluginModel(CMSPlugin):
         """
         raise NotImplementedError("Subclasses must implement the execute method.")
 
+    @staticmethod
+    def _uuid_of(plugin):
+        """Get a plugin's uuid, downcasting it first if necessary."""
+        if not hasattr(plugin, "uuid"):
+            plugin, _unused = plugin.get_plugin_instance()
+        return plugin.uuid
+
     def get_next_payload(self, action: AutomationAction, state: str, output, rows: list):
         """Decide what the actions created by :meth:`get_next_actions` receive.
 
@@ -411,17 +418,43 @@ class ConditionalPluginModel(AutomationPluginModel):
         if children.filter(finished__isnull=True).exists():
             return WAITING, {}
         # Branch finished: complete with the branch end's output.
-        condition_result = (action.result or {}).get("condition") if isinstance(action.result, dict) else None
-        branch = self._get_branch(bool(condition_result))
+        branch = self._get_branch(self._branch_taken(action, children))
         output = data
         if branch and branch.child_plugin_instances:
-            end_plugin = branch.child_plugin_instances[-1]
-            if not hasattr(end_plugin, "uuid"):
-                end_plugin, _unused = end_plugin.get_plugin_instance()
-            end_action = children.filter(plugin_ptr=end_plugin.uuid).order_by("-created").first()
+            end_uuid = self._uuid_of(branch.child_plugin_instances[-1])
+            end_action = children.filter(plugin_ptr=end_uuid).order_by("-created").first()
             if end_action is not None and end_action.result is not None:
                 output = end_action.result
         return COMPLETED, output
+
+    def _branch_taken(self, action: AutomationAction, children) -> bool:
+        """Work out which branch ran, from the action this conditional spawned.
+
+        The choice is recorded in ``result`` when the branch starts, but
+        ``result`` is not the node's to keep: failure propagation overwrites it
+        with ``{"failed_action_id": ...}`` when something below dies. A
+        conditional whose branch failed and was then replayed would come back
+        with the choice gone, read it as ``False``, join on the wrong branch and
+        hand its parent stale data — which inside a loop means repeating an
+        iteration's side effects.
+
+        The first action it spawned is the first plugin of the branch it chose,
+        and nothing overwrites that. Superseded actions are skipped, so a replay
+        answers the same as the attempt it replaced.
+        """
+        first = children.order_by("created").first()
+        if first is not None:
+            for outcome in (True, False):
+                branch = self._get_branch(outcome)
+                if (
+                    branch
+                    and branch.child_plugin_instances
+                    and self._uuid_of(branch.child_plugin_instances[0]) == first.plugin_ptr
+                ):
+                    return outcome
+        # No children to read: fall back to what was recorded when it started.
+        recorded = (action.result or {}).get("condition") if isinstance(action.result, dict) else None
+        return bool(recorded)
 
     def get_next_actions(self, action: AutomationAction) -> list[AutomationAction]:
         """Create the branch's first action while waiting; else continue flow."""
@@ -502,13 +535,6 @@ class LoopPluginModel(AutomationPluginModel):
     def _body(self) -> list:
         """The plugins this loop repeats: its own children, in order."""
         return list(self.child_plugin_instances or [])
-
-    @staticmethod
-    def _uuid_of(plugin):
-        """Get a body plugin's uuid, downcasting it first if necessary."""
-        if not hasattr(plugin, "uuid"):
-            plugin, _unused = plugin.get_plugin_instance()
-        return plugin.uuid
 
     def _body_start_uuid(self):
         """Get the uuid of the first plugin in the body, which each iteration spawns."""
