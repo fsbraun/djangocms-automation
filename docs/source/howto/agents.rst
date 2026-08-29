@@ -117,6 +117,11 @@ Reaching any of them **fails** the run. That is deliberate: an agent that
 stopped quietly would return a confident partial answer with nothing marking it
 as partial.
 
+The same reasoning applies to a reply the *provider* cut short — at its token
+limit, or through a content filter. Such a reply is fluent to its last word and
+simply stops, so nothing downstream can tell it apart from an answer. The run
+fails instead.
+
 Reading back what happened
 --------------------------
 

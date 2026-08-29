@@ -469,6 +469,18 @@ class AgentPluginModel(AutomationPluginModel):
 
             state.record_reply(reply)
 
+            # Checked before anything is done with the reply, and whether or
+            # not it asked for tools: truncation is worse for a tool call than
+            # for text, because arguments cut short still parse — into
+            # something plausible and wrong, which a tool then runs.
+            if reply.incomplete:
+                state.save(action)
+                return FAILED, {
+                    "error": f"The model's reply is incomplete: {reply.incomplete}.",
+                    "finish_reason": reply.finish_reason,
+                    "turns": state.turn,
+                }
+
             # Every call the model asked for is answered, whether or not it
             # runs. A provider rejects a conversation whose assistant turn
             # requests a tool that nothing replies to, so an unanswered call

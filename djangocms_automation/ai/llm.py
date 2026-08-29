@@ -31,6 +31,7 @@ from typing import Any
 from django.conf import settings
 
 __all__ = [
+    "COMPLETE_FINISH_REASONS",
     "LLMError",
     "LLMRateLimited",
     "LLMResult",
@@ -78,6 +79,23 @@ class ToolCall:
     arguments: dict[str, Any]
 
 
+#: Reasons that mean the model stopped because it had finished. ``tool_calls``
+#: is here because asking for a tool *is* a complete turn; the empty string is
+#: an absent reason, which not every provider sends.
+COMPLETE_FINISH_REASONS = frozenset({"", "stop", "stop_sequence", "end_turn", "tool_calls", "function_call"})
+
+#: What to tell someone about the reasons that are not.
+_INCOMPLETE_REASONS = {
+    "length": "the reply was cut off at the model's token limit",
+    "max_tokens": "the reply was cut off at the model's token limit",
+    "content_filter": "the provider filtered the reply",
+}
+
+
+def _incomplete_because(reason: str) -> str:
+    return _INCOMPLETE_REASONS.get(reason, f"the model stopped for an unrecognised reason ({reason!r})")
+
+
 @dataclass
 class LLMResult:
     """Normalized result of an LLM completion."""
@@ -95,6 +113,24 @@ class LLMResult:
     def wants_tools(self) -> bool:
         """Whether the model is asking to run tools rather than answering."""
         return bool(self.tool_calls)
+
+    @property
+    def incomplete(self) -> str | None:
+        """Why this reply is not a whole answer, or ``None`` if it is one.
+
+        A truncated reply is the failure mode that does not look like one. It is
+        fluent to its last word and simply stops, so nothing reading it
+        afterwards can tell it apart from an answer — not a schema, not a
+        downstream action, not a person skimming the output. The provider says
+        so in one field, and that field is the only chance anyone gets.
+
+        Read as an allow-list. Anything not known to mean "the model said what
+        it meant to say" is treated as incomplete, so a provider inventing a new
+        way to stop early fails loudly rather than passing silently. An absent
+        reason stays acceptable: not every provider sends one, and inventing a
+        failure from missing information would break working setups.
+        """
+        return None if self.finish_reason in COMPLETE_FINISH_REASONS else _incomplete_because(self.finish_reason)
 
 
 def get_allowed_llm_models() -> list[str]:

@@ -262,3 +262,21 @@ def test_the_single_prompt_form_still_builds_its_own_messages(llm_settings, api_
         {"role": "system", "content": "be brief"},
         {"role": "user", "content": "hi"},
     ]
+
+
+def test_an_unrecognised_finish_reason_counts_as_incomplete():
+    """Read as an allow-list, so a new way of stopping early fails loudly.
+
+    ``model_context_window_exceeded`` is a real one. A deny-list of the reasons
+    known to be bad would have let it through as a finished answer.
+    """
+    from djangocms_automation.ai.llm import LLMResult
+
+    def reply(reason):
+        return LLMResult(text="half an answer", json=None, model="m", finish_reason=reason)
+
+    assert reply("stop").incomplete is None
+    assert reply("tool_calls").incomplete is None, "asking for a tool is a complete turn"
+    assert reply("").incomplete is None, "not every provider sends one"
+    assert "token limit" in reply("length").incomplete
+    assert reply("model_context_window_exceeded").incomplete is not None

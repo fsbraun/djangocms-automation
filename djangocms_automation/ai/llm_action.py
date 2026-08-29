@@ -125,6 +125,12 @@ class LLMActionPluginModel(BaseActionPluginModel):
                 message=f"LLM rate limited, retry {retries + 1}/{MAX_LLM_RETRIES}",
             ) from exc
 
+        if result.incomplete:
+            # Permanent, not retryable: the same prompt against the same limit
+            # truncates again. Raising here keeps a half-answer out of the
+            # automation's data, where nothing downstream could recognise it.
+            raise llm.LLMError(f"The model's reply is incomplete: {result.incomplete}.")
+
         if result.json is not None:
             if isinstance(result.json, list):
                 return result.json

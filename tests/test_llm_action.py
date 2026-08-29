@@ -377,3 +377,25 @@ def test_llm_form_rejects_malformed_prompt_template(llm_settings):
     form = LLMActionForm(data={"model": "anthropic/claude-opus-4-8", "prompt": "Broken {{ unclosed"})
     assert not form.is_valid()
     assert "prompt" in form.errors
+
+
+@pytest.mark.django_db
+def test_the_llm_action_rejects_a_truncated_reply(automation_content, settings):
+    """The standalone action has the same problem as the agent: a reply cut off
+    at the token limit becomes the automation's data as if it were whole."""
+    from djangocms_automation.ai.llm import LLMResult
+
+    truncated = LLMResult(
+        text="The answer is",
+        json=None,
+        model="anthropic/claude-opus-4-8",
+        usage={},
+        finish_reason="length",
+    )
+    settings.AUTOMATION_LLM_MODELS = ["anthropic/claude-opus-4-8"]
+    plugin = LLMActionPluginModel(config={"model": "anthropic/claude-opus-4-8", "prompt": "hi"})
+
+    with mock.patch.object(llm, "complete", return_value=truncated), pytest.raises(llm.LLMError) as exc:
+        plugin.perform(mock.Mock(), [{"seed": 1}])
+
+    assert "cut off" in str(exc.value) or "token limit" in str(exc.value)

@@ -629,3 +629,57 @@ def test_a_replayed_call_has_to_be_approved_again(run_setup, settings):
     assert "approved" not in replacement.scratch
     replacement.refresh_from_db()
     assert replacement.requires_interaction, "it asks again"
+
+
+@pytest.mark.django_db
+def test_a_reply_cut_off_at_the_token_limit_fails_the_run(run_setup, settings):
+    """A truncated answer is not an answer.
+
+    It reads like one — it is fluent, it just stops — so nothing downstream can
+    tell it apart from a complete one. The provider does say, and that is the
+    only chance anybody gets to notice.
+    """
+    _trigger, placeholder = run_setup
+    build_agent(placeholder, settings)
+    reply = says(text="The refund policy is that")
+    reply.finish_reason = "length"
+    SCRIPT.append(reply)
+
+    _trigger.trigger_execution(data=[{"seed": 1}])
+
+    agent = agent_action()
+    assert agent.state == FAILED
+    assert "cut off" in agent.result["error"] or "token limit" in agent.result["error"]
+
+
+@pytest.mark.django_db
+def test_a_filtered_reply_fails_the_run(run_setup, settings):
+    _trigger, placeholder = run_setup
+    build_agent(placeholder, settings)
+    reply = says(text="")
+    reply.finish_reason = "content_filter"
+    SCRIPT.append(reply)
+
+    _trigger.trigger_execution(data=[{"seed": 1}])
+
+    assert agent_action().state == FAILED
+
+
+@pytest.mark.django_db
+def test_a_tool_call_cut_off_mid_arguments_is_not_run(run_setup, settings):
+    """Truncation is worse for a tool call than for text.
+
+    The arguments are JSON assembled from a stream; cut short, they parse to
+    something plausible and wrong, and then a tool runs with it.
+    """
+    _trigger, placeholder = run_setup
+    build_agent(placeholder, settings, tools=(("send_mail", "MailAction", ["subject"]),))
+    reply = says(calls=[ToolCall(id="c1", name="send_mail", arguments={"subject": "Your refund of $"})])
+    reply.finish_reason = "length"
+    SCRIPT.append(reply)
+
+    _trigger.trigger_execution(data=[{"seed": 1}])
+
+    agent = agent_action()
+    assert agent.state == FAILED
+    assert agent.children.count() == 0, "nothing ran on truncated arguments"

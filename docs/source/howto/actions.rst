@@ -112,7 +112,11 @@ Rate limits pause the action and it is retried automatically by the
 ``runautomations`` cron command (up to 5 attempts); other provider errors
 fail the run with the error recorded on the action.
 
-Wait for User
+A reply the provider cut short — at the model's token limit, or through a
+content filter — fails the action rather than becoming the automation's data.
+Such a reply reads like a whole answer and simply stops, so nothing downstream
+would recognise it as partial.
+
 Tool calling
 ~~~~~~~~~~~~
 
@@ -153,6 +157,18 @@ optional **note** (template) shown to the resuming user and optional
 Open tasks are listed in the admin at *Execution Instances → Open tasks*
 (``/admin/djangocms_automation/automationinstance/open-tasks/``), where
 permitted users (and superusers) can resume them.
+
+Wait for User
+-------------
+
+Pauses the automation until a permitted user resumes it. Configure an
+optional **note** (template) shown to the resuming user and optional
+**required permissions** (comma-separated ``app_label.codename``).
+
+Open tasks are listed in the admin at *Execution Instances → Open tasks*
+(``/admin/djangocms_automation/automationinstance/open-tasks/``), where
+permitted users (and superusers) can resume them. An agent's tool call waiting
+for approval appears in the same list; see :doc:`agents`.
 
 Writing your own action
 -----------------------
