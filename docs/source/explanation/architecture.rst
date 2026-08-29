@@ -41,9 +41,50 @@ The nested plugin tree is used to build control flow constructs:
 - Conditionals (If / Then / Else)
 - Splits / Paths (parallel branches)
 - Joins (re-joining branches)
+- Loops (a test, and the steps it repeats)
 
 This nested structure enables both linear sequences and complex branching
 workflows.
+
+Loops
+~~~~~
+
+A :class:`~djangocms_automation.models.LoopPluginModel` runs its body for as
+long as a condition holds. The condition is evaluated *before* each iteration,
+so a condition that is already false runs the body zero times, and each
+iteration's output becomes the data the next condition is tested against — which
+is what allows a loop to work towards its own exit.
+
+The steps to repeat are the loop's own children. Unlike a split's paths or a
+conditional's yes/no branches, there is only one body, so there is nothing for a
+container plugin to tell apart — it would be a level of nesting that carries no
+information. In the diagram the loop draws as a test: a diamond, the repeated
+steps beneath it, a return path from the last step back up to the test, and an
+exit continuing to whatever follows the loop.
+
+Mechanically a loop is the same re-entrant ``WAITING`` node as a split: spawn,
+suspend, be woken when the children finish. Two things differ.
+
+The first is the termination rule. A split fans out once and joins; a loop goes
+round again. That is why ``get_next_actions`` gates on "nothing still running"
+rather than the split's "no children yet".
+
+The second is what successors receive. A node's successors normally get the
+node's own input, which is right for a split — its branches all start from the
+same data — and wrong for a loop. Nodes therefore declare this through
+``get_next_payload``, and the loop overrides it to hand on the previous
+iteration's output.
+
+Because a loop re-enters its own action once per iteration, it depends on the
+engine counting re-entries separately from attempts (see
+:doc:`execution-lifecycle`). Without that distinction a loop of fifty iterations
+would look like fifty failed attempts and exhaust a retry budget it never
+touched.
+
+Every loop is bounded by ``max_iterations`` and **fails** when it exceeds it,
+rather than stopping quietly. A silently truncated loop produces a wrong result
+that looks like a right one; the error names the bound and points at the usual
+cause, a body that does not change the data the condition tests.
 
 Runtime Execution
 -----------------

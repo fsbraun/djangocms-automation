@@ -709,9 +709,7 @@ def run_action(action_id: int, data=None, single_step: bool = False) -> None:
 
         next_actions = plugin.get_next_actions(action)
         if next_actions:
-            # Fan-out states pass the incoming rows through; completed actions
-            # hand their output to the next action(s).
-            payload = output if state == COMPLETED else rows
+            payload = plugin.get_next_payload(action, state, output, rows)
             for next_action in next_actions:
                 enqueue_action(next_action.pk, data=payload)
             return

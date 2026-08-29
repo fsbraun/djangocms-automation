@@ -279,6 +279,17 @@ class AutomationPluginModel(CMSPlugin):
         """
         raise NotImplementedError("Subclasses must implement the execute method.")
 
+    def get_next_payload(self, action: AutomationAction, state: str, output, rows: list):
+        """Decide what the actions created by :meth:`get_next_actions` receive.
+
+        A completed node hands on its output; a node that fanned out passes its
+        own input through, because every branch of a split starts from the same
+        data. A loop is the exception — each iteration must receive the previous
+        one's output, or it can never work towards its own exit — so it
+        overrides this.
+        """
+        return output if state == COMPLETED else rows
+
     def get_next_actions(self, action: AutomationAction) -> list[AutomationAction]:
         """Determine and create the next action(s) in the workflow.
 
@@ -433,6 +444,195 @@ class ConditionalPluginModel(AutomationPluginModel):
                     )
                 ]
             return []
+        return super().get_next_actions(action)
+
+
+class LoopPluginModel(AutomationPluginModel):
+    """A while loop: run the body for as long as a condition holds.
+
+    The condition is evaluated *before* each iteration, so a condition that is
+    already false runs the body zero times. Each iteration's output becomes the
+    data the next condition is evaluated against and the next iteration
+    receives, which is what lets a loop make progress towards its own exit.
+
+    Mechanically this is the re-entrant ``WAITING`` node the engine already uses
+    for splits: spawn the body, suspend, and be woken when it finishes. The
+    difference is the termination rule — a split fans out once and joins, a loop
+    goes round again — and that difference is why the engine counts re-entries
+    separately from attempts. Without that, a loop of fifty iterations would look
+    like fifty failed attempts and exhaust a retry budget it never touched.
+    """
+
+    #: Iterations after which the loop gives up. A while loop is the first
+    #: construct here that can run forever, so the bound is not optional; it is
+    #: an error rather than a quiet stop, because silently truncating a loop
+    #: produces a wrong result that looks like a right one.
+    DEFAULT_MAX_ITERATIONS = 100
+
+    question = models.CharField(
+        max_length=255,
+        verbose_name=_("Description"),
+        blank=True,
+        help_text=_("What this loop repeats, e.g. 'While there are unprocessed rows'. Shown in the editor."),
+    )
+    condition = models.JSONField(
+        verbose_name=_("Condition"),
+        help_text=_(
+            "Evaluated before every iteration. The loop runs while it is true. "
+            "Use double curly braces {{ }} for data attribute resolution, e.g. {{ remaining }}."
+        ),
+        default=dict,
+    )
+    max_iterations = models.PositiveIntegerField(
+        default=DEFAULT_MAX_ITERATIONS,
+        verbose_name=_("Maximum iterations"),
+        help_text=_("The loop fails once it exceeds this many iterations, rather than running forever."),
+    )
+
+    no_body = _("This loop repeats nothing. Add the plugins to repeat inside it in the structure board.")
+
+    class Meta:
+        verbose_name = _("Loop Plugin")
+        verbose_name_plural = _("Loop Plugins")
+
+    def messages(self) -> list[str]:
+        """Get validation messages for this loop."""
+        return [] if self._body() else [self.no_body]
+
+    def _body(self) -> list:
+        """The plugins this loop repeats: its own children, in order."""
+        return list(self.child_plugin_instances or [])
+
+    @staticmethod
+    def _uuid_of(plugin):
+        """Get a body plugin's uuid, downcasting it first if necessary."""
+        if not hasattr(plugin, "uuid"):
+            plugin, _unused = plugin.get_plugin_instance()
+        return plugin.uuid
+
+    def _body_end_uuid(self):
+        """Get the uuid of the last plugin in the body, whose output carries forward."""
+        body = self._body()
+        return self._uuid_of(body[-1]) if body else None
+
+    def _carried(self, action: AutomationAction, rows: list) -> list:
+        """The data flowing into the next iteration: the previous one's output.
+
+        On the first pass there is no previous iteration, so it is the loop's
+        own input.
+        """
+        from .engine import normalize_rows
+
+        if not self._iteration(action):
+            return rows
+        end_uuid = self._body_end_uuid()
+        if end_uuid is None:
+            return rows
+        end_action = (
+            action.children.filter(replays__isnull=True, plugin_ptr=end_uuid, finished__isnull=False)
+            .order_by("-created")
+            .first()
+        )
+        if end_action is None or end_action.result is None:
+            return rows
+        return normalize_rows(end_action.result)
+
+    def get_next_payload(self, action: AutomationAction, state: str, output, rows: list):
+        """Hand each iteration the previous iteration's output.
+
+        The engine's default passes a fan-out node's own input to every
+        successor, which is right for a split — its branches all start from the
+        same data — and wrong for a loop, whose whole purpose is to change the
+        data until the condition stops holding.
+        """
+        if state == COMPLETED:
+            return output
+        return self._carried(action, rows)
+
+    @staticmethod
+    def _iteration(action: AutomationAction) -> int:
+        """Read the iteration recorded on the action.
+
+        Kept in ``result`` because the object that ``execute`` annotates is not
+        the one ``get_next_actions`` receives — the engine hands over the row it
+        transitioned. The conditional node carries its branch choice the same
+        way.
+        """
+        if isinstance(action.result, dict):
+            return int(action.result.get("iteration", 0))
+        return 0
+
+    def execute(
+        self,
+        action: AutomationAction,
+        data: list,
+        single_step: bool = False,
+        plugin_dict: dict | None = None,
+    ) -> tuple[str, dict | list]:
+        """Evaluate the condition and either start another iteration or finish.
+
+        :returns: ``(WAITING, {"iteration": n})`` while the body runs,
+            ``(COMPLETED, output)`` once the condition is false, and
+            ``(FAILED, ...)`` if the body failed or the bound was exceeded.
+        """
+
+        # A child that has been replayed is superseded by its replacement, as
+        # for splits and conditionals: counting it would fail the loop forever.
+        children = action.children.filter(replays__isnull=True)
+
+        if children.filter(state=FAILED).exists():
+            return FAILED, {"error": "Loop body failed"}
+        if children.filter(finished__isnull=True).exists():
+            # The current iteration is still running.
+            return WAITING, {"iteration": self._iteration(action)}
+
+        if not self._body():
+            # Nothing to repeat. Pass the data through rather than spin.
+            return COMPLETED, data
+
+        # The data the condition sees is the previous iteration's output, so a
+        # loop can work towards its own exit. On the first pass it is the input.
+        iteration = self._iteration(action)
+        current = self._carried(action, data)
+
+        if not bool(evaluate_condition(self.condition, current)):
+            return COMPLETED, current
+
+        if iteration >= self.max_iterations:
+            return FAILED, {
+                "error": (
+                    f"Loop exceeded {self.max_iterations} iterations. Its condition never became false; "
+                    f"check that the body changes the data the condition tests."
+                ),
+                "iterations": iteration,
+            }
+
+        return WAITING, {"iteration": iteration + 1}
+
+    def get_next_actions(self, action: AutomationAction) -> list[AutomationAction]:
+        """Start the next iteration, or continue past the loop once it is done.
+
+        Unlike a split, which fans out once and gates on ``not children.exists()``,
+        a loop spawns on every iteration. The gate is instead "nothing is still
+        running": if the current iteration is unfinished there is nothing to do,
+        and the child that finishes will wake this node again.
+        """
+        if action.state == WAITING:
+            children = action.children.filter(replays__isnull=True)
+            if children.filter(finished__isnull=True).exists():
+                return []
+            body = self._body()
+            if not body:
+                return []
+            return [
+                AutomationAction.objects.create(
+                    previous=action,
+                    parent=action,
+                    automation_instance=action.automation_instance,
+                    plugin_ptr=self._uuid_of(body[0]),
+                    finished=None,
+                )
+            ]
         return super().get_next_actions(action)
 
 
