@@ -64,9 +64,20 @@ an expression the model never sees.
 This is the useful part. A *Send Email* tool can bind the recipient to
 ``trigger.from`` and expose only the subject and body: the model writes the
 message, and cannot choose who receives it. A *Query Records* tool can bind the
-model and the row limit and expose only the search terms. The blast radius of a
+model and expose only the search terms and the row limit. The blast radius of a
 tool call is whatever the person who added the tool decided to open, and no
 wider — enforced on this side, not requested in a prompt.
+
+Exposing a field has to actually change what the action does, which is less
+obvious than it sounds. Actions read their inputs in two ways. Most take
+expressions over the automation's data and resolve them at run time; the model
+actions and the human-in-the-loop pause take literal values and read them
+straight from their stored configuration. A value from a model is a literal
+either way, so it goes to both places: as an override that skips resolution for
+the first kind, and as configuration for the second. Reaching only one of them
+is a quiet failure rather than a loud one — the argument is validated, accepted,
+and then the action does what the editor configured instead, which looks like
+success.
 
 Getting it wrong is recoverable
 -------------------------------

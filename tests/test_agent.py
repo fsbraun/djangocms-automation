@@ -683,3 +683,94 @@ def test_a_tool_call_cut_off_mid_arguments_is_not_run(run_setup, settings):
     agent = agent_action()
     assert agent.state == FAILED
     assert agent.children.count() == 0, "nothing ran on truncated arguments"
+
+
+@pytest.mark.django_db
+def test_a_literally_configured_action_receives_the_model_s_inputs(run_setup, settings, django_user_model):
+    """Exposing a field has to change what the action does.
+
+    An action reads its inputs in one of two ways: through ``resolve_inputs``,
+    which treats them as expressions, or straight off ``config``, which treats
+    them as values. A tool that reaches only the first kind validates the
+    model's arguments and then quietly runs the editor's configuration instead.
+    """
+    settings.AUTOMATION_ALLOWED_MODELS = ["auth.User"]
+    for name in ("ann", "bo", "cy"):
+        django_user_model.objects.create(username=name)
+
+    _trigger, placeholder = run_setup
+    agent = add_plugin(
+        placeholder=placeholder,
+        plugin_type="AutomationAgent",
+        language=settings.LANGUAGE_CODE,
+        model="anthropic/claude-opus-4-8",
+        prompt="find someone",
+    )
+    tool = add_plugin(
+        placeholder=placeholder,
+        plugin_type="AutomationAgentTool",
+        language=settings.LANGUAGE_CODE,
+        target=agent,
+        tool_name="find_users",
+        tool_description="Find users.",
+        exposed_fields=["limit"],
+    )
+    add_plugin(
+        placeholder=placeholder,
+        plugin_type="QueryModelAction",
+        language=settings.LANGUAGE_CODE,
+        target=tool,
+        config={"model": "auth.User", "limit": 100},
+    )
+    SCRIPT.append(says(calls=[ToolCall(id="c1", name="find_users", arguments={"limit": 1})]))
+    SCRIPT.append(says(text="Found one."))
+
+    _trigger.trigger_execution(data=[{"seed": 1}])
+
+    call = AutomationAction.objects.exclude(parent__isnull=True).latest("id")
+    assert call.state == COMPLETED
+    assert len(call.result) == 1, f"the model asked for one row, got {len(call.result)}"
+
+
+@pytest.mark.django_db
+def test_an_expression_configured_action_still_gets_literals(run_setup, settings):
+    """The other kind must keep working, and for the opposite reason.
+
+    Its config holds expressions over the automation's data, so a value the
+    model supplies has to bypass resolution — sending it through would read
+    "Ship it" as a data path.
+    """
+    from django.core import mail
+
+    _trigger, placeholder = run_setup
+    agent = add_plugin(
+        placeholder=placeholder,
+        plugin_type="AutomationAgent",
+        language=settings.LANGUAGE_CODE,
+        model="anthropic/claude-opus-4-8",
+        prompt="write to them",
+    )
+    tool = add_plugin(
+        placeholder=placeholder,
+        plugin_type="AutomationAgentTool",
+        language=settings.LANGUAGE_CODE,
+        target=agent,
+        tool_name="send_mail",
+        tool_description="Send mail.",
+        exposed_fields=["subject", "body"],
+        requires_approval=False,
+    )
+    add_plugin(
+        placeholder=placeholder,
+        plugin_type="MailAction",
+        language=settings.LANGUAGE_CODE,
+        target=tool,
+        config={"subject": "'unused'", "body": "unused", "recipient_email": "'to@example.com'"},
+    )
+    SCRIPT.append(says(calls=[ToolCall(id="c1", name="send_mail", arguments={"subject": "Ship it", "body": "Now"})]))
+    SCRIPT.append(says(text="Sent."))
+
+    _trigger.trigger_execution(data=[{"seed": 1}])
+
+    assert mail.outbox, "the mail was sent"
+    assert mail.outbox[-1].subject == "Ship it", "the literal, not a data path"

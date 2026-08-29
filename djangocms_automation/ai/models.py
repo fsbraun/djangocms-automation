@@ -180,10 +180,29 @@ class AgentToolPluginModel(AutomationPluginModel):
             # Handed back for the model to correct rather than failing the run.
             return COMPLETED, ToolResult(call_id=call.id, content=str(exc), is_error=True), []
 
-        # The action resolves its own inputs, so the model's values are handed
-        # to it on the instance rather than as an argument. No action needs to
-        # know it is being used as a tool.
+        # An action reads its inputs in one of two ways, so the model's values
+        # are put where each kind will look.
+        #
+        # Actions whose editor inputs are expressions over the automation's data
+        # go through ``resolve_inputs``, and take ``_input_overrides``: the
+        # override bypasses resolution, because a value the model supplied is
+        # already the literal and resolving "Ship it" would read it as a data
+        # path.
+        #
+        # Actions configured with literal values — the model actions, Wait for
+        # User, LLM Prompt — read ``config`` directly and never see an override.
+        # For those, the model's arguments *are* config: ``validate_arguments``
+        # put them through the same form field the editor fills in, so what the
+        # action receives is indistinguishable from someone having typed it.
+        #
+        # Both are set, because either kind may be wrapped and this node cannot
+        # usefully tell them apart. The config is put back afterwards: the
+        # plugin instance comes from a map that outlives this call, and one tool
+        # call must not leave its arguments behind for the next.
         plugin._input_overrides = arguments
+        configured = plugin.config
+        if arguments:
+            plugin.config = {**(configured or {}), **arguments}
         try:
             state, output = plugin.execute(action, rows)
         except ActionPause:
@@ -193,6 +212,9 @@ class AgentToolPluginModel(AutomationPluginModel):
             raise
         except Exception as exc:  # noqa: BLE001 — a failing tool is an observation
             return COMPLETED, ToolResult(call_id=call.id, content=f"{type(exc).__name__}: {exc}", is_error=True), []
+        finally:
+            plugin.config = configured
+            plugin._input_overrides = None
 
         if state == WAITING:
             # The wrapped action wants a person. It has set whatever it needs on
