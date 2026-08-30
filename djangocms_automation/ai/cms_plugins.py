@@ -80,6 +80,7 @@ class AIStep(ActionPlugin):
 
     def render(self, context, instance, placeholder):
         context = super().render(context, instance, placeholder)
+        # Downcast, because each one is rendered as the plugin it is.
         context.update({"tools": instance.child_plugin_instances or []})
         return context
 

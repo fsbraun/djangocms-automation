@@ -488,3 +488,190 @@ def test_an_action_can_decline_to_be_a_tool():
         assert "QueryModelAction" not in offered, "declining means not offered, not refused later"
     finally:
         query.can_be_tool = True
+
+
+@pytest.mark.django_db
+def test_an_action_draws_as_a_tool_inside_a_step_and_as_a_step_outside_one(run_setup, settings):
+    """Same plugin, same instance; what differs is what it is where it sits.
+
+    Routing the template rather than drawing tool rows from the AI step's own
+    template is what keeps each tool a *rendered plugin* — so django CMS wraps
+    it, and an editor can double-click it open, move it and delete it the way
+    they would an action anywhere else.
+    """
+    from cms.plugin_pool import plugin_pool
+
+    _trigger, placeholder = run_setup
+    ai = add_step(placeholder, settings)
+    inside = add_tool(placeholder, ai, settings, plugin_type="MailAction", tool_name="reply")
+    outside = add_plugin(
+        placeholder=placeholder,
+        plugin_type="MailAction",
+        language=settings.LANGUAGE_CODE,
+        config={"recipient_email": "'to@example.com'", "subject": "'x'", "body": "x"},
+    )
+
+    plugin_class = plugin_pool.get_plugin("MailAction")
+    plugin = plugin_class(plugin_class.model, None)
+
+    assert plugin.get_render_template({}, inside, placeholder).endswith("tool.html")
+    assert plugin.get_render_template({}, outside, placeholder).endswith("action.html")
+    assert plugin.get_render_template({}, None, placeholder).endswith("action.html")
+
+
+@pytest.mark.django_db
+def test_a_tool_draws_as_a_modifier_row_with_a_square_marker(run_setup, settings):
+    """Same row as a modifier, different shape around the icon.
+
+    A tool and a modifier both belong to the card they sit in, so they are drawn
+    the same way — but they are not the same thing, and the diagram should not
+    have to be read twice to tell which is which.
+    """
+    from django.template.loader import render_to_string
+    from django.test import RequestFactory
+
+    _trigger, placeholder = run_setup
+    ai = add_step(placeholder, settings)
+    add_tool(placeholder, ai, settings, plugin_type="MailAction", tool_name="reply", requires_approval=None)
+
+    instance = step.AIStepPluginModel.objects.get(pk=ai.pk)
+    request = RequestFactory().get("/")
+    request.user = None
+    html = render_to_string(
+        "djangocms_automation/plugins/ai_step.html",
+        {"instance": instance, "title": "Ask a Model", "tools": list(instance.cmsplugin_set.all())},
+        request=request,
+    )
+
+    assert 'class="modifier tool"' in html, "the same row a modifier gets"
+    assert "tool-marker" in html, "and a square marker rather than a round one"
+    assert "bi-envelope-at" in html, "carrying the icon of the action it runs"
+    assert "bi-shield-exclamation" in html, "and the gate an irreversible action gets automatically"
+
+
+@pytest.mark.django_db
+def test_a_step_with_nothing_in_it_says_so(run_setup, settings):
+    from django.template.loader import render_to_string
+    from django.test import RequestFactory
+
+    _trigger, placeholder = run_setup
+    ai = add_step(placeholder, settings)
+
+    request = RequestFactory().get("/")
+    request.user = None
+    html = render_to_string(
+        "djangocms_automation/plugins/ai_step.html",
+        {"instance": step.AIStepPluginModel.objects.get(pk=ai.pk), "title": "Ask a Model", "tools": []},
+        request=request,
+    )
+
+    assert "Answers only" in html
+    assert "tool-marker" not in html, "nothing to point at"
+
+
+# --------------------------------------------------------------------------
+# The wiring form
+# --------------------------------------------------------------------------
+
+
+def wired_form(plugin_type, parent, settings, data=None):
+    """The form an editor actually gets when adding an action inside a step."""
+    from cms.plugin_pool import plugin_pool
+    from django.contrib.admin.sites import AdminSite
+    from django.test import RequestFactory
+
+    plugin = plugin_pool.get_plugin(plugin_type)(plugin_pool.get_plugin(plugin_type).model, AdminSite())
+    request = RequestFactory().get(f"/?plugin_parent={parent.pk}")
+    request.user = None
+    form_class = plugin.get_form(request, obj=None)
+    return plugin, form_class(data=data) if data is not None else form_class()
+
+
+@pytest.mark.django_db
+def test_the_wired_form_validates(run_setup, settings):
+    """Submitting it must not recurse.
+
+    The check that a bound input has a value spans two fields, so it lives on
+    the form. Injected as a plain function it called ``super(type(self), self)``
+    — and Django's admin subclasses the generated form, so that lookup found
+    the same method again, forever.
+    """
+    _trigger, placeholder = run_setup
+    ai = add_step(placeholder, settings)
+
+    _plugin, form = wired_form(
+        "MailAction",
+        ai,
+        settings,
+        data={
+            "subject": "subject",
+            "body": "body",
+            "recipient_email": "recipient_email",
+            "from_email": "",
+            "comment": "",
+        },
+    )
+
+    assert form.is_valid(), form.errors
+
+
+@pytest.mark.django_db
+def test_the_wiring_switch_replaces_the_requirement(run_setup, settings):
+    """A bound input needs a value; one the model fills does not."""
+    _trigger, placeholder = run_setup
+    ai = add_step(placeholder, settings)
+
+    _plugin, missing = wired_form(
+        "MailAction", ai, settings, data={"subject": "", "body": "b", "recipient_email": "r", "comment": ""}
+    )
+    assert not missing.is_valid()
+    assert "subject" in missing.errors
+
+    _plugin, filled_by_model = wired_form(
+        "MailAction",
+        ai,
+        settings,
+        data={
+            "subject": "",
+            "model_fills__subject": "on",
+            "body": "b",
+            "recipient_email": "r",
+            "comment": "",
+        },
+    )
+    assert filled_by_model.is_valid(), filled_by_model.errors
+
+
+@pytest.mark.django_db
+def test_an_action_outside_a_step_gets_no_switches(run_setup, settings):
+    """The mixin does nothing where there is no model to offer anything to."""
+    from cms.plugin_pool import plugin_pool
+    from django.contrib.admin.sites import AdminSite
+    from django.test import RequestFactory
+
+    _trigger, _placeholder = run_setup
+    plugin_class = plugin_pool.get_plugin("MailAction")
+    plugin = plugin_class(plugin_class.model, AdminSite())
+    request = RequestFactory().get("/")
+    request.user = None
+
+    form_class = plugin.get_form(request, obj=None)
+
+    assert not [name for name in form_class.base_fields if name.startswith(plugin.MODEL_FILLS)]
+    assert form_class.base_fields["subject"].required, "outside a step it is required as ever"
+
+
+@pytest.mark.django_db
+def test_the_approval_shield_is_in_the_icon_sprite(run_setup, settings):
+    """A ``<use>`` reference to a symbol nobody defined renders as nothing.
+
+    Which is the wrong way for a safety marker to fail — an ungated tool and a
+    gated one would look identical.
+    """
+    from django.template.loader import get_template
+
+    # Read rather than rendered: the page extends the project's base.html,
+    # which a test project need not have, and the sprite is static markup.
+    source = get_template("djangocms_automation/automation_detail.html").template.source
+
+    assert 'id="bi-shield-exclamation"' in source

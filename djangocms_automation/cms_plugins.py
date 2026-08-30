@@ -241,8 +241,14 @@ class ActionPlugin(AutomationPlugin):
         data_form_fields["Media"] = type(
             "Media", (), {"js": (), "css": {"all": ("djangocms_automation/css/plugin_data_form.css",)}}
         )
+        bases = (self.form,)
+        if self.is_tool(request, obj) and self.data_form:
+            # Wired inputs need a check that spans two fields, so the form gains
+            # a base class rather than a function in its namespace.
+            data_form_fields["tool_plugin"] = self
+            bases = (WiredInputsMixin, self.form)
         metaclass = type(self.form)
-        new_form = metaclass(self.form.__name__, (self.form,), data_form_fields)
+        new_form = metaclass(self.form.__name__, bases, data_form_fields)
         kwargs["form"] = new_form
         return super().get_form(request, obj=obj, **kwargs)
 
@@ -273,6 +279,19 @@ class ActionPlugin(AutomationPlugin):
 
             parent = CMSPlugin.objects.filter(pk=parent_id).first()
         return bool(parent and parent.plugin_type in ai_step_plugins)
+
+    def get_render_template(self, context, instance, placeholder):
+        """An action draws as a step in a flow, or as a tool inside an AI step.
+
+        Same plugin, same instance — what differs is what it *is* in the place
+        it sits. Routing the template here rather than rendering tool rows from
+        the AI step's own template is what keeps each tool a rendered plugin,
+        so django CMS wraps it and an editor can double-click it open like
+        anything else.
+        """
+        if instance is not None and instance.parent_id and instance.parent.plugin_type in ai_step_plugins:
+            return "djangocms_automation/plugins/tool.html"
+        return self.render_template
 
     def get_data_form_fields(self, request, obj=None):
         """Build the dynamic config fields from the declared data_form.
@@ -327,8 +346,6 @@ class ActionPlugin(AutomationPlugin):
                     initial=f_name in exposed,
                     help_text=_("Leave off to bind this input to an expression the model never sees."),
                 )
-        if wired:
-            fields["clean"] = _clean_wired_inputs(self)
         return fields
 
     def save_model(self, request, obj, form, change):
@@ -497,16 +514,26 @@ class DataModifier(ModifierPlugin):
     icon = "bi-database"
 
 
-def _clean_wired_inputs(plugin):
-    """Require a value for every input the model is *not* filling.
+class WiredInputsMixin:
+    """Requires a value for every input the model is *not* filling.
 
-    ``required`` cannot answer this: whether an input needs a value depends on
-    the switch beside it, which is not known when the field is built. So the
-    check moves to the form, where both are available.
+    ``required`` cannot answer this on its own: whether an input needs a value
+    depends on the switch beside it, which is not known when the field is
+    built. So the check moves to the form, where both are available.
+
+    A real class rather than a function stuffed into the generated form's
+    namespace, because ``super()`` has to work. Django's admin subclasses this
+    form again, so ``super(type(self), self)`` would start its lookup below a
+    class that is no longer the one this method was defined on — and find this
+    method a second time, forever.
     """
 
+    #: The plugin whose ``data_form`` this checks. Set on the generated class.
+    tool_plugin = None
+
     def clean(self):
-        cleaned = super(type(self), self).clean()
+        cleaned = super().clean()
+        plugin = self.tool_plugin
         for name, declared in plugin.data_form.base_fields.items():
             if not declared.required:
                 continue
@@ -515,5 +542,3 @@ def _clean_wired_inputs(plugin):
             if not cleaned.get(name):
                 self.add_error(name, _("Enter a value, or let the model decide."))
         return cleaned
-
-    return clean

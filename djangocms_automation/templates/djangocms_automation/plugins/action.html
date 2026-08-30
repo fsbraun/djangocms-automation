@@ -1,9 +1,14 @@
-{% load cms_tags %}
+{% load cms_tags i18n %}
 <div class="automation-step{% if end %} end{% endif %}">
     {% include "djangocms_automation/includes/add.html" %}
    <div class="automation-action automation-item">
         <div class="card-title">
             <svg width="16" height="16"><use xlink:href="#{{ icon|default:"bi-stars" }}"></use></svg> {{ title }}
+            {% if instance.needs_approval %}
+            <span class="tool-approval" title="{% translate 'A person approves each call before it runs' %}">
+                <svg width="16" height="16"><use xlink:href="#bi-shield-exclamation"></use></svg>
+            </span>
+            {% endif %}
         </div>
         {% for modifier in instance.child_plugin_instances %}
             {% render_plugin modifier %}

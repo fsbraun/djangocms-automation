@@ -98,25 +98,17 @@ body {
             position: relative;
         }
         /* A tool is a modifier-shaped row: it belongs to the card it sits in
-           rather than standing beside it. What differs is only what it says. */
+           rather than standing beside it. */
         .modifier.tool {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            padding-inline: 8px;
-            text-align: start;
-            font-size: 90%;
-            svg {
-                flex: 0 0 auto;
-            }
-            .tool-name {
-                font-weight: bold;
-            }
-            .tool-runs {
-                color: var(--dca-gray);
-            }
             .tool-approval {
-                margin-inline-start: auto;
+                margin-inline-start: 4px;
+                svg {
+                    vertical-align: text-bottom;
+                }
+            }
+            &.answers-only {
+                color: var(--dca-gray);
+                font-style: italic;
             }
         }
         .modifier-arrow {
@@ -136,6 +128,14 @@ body {
             transform: translate(-50%, -50%);
             border-radius: 50%;
             border: var(--dca-black) 1px solid;
+            background: var(--dca-white);
+            display: grid;
+            place-items: center;
+        }
+        /* Square, so a tool is distinguishable from a modifier at a glance.
+           Everything else about the two rows is deliberately identical. */
+        .modifier-arrow.tool-marker {
+            border-radius: var(--dca-border-radius-sm, 3px);
         }
         .errors, .paused {
             position: absolute;
