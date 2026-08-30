@@ -274,7 +274,10 @@
 
         tryBuilder() {
             const raw = this.source.value.trim();
-            if (!raw) {
+            // `null` counts as empty, the same way it does on first load: a
+            // JSONField with nothing in it says `null`, and going back to the
+            // table should give an empty one rather than a warning.
+            if (!raw || raw === 'null') {
                 this.state = emptyState();
                 this.mode = 'builder';
                 this.unsupported = false;
@@ -318,11 +321,14 @@
                 );
                 this.container.appendChild(note);
             }
-            this.container.appendChild(this.makeButton(
+            const footer = document.createElement('div');
+            footer.className = 'schema-widget__footer';
+            footer.appendChild(this.makeButton(
                 this.label('builderLabel', 'Use field editor'),
                 'button schema-widget__toggle',
                 () => this.tryBuilder()
             ));
+            this.container.appendChild(footer);
         }
 
         renderBuilderMode() {

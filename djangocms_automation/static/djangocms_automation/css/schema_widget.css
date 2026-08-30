@@ -84,8 +84,15 @@
     display: flex;
     gap: 1rem;
     align-items: center;
-    justify-content: space-between;
+    /* The toggle sits at the inline end in both modes. Pushed there by the
+       text beside it when there is any, and by this when there is not — the
+       two modes must not put the same control in two different places. */
+    justify-content: flex-end;
     margin-top: 0.75rem;
+}
+
+.schema-widget__footer .schema-widget__consequence {
+    margin-inline-end: auto;
 }
 
 .schema-widget__consequence,
@@ -103,8 +110,24 @@
     background: var(--darkened-bg, #f8f8f8);
 }
 
+/* Styled here rather than left to the admin's ``.button``: this widget renders
+   inside a plugin modal as well as a change form, and a control that switches
+   how the field is edited should not look like a link in one of them. */
 .schema-widget__toggle {
+    padding: 0.4rem 0.9rem;
+    border: 1px solid var(--border-color, #ccc);
+    border-radius: var(--border-radius, 4px);
+    background: var(--button-bg, #f8f8f8);
+    color: var(--button-fg, #333);
+    font-size: 0.8125rem;
+    line-height: 1.2;
     white-space: nowrap;
+    cursor: pointer;
+}
+
+.schema-widget__toggle:hover,
+.schema-widget__toggle:focus-visible {
+    background: var(--button-hover-bg, #eee);
 }
 
 .schema-widget__remove {
@@ -121,5 +144,11 @@
     .schema-widget__footer {
         align-items: flex-start;
         flex-direction: column;
+    }
+
+    /* Stacked, the sentence reads from the start and the control stays where
+       the control is on a wide screen. */
+    .schema-widget__footer .schema-widget__toggle {
+        align-self: flex-end;
     }
 }

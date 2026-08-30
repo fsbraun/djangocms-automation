@@ -155,3 +155,30 @@ def test_the_admin_page_carries_the_widget(admin_client, admin_user):
     assert 'class="schema-widget"' in html
     # Adjacent, because the script finds its textarea as the previous sibling.
     assert 'class="schema-widget"' in html.split("</textarea>")[1][:200]
+
+
+def test_the_mode_toggle_sits_in_the_same_place_in_both_modes():
+    """The control that switches how the field is edited must not move.
+
+    A button that is bottom-right of the table and top-left of the textarea is
+    two controls to learn rather than one.
+    """
+    from pathlib import Path
+
+    from django.conf import settings as django_settings  # noqa: F401
+
+    js = (
+        Path(__file__).resolve().parent.parent / "djangocms_automation/static/djangocms_automation/js/schema_widget.js"
+    ).read_text()
+
+    # Both renderers wrap their toggle in the same footer element.
+    assert js.count("footer.className = 'schema-widget__footer';") == 2
+    assert js.count("'button schema-widget__toggle'") == 2
+
+    css = (
+        Path(__file__).resolve().parent.parent
+        / "djangocms_automation/static/djangocms_automation/css/schema_widget.css"
+    ).read_text()
+
+    assert "justify-content: flex-end;" in css, "inline-end in both modes"
+    assert ".schema-widget__toggle {" in css and "border-radius" in css, "and looks like a button"
