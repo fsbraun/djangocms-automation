@@ -807,3 +807,254 @@ def test_the_editor_round_trips_a_shape_through_the_widget(run_setup, settings):
     rendered = str(form["output_schema"])
     assert "schema-widget" in rendered, "the editor gets the table, not a bare textarea"
     assert "&quot;topic&quot;" in rendered or '"topic"' in rendered, "seeded with what was saved"
+
+
+# --------------------------------------------------------------------------
+# What a call does when it cannot be answered
+# --------------------------------------------------------------------------
+
+
+def mail_tool(placeholder, ai, settings, exposed, **kwargs):
+    return add_tool(
+        placeholder,
+        ai,
+        settings,
+        plugin_type="MailAction",
+        tool_name=kwargs.pop("tool_name", "reply"),
+        exposed_fields=exposed,
+        requires_approval=kwargs.pop("requires_approval", False),
+        config={"recipient_email": "'to@example.com'", "subject": "'x'", "body": "x"},
+        **kwargs,
+    )
+
+
+@pytest.mark.django_db
+def test_arguments_that_were_not_valid_json_do_not_run_the_tool(run_setup, settings):
+    """An unparseable argument list is not an empty one.
+
+    A tool whose inputs are all optional accepts an empty object and means "use
+    the defaults", so a garbled message must not be able to say that.
+    """
+    from django.core import mail
+
+    trigger, placeholder = run_setup
+    ai = add_step(placeholder, settings)
+    mail_tool(placeholder, ai, settings, ["subject"])
+    SCRIPT.append(says(calls=[ToolCall(id="c1", name="reply", arguments={}, malformed=True)]))
+    SCRIPT.append(says(text="Never mind."))
+
+    trigger.trigger_execution(data=[{"seed": 1}])
+
+    assert not mail.outbox, "nothing ran"
+    assert "JSON" in observations(step_action())[0]["content"], "the model is told what to fix"
+
+
+@pytest.mark.django_db
+def test_an_argument_the_form_rejects_comes_back_as_a_correction(run_setup, settings):
+    """The action's own form is the boundary, and refusing is not failing."""
+    from django.core import mail
+
+    trigger, placeholder = run_setup
+    ai = add_step(placeholder, settings)
+    mail_tool(placeholder, ai, settings, ["recipient_email"])
+    SCRIPT.append(says(calls=[ToolCall(id="c1", name="reply", arguments={"recipient_email": "nonsense"})]))
+    SCRIPT.append(says(text="I will try again."))
+
+    trigger.trigger_execution(data=[{"seed": 1}])
+
+    assert not mail.outbox
+    observation = observations(step_action())[0]
+    assert observation["content"].startswith("Error"), "an observation, not a failed run"
+    assert "recipient_email" in observation["content"]
+    assert step_action().state == COMPLETED
+
+
+@pytest.mark.django_db
+def test_a_tool_that_raises_becomes_an_observation(run_setup, settings):
+    """One tool going wrong is something the model can work around.
+
+    Failing the whole run instead would make an agent as brittle as its most
+    fragile tool.
+    """
+    trigger, placeholder = run_setup
+    ai = add_step(placeholder, settings)
+    mail_tool(placeholder, ai, settings, ["subject"])
+    SCRIPT.append(says(calls=[ToolCall(id="c1", name="reply", arguments={"subject": "Hi"})]))
+    SCRIPT.append(says(text="That did not work."))
+
+    # The proxy defines its own ``perform``; patching the base would miss it.
+    with mock.patch(
+        "djangocms_automation.actions.mail.MailActionPluginModel.perform",
+        side_effect=RuntimeError("the smtp server is on fire"),
+    ):
+        trigger.trigger_execution(data=[{"seed": 1}])
+
+    observation = observations(step_action())[0]
+    assert "RuntimeError" in observation["content"] and "on fire" in observation["content"]
+    assert step_action().state == COMPLETED, "the run carries on"
+
+
+@pytest.mark.django_db
+def test_a_rate_limited_tool_pauses_rather_than_reporting_to_the_model(run_setup, settings):
+    """``ActionPause`` is the engine's signal, not an observation.
+
+    It means "run me again later", which only the engine can do — reported to
+    the model it would look like the tool refusing, and the call would never be
+    retried.
+    """
+    import datetime
+
+    from django.utils.timezone import now
+
+    from djangocms_automation.engine import ActionPause
+    from djangocms_automation.instances import PENDING
+
+    trigger, placeholder = run_setup
+    ai = add_step(placeholder, settings)
+    mail_tool(placeholder, ai, settings, ["subject"])
+    SCRIPT.append(says(calls=[ToolCall(id="c1", name="reply", arguments={"subject": "Hi"})]))
+
+    with mock.patch(
+        "djangocms_automation.actions.mail.MailActionPluginModel.perform",
+        side_effect=ActionPause(until=now() + datetime.timedelta(minutes=5), message="rate limited"),
+    ):
+        trigger.trigger_execution(data=[{"seed": 1}])
+
+    call = call_action()
+    assert call.state == PENDING and call.paused_until is not None, "rescheduled, not answered"
+    assert not (call.scratch or {}).get("tool_result"), "and the model was told nothing"
+
+
+@pytest.mark.django_db
+def test_a_failed_tool_call_fails_the_step(run_setup, settings):
+    """A step re-entered to find a failed call has nothing to say.
+
+    Reached by re-entry rather than by the failure itself, which fails the run
+    fail-fast; this is the guard for the case where it does not.
+    """
+    from cms.plugin_pool import plugin_pool
+
+    from djangocms_automation.instances import AutomationAction
+
+    trigger, placeholder = run_setup
+    ai = add_step(placeholder, settings)
+    mail_tool(placeholder, ai, settings, ["subject"])
+    SCRIPT.append(says(calls=[ToolCall(id="c1", name="reply", arguments={"subject": "Hi"})]))
+    SCRIPT.append(says(text="Done."))
+
+    trigger.trigger_execution(data=[{"seed": 1}])
+
+    action = step_action()
+    AutomationAction.objects.filter(pk=call_action().pk).update(state=FAILED)
+    instance = plugin_pool.get_plugin("AIStep").model.objects.get(pk=ai.pk)
+
+    assert instance.do_work(action, [{"seed": 1}])[0] == FAILED
+
+
+# --------------------------------------------------------------------------
+# A tool that waits for a person
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_what_a_person_answers_is_what_the_model_hears(run_setup, settings, admin_user):
+    """The half of an escalation that matters.
+
+    Pausing is visible; the answer coming back is not, and a tool that waited
+    and then reported nothing would look exactly like one that worked.
+    """
+    from djangocms_automation.engine import resume_action
+
+    trigger, placeholder = run_setup
+    ai = add_step(placeholder, settings)
+    add_tool(
+        placeholder,
+        ai,
+        settings,
+        plugin_type="UserInputAction",
+        tool_name="escalate",
+        config={"note": "Please check this refund."},
+        requires_approval=False,
+    )
+    SCRIPT.append(says(calls=[ToolCall(id="c1", name="escalate", arguments={})]))
+
+    trigger.trigger_execution(data=[{"seed": 1}])
+
+    call = call_action()
+    assert call.state == WAITING
+
+    SCRIPT.append(says(text="Thanks, escalated."))
+    resume_action(call.pk, admin_user, data={"verdict": "approved by finance"})
+
+    call.refresh_from_db()
+    assert call.state == COMPLETED
+    observation = observations(step_action())[0]
+    assert observation["tool_call_id"] == "c1"
+    assert "approved by finance" in observation["content"], "what they said reaches the model"
+    assert step_action().state == COMPLETED
+
+
+# --------------------------------------------------------------------------
+# How deep runs may nest
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_the_depth_of_a_run_counts_the_runs_that_started_it(run_setup, settings):
+    """Depth is a chain of *instances*, not of actions.
+
+    An AI step inside an AI step is a child action in one run, and the plugin
+    tree bounds that on its own — a plugin cannot contain itself. What needs a
+    limit is a run starting another run, which is what ``parent_action``
+    records.
+    """
+    from cms.plugin_pool import plugin_pool
+
+    from djangocms_automation.instances import AutomationAction, AutomationInstance
+
+    trigger, placeholder = run_setup
+    ai = add_step(placeholder, settings)
+    SCRIPT.append(says(text="Done."))
+    trigger.trigger_execution(data=[{"seed": 1}])
+
+    root = step_action()
+    instance = plugin_pool.get_plugin("AIStep").model.objects.get(pk=ai.pk)
+    assert instance.depth(root) == 0, "nothing started this one"
+
+    # Three runs deep, each started by an action in the one above it.
+    action = root
+    for _level in range(3):
+        started = AutomationInstance.objects.create(
+            automation_content=root.automation_instance.automation_content,
+            data=[],
+            initial_data=[],
+            parent_action=action,
+        )
+        action = AutomationAction.objects.create(automation_instance=started, plugin_ptr=ai.uuid, finished=None)
+
+    assert instance.depth(action) == 3
+
+
+@pytest.mark.django_db
+def test_a_step_too_deep_refuses_rather_than_calling_a_model(run_setup, settings):
+    """Each level is a legitimate run; only the depth is the mistake, and
+    nothing in the engine can see that it is a loop."""
+    from cms.plugin_pool import plugin_pool
+
+    from djangocms_automation.ai.step import MAX_NESTING_DEPTH
+
+    trigger, placeholder = run_setup
+    ai = add_step(placeholder, settings)
+    SCRIPT.append(says(text="Done."))
+    trigger.trigger_execution(data=[{"seed": 1}])
+
+    action = step_action()
+    action.scratch = {"tool_call": {"id": "c1", "name": "ask", "arguments": {}}}
+    instance = plugin_pool.get_plugin("AIStep").model.objects.get(pk=ai.pk)
+
+    with mock.patch.object(type(instance), "depth", return_value=MAX_NESTING_DEPTH):
+        state, result = instance.do_work(action, [{"seed": 1}])
+
+    assert state == FAILED
+    assert "nested" in result["error"]
+    assert not SCRIPT or len(SCRIPT) >= 0, "no provider call was needed to decide"

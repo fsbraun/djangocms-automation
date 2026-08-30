@@ -45,6 +45,13 @@ MAX_LLM_RETRIES = 5
 #: Each level is a legitimate run and nothing about any one of them is wrong;
 #: only the depth is. Without a limit a single prompt can start an unbounded
 #: number of runs, which is the sort of thing one notices from the invoice.
+#:
+#: Dormant at present. Depth counts *runs*, and nothing starts a run from
+#: inside another since the automation-calling tool was removed — an AI step
+#: inside an AI step is a child action in one run, which the plugin tree bounds
+#: on its own because a plugin cannot contain itself. The limit and the
+#: ``parent_action`` chain it walks are kept for the sub-workflow action, which
+#: is what will make runs nest again.
 MAX_NESTING_DEPTH = 3
 
 
