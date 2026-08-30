@@ -1058,3 +1058,148 @@ def test_a_step_too_deep_refuses_rather_than_calling_a_model(run_setup, settings
     assert state == FAILED
     assert "nested" in result["error"]
     assert not SCRIPT or len(SCRIPT) >= 0, "no provider call was needed to decide"
+
+
+# --------------------------------------------------------------------------
+# Review round: the admin form, the budgets, and depth
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "plugin_type", ["MailAction", "QueryModelAction", "CreateModelAction", "UpdateModelAction", "UserInputAction"]
+)
+def test_every_action_can_be_added_inside_a_step(run_setup, settings, plugin_type):
+    """The wiring switches are paired with every input by ``get_fieldsets``.
+
+    An action that built its fields the other way — literal values rather than
+    expressions — skipped the switches, so the admin was asked for fields that
+    did not exist and raised before the form could render. Four of the five
+    built-in actions do it that way.
+    """
+    from cms.plugin_pool import plugin_pool
+    from django.contrib.admin.sites import AdminSite
+    from django.test import RequestFactory
+
+    _trigger, placeholder = run_setup
+    ai = add_step(placeholder, settings)
+    cls = plugin_pool.get_plugin(plugin_type)
+    plugin = cls(cls.model, AdminSite())
+    request = RequestFactory().get(f"/?plugin_parent={ai.pk}")
+    request.user = None
+
+    form = plugin.get_form(request, None)
+
+    switches = [name for name in form.base_fields if name.startswith(plugin.MODEL_FILLS)]
+    assert len(switches) == len(cls.data_form.base_fields), "one per input"
+    for name in cls.data_form.base_fields:
+        assert not form.base_fields[name].required, "the switch decides whether a value is needed"
+
+
+@pytest.mark.django_db
+def test_a_name_no_tool_has_does_not_spend_the_call_budget(run_setup, settings):
+    """``max_tool_calls`` bounds side effects, and a guess causes none.
+
+    Counting one against it starves the call the model gets right on its next
+    breath. What stops a model that only ever guesses is the turn limit.
+    """
+    trigger, placeholder = run_setup
+    ai = add_step(placeholder, settings, max_tool_calls=1)
+    add_tool(placeholder, ai, settings, tool_name="echo")
+    SCRIPT.append(
+        says(calls=[ToolCall(id="c1", name="nope", arguments={}), ToolCall(id="c2", name="echo", arguments={})])
+    )
+    SCRIPT.append(says(text="Done."))
+
+    trigger.trigger_execution(data=[{"seed": 1}])
+
+    action = step_action()
+    assert action.children.count() == 1, "the real call still ran"
+    assert action.state == COMPLETED
+
+
+@pytest.mark.django_db
+def test_a_run_that_only_guesses_still_stops(run_setup, settings):
+    """The turn limit, not the tool-call limit, is what ends it."""
+    trigger, placeholder = run_setup
+    ai = add_step(placeholder, settings, max_turns=2)
+    add_tool(placeholder, ai, settings, tool_name="echo")
+    for _ in range(3):
+        SCRIPT.append(says(calls=[ToolCall(id="c1", name="nope", arguments={})]))
+
+    trigger.trigger_execution(data=[{"seed": 1}])
+
+    action = step_action()
+    assert action.state == FAILED
+    assert "turns" in action.result["error"]
+
+
+@pytest.mark.django_db
+def test_a_turn_that_spends_the_token_budget_fails_the_run(run_setup, settings):
+    """Tokens are only knowable once the answer is back.
+
+    Checked only beforehand, the last turn is free to exceed the limit and
+    report success — a run over its budget that says it went fine.
+    """
+    trigger, placeholder = run_setup
+    add_step(placeholder, settings, max_tokens=100)
+    SCRIPT.append(says(text="A very expensive answer.", usage={"input_tokens": 400, "output_tokens": 50}))
+
+    trigger.trigger_execution(data=[{"seed": 1}])
+
+    action = step_action()
+    assert action.state == FAILED
+    assert "tokens" in action.result["error"]
+
+
+@pytest.mark.django_db
+def test_the_provider_is_never_given_longer_than_the_run_has_left(run_setup, settings):
+    """An answer arriving after the deadline is one the run should have failed
+    before receiving."""
+    asked = []
+
+    def complete(**kwargs):
+        asked.append(kwargs.get("timeout"))
+        assert SCRIPT
+        return SCRIPT.pop(0)
+
+    trigger, placeholder = run_setup
+    add_step(placeholder, settings, deadline_seconds=30, llm_timeout=120)
+    SCRIPT.append(says(text="Quick."))
+
+    with mock.patch.object(llm, "complete", side_effect=complete):
+        trigger.trigger_execution(data=[{"seed": 1}])
+
+    assert asked and asked[0] <= 30, f"asked for {asked}"
+
+
+@pytest.mark.django_db
+def test_a_step_inside_a_step_counts_towards_the_depth(run_setup, settings):
+    """A step called as another step's tool is a child action of the same run.
+
+    Counting only nested *runs* reported zero for it — which is the only kind
+    of nesting reachable today.
+    """
+    from cms.plugin_pool import plugin_pool
+
+    from djangocms_automation.instances import AutomationAction
+
+    trigger, placeholder = run_setup
+    outer = add_step(placeholder, settings)
+    SCRIPT.append(says(text="Done."))
+    trigger.trigger_execution(data=[{"seed": 1}])
+
+    root = step_action()
+    instance = plugin_pool.get_plugin("AIStep").model.objects.get(pk=outer.pk)
+    assert instance.depth(root) == 0
+
+    inner = AutomationAction.objects.create(
+        automation_instance=root.automation_instance,
+        parent=root,
+        previous=root,
+        plugin_ptr=outer.uuid,
+        scratch={"tool_call": {"id": "c1", "name": "ask", "arguments": {}}},
+        finished=None,
+    )
+
+    assert instance.depth(inner) == 1, "one AI step above it"

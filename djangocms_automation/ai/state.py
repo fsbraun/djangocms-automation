@@ -106,8 +106,15 @@ class AgentState:
             if isinstance(value, int):
                 self.usage[key] = self.usage.get(key, 0) + value
 
-    def record_observation(self, call_id: str, content: str, is_error: bool = False) -> None:
-        """Append what a tool returned, as the answer to one request."""
+    def record_observation(self, call_id: str, content: str, is_error: bool = False, ran: bool = True) -> None:
+        """Append what a tool returned, as the answer to one request.
+
+        :param ran: Whether a tool was actually dispatched. ``tool_calls``
+            bounds *side effects*, so an answer that dispatched nothing — a
+            name no tool has, a call refused for want of budget — must not
+            spend from it. A model that only ever guesses is stopped by the
+            turn limit, which is the limit for that.
+        """
         self.messages.append(
             {
                 "role": "tool",
@@ -115,7 +122,8 @@ class AgentState:
                 "content": content if not is_error else f"Error: {content}",
             }
         )
-        self.tool_calls += 1
+        if ran:
+            self.tool_calls += 1
 
     # -- dispatch bookkeeping ---------------------------------------------
 

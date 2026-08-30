@@ -46,12 +46,10 @@ MAX_LLM_RETRIES = 5
 #: only the depth is. Without a limit a single prompt can start an unbounded
 #: number of runs, which is the sort of thing one notices from the invoice.
 #:
-#: Dormant at present. Depth counts *runs*, and nothing starts a run from
-#: inside another since the automation-calling tool was removed — an AI step
-#: inside an AI step is a child action in one run, which the plugin tree bounds
-#: on its own because a plugin cannot contain itself. The limit and the
-#: ``parent_action`` chain it walks are kept for the sub-workflow action, which
-#: is what will make runs nest again.
+#: Counts two kinds of nesting: a step called as another step's tool, which is
+#: a child action in the same run, and a run started from inside another, which
+#: nothing does since the automation-calling tool was removed. The second is
+#: kept for the sub-workflow action that will restore it.
 MAX_NESTING_DEPTH = 3
 
 
@@ -183,17 +181,31 @@ class AIStepPluginModel(BaseActionPluginModel):
     # -- execution ---------------------------------------------------------
 
     def depth(self, action) -> int:
-        """How many AI steps and sub-workflows deep this one already is."""
+        """How many AI steps and sub-workflows this one is already inside.
+
+        Two kinds of nesting, and both have to count. A step called as another
+        step's tool is a child *action* in the same run, reached through
+        ``parent``; a run started from inside another is reached through the
+        instance's ``parent_action``. Counting only the second — as this did —
+        reports zero for every step nested inside another, which is the kind
+        that is reachable today.
+        """
         depth = 0
-        instance = action.automation_instance
+        current = action
         seen = set()
-        while instance is not None and instance.pk not in seen:
-            seen.add(instance.pk)
-            parent = instance.parent_action
-            if parent is None:
+        while current is not None and current.pk not in seen:
+            seen.add(current.pk)
+            # A tool call's parent is the step that asked for it.
+            if called_as_tool(current) and current.parent_id:
+                depth += 1
+                current = current.parent
+                continue
+            instance = current.automation_instance
+            started_by = instance.parent_action if instance is not None else None
+            if started_by is None:
                 break
             depth += 1
-            instance = parent.automation_instance
+            current = started_by
         return depth
 
     def do_work(self, action, data, single_step=False, plugin_dict=None):
@@ -259,7 +271,7 @@ class AIStepPluginModel(BaseActionPluginModel):
                     # a step with tools ignores the shape and says so in the
                     # editor rather than behaving differently per provider.
                     schema=self.output_schema() if not tools else None,
-                    timeout=int(config.get("llm_timeout") or 120),
+                    timeout=self._timeout(config, budget, state),
                 )
             except llm.LLMRateLimited as exc:
                 # A pause, not a failure: the engine reschedules and the
@@ -280,6 +292,15 @@ class AIStepPluginModel(BaseActionPluginModel):
                 return FAILED, {"error": str(exc)}
 
             state.record_reply(reply)
+
+            # Tokens and wall clock are only knowable now. Checked before the
+            # turn they leave the last one free to exceed either and finish
+            # anyway, which is a run that went over its limit and reported
+            # success.
+            try:
+                budget.check_spend(state)
+            except BudgetExceeded as exc:
+                return self._out_of_budget(action, state, exc)
 
             # Checked before anything is done with the reply, and whether or
             # not it asked for tools: truncation is worse for a tool call than
@@ -304,22 +325,23 @@ class AIStepPluginModel(BaseActionPluginModel):
                     call.id,
                     f"No tool named {call.name!r}. Available: {', '.join(sorted(by_name))}.",
                     is_error=True,
+                    ran=False,
                 )
 
-            # The tool-call budget is spent before the next turn, not at it.
-            try:
-                allowed = budget.allow(state, wanted)
-            except BudgetExceeded as exc:
-                return self._out_of_budget(action, state, exc)
+            # The tool-call budget is spent before the calls run, not after.
+            allowed = budget.allow(state, wanted)
             for call in wanted[len(allowed) :]:
-                state.record_observation(call.id, "Not run: this run's tool-call budget is spent.", is_error=True)
+                state.record_observation(
+                    call.id, "Not run: this run's tool-call budget is spent.", is_error=True, ran=False
+                )
+            refused = bool(unknown) or len(allowed) < len(wanted)
             wanted = allowed
 
-            if unknown and not wanted:
+            if refused and not wanted:
                 # Nothing to dispatch, so suspending would leave this node
-                # waiting on a child that never arrives. It is asked again
-                # here, against the same budget, so a model that keeps
-                # guessing still stops.
+                # waiting on a child that never arrives. It is told what
+                # happened and asked again here — bounded by the turn limit,
+                # so a model that keeps guessing still stops.
                 continue
             break
 
@@ -333,6 +355,18 @@ class AIStepPluginModel(BaseActionPluginModel):
             rows = reply.json if isinstance(reply.json, list) else [reply.json]
             return COMPLETED, [row if isinstance(row, dict) else {"value": row} for row in rows]
         return COMPLETED, [{"text": reply.text, "turns": state.turn, "usage": state.usage}]
+
+    def _timeout(self, config, budget, state) -> int:
+        """How long to wait for the provider.
+
+        Never longer than the run has left: an answer that arrives after the
+        deadline is one the run was supposed to have failed before receiving.
+        """
+        configured = int(config.get("llm_timeout") or 120)
+        remaining = budget.remaining_seconds(state)
+        if remaining is None:
+            return configured
+        return max(1, min(configured, int(remaining)))
 
     def _out_of_budget(self, action, state, exc):
         """Stop the run, keeping the conversation that explains why."""

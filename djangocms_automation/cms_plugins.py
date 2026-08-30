@@ -319,7 +319,12 @@ class ActionPlugin(AutomationPlugin):
                 field = copy.deepcopy(declared)
                 if f_name in config:
                     field.initial = config[f_name]
+                if wired:
+                    # As below: whether a value is needed depends on the switch
+                    # beside it, and the form decides that when it cleans.
+                    field.required = False
                 fields[f_name] = field
+                self._add_wiring_switch(fields, f_name, wired, exposed)
             return fields
         fields = {}
         for f_name, declared in self.data_form.base_fields.items():
@@ -339,14 +344,25 @@ class ActionPlugin(AutomationPlugin):
                     else django_forms.TextInput(attrs={"code": ""})
                 ),
             )
-            if wired:
-                fields[self.MODEL_FILLS + f_name] = django_forms.BooleanField(
-                    label=_("The model decides"),
-                    required=False,
-                    initial=f_name in exposed,
-                    help_text=_("Leave off to bind this input to an expression the model never sees."),
-                )
+            self._add_wiring_switch(fields, f_name, wired, exposed)
         return fields
+
+    def _add_wiring_switch(self, fields, name, wired, exposed):
+        """The companion switch for one input.
+
+        Added for literal-valued actions as well as expression-valued ones:
+        ``get_fieldsets`` pairs *every* declared input with its switch, so an
+        action that skipped them asked the admin for fields that did not exist
+        and raised ``FieldError`` before its form could render.
+        """
+        if not wired:
+            return
+        fields[self.MODEL_FILLS + name] = django_forms.BooleanField(
+            label=_("The model decides"),
+            required=False,
+            initial=name in exposed,
+            help_text=_("Leave off to bind this input to an expression the model never sees."),
+        )
 
     def save_model(self, request, obj, form, change):
         """Persist the dynamic data_form values into the config JSON field.

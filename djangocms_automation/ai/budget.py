@@ -27,9 +27,13 @@ class AgentBudget:
     """The four ways an agent run is bounded, plus the size of one observation.
 
     They are separate because they fail differently. Turns catch a model that
-    will not conclude; tool calls catch one that thrashes between them; tokens
-    catch a conversation growing faster than it progresses; the deadline catches
-    everything else, including a provider that has become very slow.
+    will not conclude; tokens catch a conversation growing faster than it
+    progresses; the deadline catches everything else, including a provider that
+    has become very slow. Those three end the run.
+
+    Tool calls are the exception and bound something else: side effects. A call
+    over the limit is refused rather than fatal, because the model can still
+    answer from what it has — see :meth:`allow`.
     """
 
     max_turns: int = 10
@@ -40,22 +44,24 @@ class AgentBudget:
     #: spend the whole context window on a single answer.
     max_observation_chars: int = 8_000
 
-    def check(self, state) -> None:
-        """Raise if this run has spent anything it is not allowed to.
+    def remaining_seconds(self, state) -> float | None:
+        """Wall clock left, or ``None`` when no deadline was set.
 
-        Checked before each turn, so an agent stops at its limit rather than
-        one step past it.
+        A provider call must not be allowed to outlast the run it belongs to:
+        a request given longer than the deadline is a request whose answer
+        arrives after the run was supposed to have failed.
         """
-        if self.max_turns and state.turn >= self.max_turns:
-            raise BudgetExceeded(
-                f"Agent stopped after {state.turn} turns without reaching an answer. "
-                f"Raise the turn limit, or narrow what it is being asked to do."
-            )
-        if self.max_tool_calls and state.tool_calls >= self.max_tool_calls:
-            raise BudgetExceeded(
-                f"Agent stopped after {state.tool_calls} tool calls. "
-                f"Its tools may not be giving it what it needs to finish."
-            )
+        if not self.deadline_seconds or not state.started_at:
+            return None
+        return self.deadline_seconds - (now() - _parse(state.started_at)).total_seconds()
+
+    def check_spend(self, state) -> None:
+        """Raise on the limits a turn spends *while* taking it.
+
+        Tokens and wall clock are only known after a call returns, so checking
+        them beforehand leaves the last turn free to exceed either and finish
+        anyway — a run that went over its limit and reported success.
+        """
         if self.max_tokens and state.total_tokens >= self.max_tokens:
             raise BudgetExceeded(
                 f"Agent stopped after {state.total_tokens} tokens. "
@@ -68,6 +74,19 @@ class AgentBudget:
                     f"Agent stopped after {int(elapsed)} seconds, over its {self.deadline_seconds} second limit."
                 )
 
+    def check(self, state) -> None:
+        """Raise if this run has spent anything it is not allowed to.
+
+        Checked before each turn, so an agent stops at its limit rather than
+        one step past it.
+        """
+        if self.max_turns and state.turn >= self.max_turns:
+            raise BudgetExceeded(
+                f"Agent stopped after {state.turn} turns without reaching an answer. "
+                f"Raise the turn limit, or narrow what it is being asked to do."
+            )
+        self.check_spend(state)
+
     def allow(self, state, calls: list) -> list:
         """Trim a turn's tool calls to what this run may still spend.
 
@@ -77,16 +96,15 @@ class AgentBudget:
         limit exists to prevent. A model that asks for three calls with one left
         gets one, and is told the other two did not run.
 
-        :raises BudgetExceeded: If none of them may run.
+        This is the *only* thing the tool-call limit does. It does not fail the
+        run: refusing a call and saying so leaves the model a turn to answer
+        with what it already has, where failing would throw away work that was
+        within budget. What stops a model that will not conclude is the turn
+        limit, which is the limit for that.
         """
         if not self.max_tool_calls:
             return list(calls)
         remaining = max(self.max_tool_calls - state.tool_calls, 0)
-        if remaining == 0 and calls:
-            raise BudgetExceeded(
-                f"Agent stopped after {state.tool_calls} tool calls. "
-                f"Its tools may not be giving it what it needs to finish."
-            )
         return list(calls)[:remaining]
 
 
