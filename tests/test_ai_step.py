@@ -675,3 +675,85 @@ def test_the_approval_shield_is_in_the_icon_sprite(run_setup, settings):
     source = get_template("djangocms_automation/automation_detail.html").template.source
 
     assert 'id="bi-shield-exclamation"' in source
+
+
+@pytest.mark.django_db
+def test_a_step_does_not_ask_for_the_same_field_twice(run_setup, settings):
+    """An action's inputs are added as a fieldset of their own.
+
+    That is right for an action with no layout of its own, which is nearly all
+    of them. The AI step arranges its own — budgets collapsed away from the
+    prompt — and so was shown every field a second time under *Inputs*.
+    """
+    from cms.plugin_pool import plugin_pool
+    from django.contrib.admin.sites import AdminSite
+    from django.test import RequestFactory
+
+    request = RequestFactory().get("/")
+    request.user = None
+
+    def placed(plugin_type):
+        cls = plugin_pool.get_plugin(plugin_type)
+        fieldsets = cls(cls.model, AdminSite()).get_fieldsets(request, None)
+        names = [name for _label, opts in fieldsets for name in opts["fields"]]
+        return names
+
+    names = placed("AIStep")
+    assert len(names) == len(set(names)), f"asked twice for: {sorted({n for n in names if names.count(n) > 1})}"
+    assert "prompt" in names and "max_turns" in names, "and still asks for everything once"
+
+    # An action that lays out nothing still gets its inputs section.
+    assert "subject" in placed("MailAction")
+
+
+@pytest.mark.django_db
+def test_the_inputs_come_second(run_setup, settings):
+    """What an action is configured with is the point of opening it.
+
+    The sections around it — what it is called as a tool, and the comment — are
+    about the step rather than its settings, so the inputs are not last.
+    """
+    from cms.plugin_pool import plugin_pool
+    from django.contrib.admin.sites import AdminSite
+    from django.test import RequestFactory
+
+    _trigger, placeholder = run_setup
+    ai = add_step(placeholder, settings)
+    cls = plugin_pool.get_plugin("MailAction")
+    plugin = cls(cls.model, AdminSite())
+
+    wired = RequestFactory().get(f"/?plugin_parent={ai.pk}")
+    wired.user = None
+    labels = [str(label) for label, _opts in plugin.get_fieldsets(wired, None)]
+    assert labels == ["As a tool", "Inputs", "Comment"]
+
+
+def test_the_end_of_a_path_is_drawn_as_a_stop_sign():
+    """The shape carries the meaning, the way the diamond and circle do.
+
+    Drawn rather than iconified because an octagon has no border-radius: the
+    outline is the polygon's own stroke.
+    """
+    from django.template.loader import get_template
+
+    source = get_template("djangocms_automation/plugins/end.html").template.source
+
+    assert "<polygon" in source and source.count(",") >= 7, "eight corners"
+    assert "STOP" in source
+    assert "bi-sign-stop" not in source, "not the icon"
+
+
+def test_no_icon_is_defined_twice_in_the_sprite():
+    """Two symbols with one id is invalid SVG, and only the first is ever used.
+
+    Which makes the second a silent no-op — an edit to it changes nothing, and
+    nothing says why.
+    """
+    import re
+
+    from django.template.loader import get_template
+
+    source = get_template("djangocms_automation/automation_detail.html").template.source
+    ids = re.findall(r'<symbol[^>]*\bid="([^"]+)"', source)
+
+    assert len(ids) == len(set(ids)), f"defined twice: {sorted({i for i in ids if ids.count(i) > 1})}"

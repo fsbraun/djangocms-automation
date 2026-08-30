@@ -389,12 +389,25 @@ class ActionPlugin(AutomationPlugin):
                 )
             ] + list(fieldsets)
         if self.data_form:
-            data_fields = list(self.data_form.base_fields.keys())
+            # Only the inputs the plugin has not placed itself. An action that
+            # declares no layout gets all of them here, which is the usual case;
+            # one that arranges its own — the AI step groups its budgets away
+            # from its prompt — would otherwise have every field twice.
+            placed = _named_fields(fieldsets)
+            data_fields = [name for name in self.data_form.base_fields if name not in placed]
+            if not data_fields:
+                return fieldsets
             if wired:
                 # Each input beside its own switch, so the decision is made
                 # where the input is.
                 data_fields = [(name, self.MODEL_FILLS + name) for name in data_fields]
-            fieldsets = list(fieldsets) + [
+            fieldsets = list(fieldsets)
+            # Second, not last: what an action is configured with is the point
+            # of opening it, and the sections around it — what it is called as
+            # a tool, and the comment — are about the step rather than its
+            # settings.
+            fieldsets.insert(
+                1,
                 (
                     _("Inputs"),
                     {
@@ -410,7 +423,7 @@ class ActionPlugin(AutomationPlugin):
                         ),
                     },
                 ),
-            ]
+            )
         return fieldsets
 
 
@@ -512,6 +525,15 @@ class DataModifier(ModifierPlugin):
     name = _("Data")
     css_class = "data"
     icon = "bi-database"
+
+
+def _named_fields(fieldsets) -> set:
+    """Every field name a fieldset places, flattening same-line rows."""
+    names = set()
+    for _label, options in fieldsets or []:
+        for entry in options.get("fields") or ():
+            names.update(entry if isinstance(entry, (list, tuple)) else [entry])
+    return names
 
 
 class WiredInputsMixin:
