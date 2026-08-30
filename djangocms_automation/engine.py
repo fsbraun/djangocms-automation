@@ -817,7 +817,11 @@ def resume_action(action_id: int, user, data: dict | None = None) -> AutomationA
     # discarding whatever the steps in between produced, which is usually the
     # very thing the person was asked to approve.
     rows = normalize_rows(action.input_data if action.input_data is not None else action.automation_instance.data)
-    if data:
+    if data and not (action.scratch or {}).get("awaiting_approval"):
+        # Approving is a decision about the rows already there, not a
+        # contribution of another one. A resume form posting any field at all
+        # would otherwise append a row — and so a target — that nobody read
+        # and nobody approved.
         rows = rows + [data]
 
     # Reject a stale claim before doing anything else. The transition below is

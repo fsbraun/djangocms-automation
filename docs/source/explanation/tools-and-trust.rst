@@ -124,12 +124,16 @@ which is a different situation, and worth being able to tell apart.
 
 Not everything comes back, though, and the line is drawn by audience rather than
 by severity. A complaint about a field the model filled is written for the model
-and is repeated in full. A complaint about a value the *editor* bound — or about
-the combination of one with the other — may quote a value the model was
-deliberately never shown, so it goes to the log and the model is told only that
-the tool refused. The exception is a form where the editor bound nothing at all:
-every field there is the model's own, so a cross-field message can name nothing
-new and is passed on.
+and is repeated in full. A complaint about a value the *editor* bound may quote
+a value the model was deliberately never shown, so it goes to the log and the
+model is told only that the tool refused.
+
+A complaint about the *combination* of fields is judged on what it says rather
+than on which fields took part. "Start must be before end" is fixed by sending a
+different start, whichever half the editor pinned, so it is passed on. A message
+spelling out the bound value is not. The test is a blunt one — does the text
+contain the value — and it errs towards withholding, because a withheld
+complaint costs the model a turn and a disclosed value cannot be taken back.
 
 An action can address the model on purpose. A validator raising ``ValidationError``
 is talking to whoever administers the automation; one raising ``ToolError`` is

@@ -1907,8 +1907,10 @@ def test_an_approver_sees_what_the_call_will_act_on(run_setup, settings):
     task = call_action()
     assert task.result["arguments"] == {"subject": "Ship it"}
     assert len(task.result["bound"]) == 1, "one row, one target"
-    assert task.result["bound"][0]["recipient_email"] == "ada@example.com", "resolved, so it reads as an address"
-    assert "subject" not in task.result["bound"][0], "what the model chose is listed as the model's"
+    target = task.result["bound"][0]
+    assert target["inputs"]["recipient_email"] == "ada@example.com", "resolved, so it reads as an address"
+    assert target["times"] == 1
+    assert "subject" not in target["inputs"], "what the model chose is listed as the model's"
 
 
 @pytest.mark.django_db
@@ -1942,7 +1944,7 @@ def test_an_approver_sees_every_row_the_call_will_act_on(run_setup, settings):
     )
 
     shown = call_action().result["bound"]
-    assert [entry["recipient_email"] for entry in shown] == [
+    assert [entry["inputs"]["recipient_email"] for entry in shown] == [
         "ada@example.com",
         "grace@example.com",
         "alan@example.com",
@@ -2075,7 +2077,210 @@ def test_a_complaint_the_model_alone_caused_is_one_it_is_asked_to_fix():
     with pytest.raises(ToolValidationError, match="low must not exceed high"):
         validate_arguments(RangeForm, {"low": 9, "high": 2}, allowed=["low", "high"])
 
-    # And the same rule, once one of the two is the editor's: the message may
-    # quote the value the model was not shown, so it is not repeated.
-    with pytest.raises(ToolValidationError, match="not something you can change"):
+    # And still actionable once the editor pins one half: sending a smaller
+    # ``low`` is exactly how the model fixes this, and the message names no
+    # value it was not shown.
+    with pytest.raises(ToolValidationError, match="low must not exceed high"):
         validate_arguments(RangeForm, {"low": 9}, allowed=["low"], bound={"high": 2})
+
+
+def test_a_complaint_that_quotes_a_bound_value_is_not_repeated():
+    """What makes a combination error unsafe is the value in it, not the field.
+
+    So the message is what gets looked at. One that spells out the editor's
+    value hands it over just as surely as a field error would.
+    """
+    from django import forms as django_forms
+
+    from djangocms_automation.tools import ToolValidationError, validate_arguments
+
+    class LimitForm(django_forms.Form):
+        amount = django_forms.IntegerField()
+        ceiling = django_forms.CharField()
+
+        def clean(self):
+            cleaned = super().clean()
+            raise django_forms.ValidationError(f"the ceiling for this account is {cleaned.get('ceiling')}")
+
+    with pytest.raises(ToolValidationError, match="not something you can change") as refused:
+        validate_arguments(LimitForm, {"amount": 500}, allowed=["amount"], bound={"ceiling": "internal-tier-3"})
+    assert "internal-tier-3" not in str(refused.value)
+
+
+@pytest.mark.django_db
+def test_resuming_a_persons_tool_without_an_answer_says_nothing_else(run_setup, settings, admin_user):
+    """The *Resume* button posts no response, and that is the common case.
+
+    A tool that waits for somebody has to report what they said. Falling back
+    to the rows when they said nothing means the ordinary way of answering
+    hands the model the entire payload — every field the editor kept from it —
+    as the reward for having waited.
+    """
+    from djangocms_automation.engine import resume_action
+
+    trigger, placeholder = run_setup
+    ai = add_step(placeholder, settings)
+    add_tool(
+        placeholder,
+        ai,
+        settings,
+        plugin_type="UserInputAction",
+        tool_name="escalate",
+        exposed_fields=["note"],
+        config={},
+    )
+    SCRIPT.append(says(calls=[ToolCall(id="c1", name="escalate", arguments={"note": "Need a hand"})]))
+
+    trigger.trigger_execution(data=[{"customer_token": "sk-do-not-share", "seed": 1}])
+
+    call = call_action()
+    assert call.state == WAITING
+
+    SCRIPT.append(says(text="Understood."))
+    resume_action(call.pk, admin_user)
+
+    observation = observations(step_action())[0]["content"]
+    assert "sk-do-not-share" not in observation, "silence is not consent to hand over the payload"
+    assert "without leaving a response" in observation, "and the model is told what happened"
+
+
+@pytest.mark.django_db
+def test_a_call_that_changed_while_waiting_is_put_back_for_approval(run_setup, settings, admin_user):
+    """Consent is given to an operation, not to a plugin.
+
+    A call can wait for days. If the editor repoints the recipient in that
+    time, resuming would send somebody's approved words to an address they
+    never saw.
+    """
+    from cms.plugin_pool import plugin_pool
+    from django.core import mail
+
+    from djangocms_automation.engine import resume_action
+
+    trigger, placeholder = run_setup
+    ai = add_step(placeholder, settings)
+    tool = add_tool(
+        placeholder,
+        ai,
+        settings,
+        plugin_type="MailAction",
+        tool_name="reply",
+        exposed_fields=["subject"],
+        config={"recipient_email": "'ada@example.com'", "subject": "'x'", "body": "x"},
+        requires_approval=True,
+    )
+    SCRIPT.append(says(calls=[ToolCall(id="c1", name="reply", arguments={"subject": "Ship it"})]))
+
+    trigger.trigger_execution(data=[{"seed": 1}])
+
+    call = call_action()
+    assert call.result["bound"][0]["inputs"]["recipient_email"] == "ada@example.com"
+
+    # The editor changes their mind about the recipient while it waits.
+    model = plugin_pool.get_plugin("MailAction").model
+    instance = model.objects.get(pk=tool.pk)
+    instance.config = {**instance.config, "recipient_email": "'someone-else@example.com'"}
+    instance.save()
+
+    sent_before = len(mail.outbox)
+    SCRIPT.append(says(text="Sent."))
+    resume_action(call.pk, admin_user)
+
+    call.refresh_from_db()
+    assert len(mail.outbox) == sent_before, "nobody approved this one"
+    assert call.state == WAITING, "so it is asked again rather than run"
+    assert call.result["changed"] is True, "and the page says why it is being asked twice"
+    assert call.result["bound"][0]["inputs"]["recipient_email"] == "someone-else@example.com"
+
+
+@pytest.mark.django_db
+def test_approving_does_not_add_a_row_of_its_own(run_setup, settings, admin_user):
+    """A resume form's fields are a decision, not another target.
+
+    Appending them as a row gives the call a target that was not on the page
+    the approver read.
+    """
+    from django.core import mail
+
+    from djangocms_automation.engine import resume_action
+
+    trigger, placeholder = run_setup
+    ai = add_step(placeholder, settings)
+    add_tool(
+        placeholder,
+        ai,
+        settings,
+        plugin_type="MailAction",
+        tool_name="reply",
+        exposed_fields=["subject"],
+        config={"recipient_email": "'to@example.com'", "subject": "'x'", "body": "x"},
+        requires_approval=True,
+    )
+    SCRIPT.append(says(calls=[ToolCall(id="c1", name="reply", arguments={"subject": "Ship it"})]))
+
+    trigger.trigger_execution(data=[{"seed": 1}])
+
+    sent_before = len(mail.outbox)
+    SCRIPT.append(says(text="Sent."))
+    resume_action(call_action().pk, admin_user, data={"verdict": "looks fine"})
+
+    assert len(mail.outbox) - sent_before == 1, "one row was approved, so one message"
+
+
+@pytest.mark.django_db
+def test_reordering_rows_does_not_hand_them_to_the_model(run_setup, settings):
+    """Position is not provenance.
+
+    An action that sorts its rows returns the automation's own data in a
+    different order. Compared position by position every field of every row
+    looks new, and reporting "what changed" reports the lot.
+    """
+    from cms.plugin_pool import plugin_pool
+
+    _trigger, placeholder = run_setup
+    ai = add_step(placeholder, settings)
+    tool = add_tool(
+        placeholder,
+        ai,
+        settings,
+        plugin_type="MailAction",
+        tool_name="reply",
+        exposed_fields=["subject"],
+        config={"recipient_email": "'to@example.com'", "subject": "'x'", "body": "x"},
+    )
+    instance = plugin_pool.get_plugin("MailAction").model.objects.get(pk=tool.pk)
+
+    given = [{"token": "sk-do-not-share", "rank": 2}, {"token": "sk-also-secret", "rank": 1}]
+    sorted_back = sorted(given, key=lambda row: row["rank"])
+
+    reported = str(instance._reportable(given, sorted_back))
+    assert "sk-do-not-share" not in reported, "the same rows, in a different order"
+    assert "sk-also-secret" not in reported
+
+
+@pytest.mark.django_db
+def test_repeated_targets_are_counted_not_collapsed(run_setup, settings):
+    """Three messages to one address are three messages.
+
+    Showing a single line understates by two, and understating is the one
+    direction an approver has no way of checking.
+    """
+    trigger, placeholder = run_setup
+    ai = add_step(placeholder, settings)
+    add_tool(
+        placeholder,
+        ai,
+        settings,
+        plugin_type="MailAction",
+        tool_name="reply",
+        exposed_fields=["subject"],
+        requires_approval=True,
+        config={"recipient_email": "customer.email", "subject": "'x'", "body": "x"},
+    )
+    SCRIPT.append(says(calls=[ToolCall(id="c1", name="reply", arguments={"subject": "Ship it"})]))
+
+    trigger.trigger_execution(data=[{"customer": {"email": "ada@example.com"}}] * 3)
+
+    shown = call_action().result["bound"]
+    assert len(shown) == 1, "one address"
+    assert shown[0]["times"] == 3, "written to three times"

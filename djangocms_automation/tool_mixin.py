@@ -15,6 +15,8 @@ not.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 
 from django.utils.translation import gettext_lazy as _
@@ -357,7 +359,13 @@ class ToolMixin:
         if scratch.get("awaiting_input"):
             rows = data or []
             answer = scratch.get("input") or {}
-            self._record_observation(action, ToolResult(call_id=call.id, content=str(answer or rows), rows=rows))
+            # The answer, or the fact that there wasn't one. Never the rows:
+            # the ordinary admin *Resume* button sends no response at all, so a
+            # fallback to the rows means the commonest way of answering a
+            # person's tool hands the model the whole payload — every field the
+            # editor deliberately kept from it — as the reward for waiting.
+            said = str(answer) if answer else "The person resumed this without leaving a response."
+            self._record_observation(action, ToolResult(call_id=call.id, content=said, rows=rows))
             return COMPLETED, rows
 
         arguments, refusal = self.validate_call(call, data or [])
@@ -365,12 +373,31 @@ class ToolMixin:
             self._record_observation(action, refusal)
             return COMPLETED, []
 
-        if self.needs_approval() and not scratch.get("approved"):
-            action.requires_interaction = True
-            scratch["awaiting_approval"] = True
-            AutomationAction.objects.filter(pk=action.pk).update(scratch=scratch)
-            action.scratch = scratch
-            return WAITING, self._for_the_person(call, data or [])
+        if self.needs_approval():
+            shown = self._for_the_person(call, data or [])
+            operation = self._fingerprint(shown)
+            if not scratch.get("approved"):
+                action.requires_interaction = True
+                scratch["awaiting_approval"] = True
+                scratch["approved_for"] = operation
+                AutomationAction.objects.filter(pk=action.pk).update(scratch=scratch)
+                action.scratch = scratch
+                return WAITING, shown
+            if scratch.get("approved_for") != operation:
+                # Consent was given to an operation, not to a plugin. A call
+                # can wait for days, and in that time the editor may repoint
+                # the recipient or a preceding step may put another row in
+                # front of it — either way what would run now is not what
+                # somebody read and agreed to. Asking again is the only honest
+                # move: this cannot loop without a person resuming it each
+                # time, and running it would be the one outcome nobody chose.
+                action.requires_interaction = True
+                scratch["awaiting_approval"] = True
+                scratch["approved"] = False
+                scratch["approved_for"] = operation
+                AutomationAction.objects.filter(pk=action.pk).update(scratch=scratch)
+                action.scratch = scratch
+                return WAITING, {**shown, "changed": True}
 
         state, result, output = self.run_tool_call(call, action, data or [], arguments)
         if state == WAITING:
@@ -519,18 +546,23 @@ class ToolMixin:
 
         if policy == "rows":
             return produced
-        if len(produced) != len(given):
-            # Nothing to line the rows up against, and an action that returned
-            # a different number of them has not necessarily produced any — it
-            # may have dropped some of what it was handed. How many is all that
-            # can be said without guessing.
-            return [{"rows": len(produced)}]
-        changed = [
-            {key: value for key, value in after.items() if before.get(key) != value}
-            for before, after in zip(given, produced, strict=False)
-        ]
-        if any(changed):
-            return changed
+        if isinstance(policy, (list, tuple, set, frozenset)):
+            named = set(policy)
+            added = [{key: value for key, value in row.items() if key in named} for row in produced]
+        else:
+            # By key, and against every row rather than the one in the same
+            # position. Position is not provenance: an action that sorts its
+            # rows would make every field of every row look new and report the
+            # lot, and one that edits a row in place would make nothing look
+            # new and report none of it. A key that came in is the automation's
+            # whatever order it comes back in; a key that did not is the
+            # action's, and that is the whole question.
+            arrived = {key for row in given for key in row}
+            added = [{key: value for key, value in row.items() if key not in arrived} for row in produced]
+        if any(added):
+            return added
+        # It added nothing of its own. Saying how many rows it handled beats a
+        # page of empty ones, and beats guessing at what it might have changed.
         return [{"rows": len(produced)}]
 
     # -- what a person sees ------------------------------------------------
@@ -557,6 +589,17 @@ class ToolMixin:
             "destructive": self.is_destructive(),
         }
 
+    @staticmethod
+    def _fingerprint(shown: dict) -> str:
+        """A stable digest of the operation an approver was shown.
+
+        Of exactly what was displayed, rather than of the configuration behind
+        it: the point of comparison is what the person read, so anything that
+        would change the page changes this, and anything that would not, does
+        not.
+        """
+        return hashlib.sha256(json.dumps(shown, sort_keys=True, default=str).encode()).hexdigest()
+
     def _bound_per_row(self, rows: list | None) -> list:
         """The bound inputs as they resolve for each row the call will act on.
 
@@ -564,15 +607,19 @@ class ToolMixin:
         every row it is given, so showing the first recipient and then sending
         to five is an approval of something that did not happen.
         """
-        seen, distinct = set(), []
+        grouped: dict[tuple, dict] = {}
         for row in self._rows_to_check(rows):
             resolved = self._bound_values_for(row, rows or [])
             key = tuple(sorted((name, str(value)) for name, value in resolved.items()))
-            if key in seen:
-                continue
-            seen.add(key)
-            distinct.append(resolved)
-        return distinct
+            if key in grouped:
+                # Counted, not collapsed. Three messages to one address are
+                # three messages, and an approval showing a single line has
+                # understated by two — which is exactly the direction an
+                # approver cannot check.
+                grouped[key]["times"] += 1
+            else:
+                grouped[key] = {"inputs": resolved, "times": 1}
+        return list(grouped.values())
 
     def _record_observation(self, action, result: ToolResult) -> None:
         """Leave the observation where the AI step will look for it.

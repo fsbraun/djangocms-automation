@@ -31,6 +31,12 @@
                     <strong>{% trans "This cannot be undone." %}</strong>
                     {% endif %}
                 </p>
+                {% if task.result.changed %}
+                <p class="automation-approval-changed">
+                    <svg width="16" height="16"><use xlink:href="#bi-shield-exclamation"></use></svg>
+                    {% translate "This is not what was approved earlier — the automation or its data changed while it waited. Read it again before resuming." %}
+                </p>
+                {% endif %}
                 {% if task.result.arguments or task.result.bound %}
                 <table>
                     {% for name, value in task.result.arguments.items %}
@@ -44,13 +50,17 @@
                     showing the first recipient and then sending to five is an
                     approval of something that did not happen.
                     {% endcomment %}
-                    {% for values in task.result.bound %}
-                    {% if task.result.bound|length > 1 %}
+                    {% for target in task.result.bound %}
+                    {% if task.result.bound|length > 1 or target.times > 1 %}
                     <tr><th colspan="2" class="automation-bound-group">
+                        {% if target.times > 1 %}
+                        {% blocktranslate with number=forloop.counter total=task.result.bound|length times=target.times %}Target {{ number }} of {{ total }}, {{ times }} times{% endblocktranslate %}
+                        {% else %}
                         {% blocktranslate with number=forloop.counter total=task.result.bound|length %}Target {{ number }} of {{ total }}{% endblocktranslate %}
+                        {% endif %}
                     </th></tr>
                     {% endif %}
-                    {% for name, value in values.items %}
+                    {% for name, value in target.inputs.items %}
                     <tr><th>{{ name }}</th><td>{{ value }} <em>{% translate "set by the automation" %}</em></td></tr>
                     {% endfor %}
                     {% endfor %}

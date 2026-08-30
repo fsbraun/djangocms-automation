@@ -357,13 +357,14 @@ def validate_arguments(
         # administrator — it may quote the value it objected to, and that value
         # is one the model was deliberately not shown.
         actionable = set(permitted)
-        if not placed:
-            # No editor-supplied value went into this form, so every field in
-            # it is one the model filled. A complaint about their combination
-            # is therefore about the model's own work and can name nothing it
-            # was not already shown — telling it instead that the values cannot
-            # be changed would be false, and would leave it unable to correct a
-            # mistake it is entirely responsible for.
+        if _names_nothing_bound(form.errors.get(NON_FIELD_ERRORS), placed):
+            # A complaint about the *combination* of fields is usually one the
+            # model can act on — "start must be before end" is fixed by sending
+            # a different start, whichever half the editor pinned. What makes
+            # it unsafe is not that a bound field took part but that the
+            # message quotes a bound value, so that is what is checked. A
+            # message naming none of them is delivered as written; the rest
+            # keep the generic reply.
             actionable.add(NON_FIELD_ERRORS)
         detailed = [
             " ".join(errors) if name == NON_FIELD_ERRORS else f"{name}: {' '.join(errors)}"
@@ -382,6 +383,24 @@ def validate_arguments(
         raise ToolValidationError(f"Invalid argument(s): {'; '.join(detailed)}")
 
     return {name: value for name, value in form.cleaned_data.items() if name in permitted}
+
+
+def _names_nothing_bound(errors, placed: dict) -> bool:
+    """Whether a non-field message can be repeated to the model as written.
+
+    Only when it quotes none of the values the editor bound. The test is
+    deliberately blunt — a substring, on the value as it renders — because it
+    errs in the safe direction: a message mentioning ``2`` is withheld when a
+    bound field happens to hold ``2``, and an approver reads the real one in
+    the log. Withholding a useful complaint costs the model a turn; passing on
+    a bound value cannot be undone.
+    """
+    if not errors:
+        return False
+    if not placed:
+        return True  # nothing bound went in, so nothing bound can come out
+    text = " ".join(str(error) for error in errors)
+    return not any(str(value) and str(value) in text for value in placed.values())
 
 
 def as_literal_config(arguments: dict, mappings: frozenset) -> dict:

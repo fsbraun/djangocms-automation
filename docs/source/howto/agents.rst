@@ -130,9 +130,15 @@ correctable error instead of becoming somebody's task.
 
 An approval pauses the call as a normal human-in-the-loop step: it appears under
 *Automations → Execution Instances → Open tasks*, naming the tool, listing the
-arguments the model chose, and saying so when the action cannot be undone. It
-runs only once someone permitted resumes it — the call has not happened at that
-point, and approving is what makes it happen.
+arguments the model chose and the values the automation fixed — every recipient
+or record it will act on, and how many times — and saying so when the action
+cannot be undone. It runs only once someone permitted resumes it: the call has
+not happened at that point, and approving is what makes it happen.
+
+What was approved is that operation, not the plugin behind it. A call can wait
+for days, and if the automation is edited or its data changes in the meantime,
+resuming does not run it — the task comes back marked as changed, for somebody
+to read again.
 
 An action can also wait for a person *of its own*: a *Wait for User* tool is how
 a step escalates, and what the person answers is what the model hears back.
@@ -225,18 +231,27 @@ narrow: **what the action added** to the rows it was handed. A *Send Email* tool
 reports ``_mail``, not the rows — which may carry a token an earlier query
 fetched, or a column nobody meant to show anyone.
 
-An action whose answer *is* data has to say so:
+An action whose answer *is* data has to say so, and one that wants to be precise
+can name the fields:
 
 .. code-block:: python
 
     class FindSubscriptions(ActionPlugin):
         reports_to_model = "rows"
 
+    class ChargeCard(ActionPlugin):
+        reports_to_model = ["_charge_id", "_status"]
+
 Nothing about the data can decide this. An action that filters returns fewer
 rows than it was given without having produced a single one of them; a lookup
 asked "does this user exist" returns exactly the row it was asked about. Both
 look the same from outside, so the action declares which it is, and an action
 that says nothing is treated as the first.
+
+Under the default, what counts as the action's own is decided **by key**: a
+field that arrived belongs to the automation however it comes back, and a field
+that did not is the action's. Not by comparing rows position by position, which
+mistakes a re-sort for a hundred new values.
 
 This affects only what the model is told. The rows themselves are untouched, and
 downstream steps see everything as usual.
