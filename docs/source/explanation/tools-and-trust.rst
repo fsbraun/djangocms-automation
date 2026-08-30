@@ -136,10 +136,17 @@ it may hold a prefix of it, a reformatting, or something taken out of a
 dictionary.
 
 So authorship is established rather than inferred. When the form holds bound
-values at all, it is validated a second time with its own ``clean`` removed, and
-only the messages that survive — the ones the field classes produced, from
-values the model sent and already knows — are repeated. Everything else is the
-action author's code talking, and gets the generic reply.
+values at all, the arguments are validated a second time against a bare form
+carrying copies of the exposed fields and nothing else — no ``clean``, no
+``clean_<field>`` hooks, and none of the editor's values in its data. Only the
+messages that survive that are repeated: they came from a field class, about a
+value the model itself sent. Everything else is the action author's code
+talking, and gets the generic reply.
+
+The copies are the fields the real validation used, replacements included, so
+the two agree about what a valid argument is. A probe holding the editor's own
+validator would answer a complaint about a bound value with a second complaint
+about arguments that were never wrong.
 
 An author with something to tell the model anyway raises ``ToolError``, which is
 delivered as written. That is the one route, and it is explicit on purpose.

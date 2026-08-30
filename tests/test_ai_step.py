@@ -2372,3 +2372,71 @@ def test_turning_approval_off_does_not_wave_a_pending_call_through(run_setup, se
     assert len(mail.outbox) == sent_before, "still not what anybody approved"
     assert call.state == WAITING
     assert call.result["changed"] is True
+
+
+def test_a_per_field_hook_cannot_smuggle_a_secret_past_the_probe():
+    """``clean_<field>`` is the author's code and runs as part of field validation.
+
+    So a probe built by subclassing the form and removing ``clean`` inherits it
+    anyway, and a hook reading the raw data can put the editor's key in a
+    message that then looks — by every test available here — like something the
+    field itself said.
+    """
+    from django import forms as django_forms
+
+    from djangocms_automation.tools import ToolValidationError, validate_arguments
+
+    class ChargeForm(django_forms.Form):
+        amount = django_forms.IntegerField()
+        credentials = django_forms.JSONField()
+
+        def clean_amount(self):
+            key = (self.data.get("credentials") or {}).get("api_key", "")
+            raise django_forms.ValidationError(f"the gateway rejected {key}")
+
+    with pytest.raises(ToolValidationError) as refused:
+        validate_arguments(
+            ChargeForm,
+            {"amount": 500},
+            allowed=["amount"],
+            bound={"credentials": {"api_key": "sk-live-do-not-share"}},
+        )
+    assert "sk-live" not in str(refused.value), "the hook ran, but not on the probe"
+
+
+def test_the_probe_holds_a_literal_mapping_to_the_same_rules_as_the_call():
+    """The probe has to agree with the real form about a valid argument.
+
+    An action reading a field as a mapping of expressions has an editor's
+    validator on it demanding expression syntax, and the real validation
+    replaces that — a model supplies values, and ``ann smith`` is a fine value
+    and not an expression. A probe using the original field would answer a
+    complaint about some bound value with a second one about perfectly good
+    arguments, sending the model off to fix what was never wrong.
+    """
+    from django import forms as django_forms
+
+    from djangocms_automation.tools import ToolValidationError, validate_arguments
+
+    def expressions_only(value):
+        for key, entry in (value or {}).items():
+            if " " in str(entry):
+                raise django_forms.ValidationError(f"{key}: not valid expression syntax")
+
+    class QueryForm(django_forms.Form):
+        filters = django_forms.JSONField(validators=[expressions_only])
+        model = django_forms.CharField()
+
+        def clean(self):
+            raise django_forms.ValidationError("the configured model is not queryable")
+
+    with pytest.raises(ToolValidationError) as refused:
+        validate_arguments(
+            QueryForm,
+            {"filters": {"username": "ann smith"}},
+            allowed=["filters"],
+            literal_mappings=frozenset({"filters"}),
+            bound={"model": "auth.User"},
+        )
+    assert "expression syntax" not in str(refused.value), "the model's arguments were fine"
+    assert "not something you can change" in str(refused.value)

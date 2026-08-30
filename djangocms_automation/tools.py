@@ -15,6 +15,7 @@ key that was not offered.
 
 from __future__ import annotations
 
+import copy
 import logging
 import re
 from dataclasses import dataclass, field
@@ -370,7 +371,10 @@ def validate_arguments(
             # removed, and only the messages that still appear are repeated.
             # An action with something to say to the model regardless raises
             # ``ToolError``, which is delivered as written.
-            safe = _field_level_errors(form_class, supplied, permitted)
+            safe = _field_level_errors(
+                {name: field for name, field in form.fields.items() if name in permitted},
+                {name: arguments.get(name) for name in permitted},
+            )
 
         detailed = [
             " ".join(errors) if name == NON_FIELD_ERRORS else f"{name}: {' '.join(errors)}"
@@ -393,31 +397,30 @@ def validate_arguments(
     return {name: value for name, value in form.cleaned_data.items() if name in permitted}
 
 
-def _field_level_errors(form_class: type[forms.Form], supplied: dict, permitted: set) -> dict:
+def _field_level_errors(fields: dict, arguments: dict) -> dict:
     """The complaints the fields themselves made about the model's own values.
 
-    A second validation with the form's own ``clean`` taken out, so what comes
-    back is what the field classes and their validators produced — *this is not
-    a valid email address*, *this field is required* — each derived from a value
-    the model sent and therefore already knows.
+    Which is *this is not a valid email address* and *this field is required* —
+    each produced by a field class from a value the model sent, and so telling
+    it nothing it did not already know.
 
-    Only the exposed fields: a field validator can equally reject something the
-    editor bound, and that message is for the editor.
+    Built as a bare form holding copies of those fields, rather than as a
+    subclass of the action's form with ``clean`` taken out. A subclass inherits
+    the author's ``clean_<field>`` hooks too, and those run as part of field
+    validation: one reading ``self.data["credentials"]`` and raising under the
+    exposed field puts the editor's key back in a message that looks, by every
+    test available here, like the field's own. Inheriting nothing is the only
+    way to be sure nothing was inherited.
+
+    The fields are the ones the real form validated, replacements and all, so
+    the probe agrees with it about what a valid argument looks like. And the
+    data is the model's arguments alone: no bound value is present for a field
+    validator to find, quote, or complain about.
     """
-
-    class _FieldsOnly(form_class):  # type: ignore[valid-type, misc]
-        def clean(self):
-            return self.cleaned_data
-
-        def _post_clean(self):
-            pass  # a model form's own validation is the author's too
-
-    probe = _FieldsOnly(data=supplied)
-    for name in list(probe.fields):
-        if name not in supplied:
-            del probe.fields[name]
+    probe = type("_FieldsOnly", (forms.Form,), {})(data=arguments)
+    probe.fields = {name: copy.deepcopy(field) for name, field in fields.items()}
     probe.is_valid()
-    return {name: errors for name, errors in probe.errors.items() if name in permitted}
+    return dict(probe.errors)
 
 
 def as_literal_config(arguments: dict, mappings: frozenset) -> dict:
