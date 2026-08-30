@@ -1203,3 +1203,135 @@ def test_a_step_inside_a_step_counts_towards_the_depth(run_setup, settings):
     )
 
     assert instance.depth(inner) == 1, "one AI step above it"
+
+
+# --------------------------------------------------------------------------
+# Review round: nesting, wiring on a plugin that lays out its own fields
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_a_step_used_as_another_step_s_tool_runs_to_the_end(run_setup, settings):
+    """Waiting is not the same as waiting for a person.
+
+    A nested step returns WAITING with its conversation and the calls it wants
+    saved on the action. Treating that as human input both mislabelled it and
+    wrote back a snapshot taken before it ran — erasing the calls, so nothing
+    was ever scheduled and both steps waited for ever.
+    """
+    trigger, placeholder = run_setup
+    outer = add_step(placeholder, settings, prompt="outer")
+    inner = add_plugin(
+        placeholder=placeholder,
+        plugin_type="AIStep",
+        language=settings.LANGUAGE_CODE,
+        target=outer,
+        tool_name="research",
+        tool_description="Look into it.",
+        exposed_fields=[],
+        requires_approval=False,
+        config={"model": "anthropic/claude-opus-4-8", "prompt": "inner"},
+    )
+    add_tool(placeholder, inner, settings, tool_name="echo")
+
+    SCRIPT.append(says(calls=[ToolCall(id="o1", name="research", arguments={})]))
+    SCRIPT.append(says(calls=[ToolCall(id="i1", name="echo", arguments={})]))
+    SCRIPT.append(says(text="inner done"))
+    SCRIPT.append(says(text="outer done"))
+
+    trigger.trigger_execution(data=[{"seed": 1}])
+
+    assert step_action().state == COMPLETED
+    nested = AutomationAction.objects.exclude(parent__isnull=True).order_by("id").first()
+    assert nested.state == COMPLETED
+    assert AgentState.load(nested).messages, "its conversation was not overwritten"
+    assert observations(step_action())[0]["tool_call_id"] == "o1"
+
+
+@pytest.mark.django_db
+def test_a_plugin_that_lays_out_its_own_fields_still_gets_switches(run_setup, settings):
+    """A switch outside every fieldset is a field the admin never renders.
+
+    The form would carry all nine and show none, so nothing could be exposed to
+    the step above.
+    """
+    from cms.plugin_pool import plugin_pool
+    from django.contrib.admin.sites import AdminSite
+    from django.test import RequestFactory
+
+    _trigger, placeholder = run_setup
+    ai = add_step(placeholder, settings)
+    cls = plugin_pool.get_plugin("AIStep")
+    plugin = cls(cls.model, AdminSite())
+    request = RequestFactory().get(f"/?plugin_parent={ai.pk}")
+    request.user = None
+
+    rendered = [
+        name
+        for _label, options in plugin.get_fieldsets(request, None)
+        for entry in options["fields"]
+        for name in (entry if isinstance(entry, tuple) else [entry])
+    ]
+    on_form = [name for name in plugin.get_form(request, None).base_fields if name.startswith(plugin.MODEL_FILLS)]
+
+    assert on_form, "the form has them"
+    assert sorted(n for n in rendered if n.startswith(plugin.MODEL_FILLS)) == sorted(on_form), (
+        "and so do the fieldsets"
+    )
+
+
+@pytest.mark.django_db
+def test_a_bound_input_of_zero_is_filled_in(run_setup, settings):
+    """``0`` and ``False`` are values somebody chose, not blanks."""
+    from django import forms as django_forms
+    from django.contrib.admin.sites import AdminSite
+    from django.test import RequestFactory
+
+    from djangocms_automation.cms_plugins import ActionPlugin
+
+    class CountForm(django_forms.Form):
+        count = django_forms.IntegerField()
+
+    _trigger, placeholder = run_setup
+    ai = add_step(placeholder, settings)
+
+    class Counting(ActionPlugin):
+        data_form = CountForm
+        convert_data_form = False
+
+    plugin = Counting(ActionPlugin.model, AdminSite())
+    request = RequestFactory().get(f"/?plugin_parent={ai.pk}")
+    request.user = None
+    form = plugin.get_form(request, None)(data={"count": 0, "comment": ""})
+
+    assert form.is_valid(), form.errors
+
+
+def test_a_derived_tool_name_is_always_legal():
+    """An action's name is prose; a tool name is not.
+
+    Left as it came, an ordinary action would build a spec that raises while
+    assembling the provider request — a run failing at the last moment over a
+    name nobody typed.
+    """
+    from djangocms_automation.tool_mixin import _as_tool_name
+    from djangocms_automation.tools import TOOL_NAME_RE
+
+    for source in ("Send Email", "Rückruf anfordern", "Create/Update Record!", "x" * 90):
+        assert TOOL_NAME_RE.match(_as_tool_name(source)), source
+    assert _as_tool_name("数据查询") == "", "a name with nothing to transliterate falls back"
+
+
+@pytest.mark.django_db
+def test_a_name_the_editor_typed_is_checked_in_the_editor(run_setup, settings):
+    """Where a derived name is normalised, a typed one is reported.
+
+    Silently rewriting what somebody wrote would change what the model is told
+    to call it without saying so.
+    """
+    _trigger, placeholder = run_setup
+    ai = add_step(placeholder, settings)
+    tool = add_tool(placeholder, ai, settings, tool_name="echo")
+    tool.tool_name = "not a legal name!"
+
+    assert any("cannot be a tool name" in str(message) for message in tool.tool_messages())

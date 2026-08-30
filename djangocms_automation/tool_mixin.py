@@ -19,6 +19,7 @@ from django.utils.translation import gettext_lazy as _
 
 from .instances import COMPLETED, FAILED, WAITING, AutomationAction
 from .tools import (
+    TOOL_NAME_RE,
     ToolCall,
     ToolResult,
     ToolSpec,
@@ -28,6 +29,18 @@ from .tools import (
 )
 
 __all__ = ["ToolMixin", "called_as_tool"]
+
+
+def _as_tool_name(source: str) -> str:
+    """Squeeze a human name into something every provider will accept."""
+    import re
+    import unicodedata
+
+    # Transliterated first, so a name in another script yields something rather
+    # than nothing: "Rückruf" becomes "ruckruf", not "rckruf".
+    folded = unicodedata.normalize("NFKD", str(source or "")).encode("ascii", "ignore").decode()
+    cleaned = re.sub(r"[^a-zA-Z0-9]+", "_", folded).strip("_").lower()
+    return cleaned[:64].rstrip("_")
 
 
 def called_as_tool(action) -> bool:
@@ -81,15 +94,24 @@ class ToolMixin:
         return self.requires_approval
 
     def effective_tool_name(self) -> str:
-        """What the model calls this, defaulting to the action's own name."""
+        """What the model calls this, defaulting to the action's own name.
+
+        The default is *derived*, so it has to be made legal here rather than
+        hoped about: an action's name is prose, and a translated one is prose
+        in a language whose punctuation and script the tool-name rule does not
+        admit. Left as it came, a perfectly ordinary action would build a spec
+        that raises while assembling the provider request — a run failing at
+        the last moment for a name nobody typed.
+        """
         if self.tool_name:
             return self.tool_name
         from cms.plugin_pool import plugin_pool
 
         try:
-            return str(plugin_pool.get_plugin(self.plugin_type).name).lower().replace(" ", "_")
+            source = str(plugin_pool.get_plugin(self.plugin_type).name)
         except KeyError:
-            return self.plugin_type.lower()
+            source = self.plugin_type
+        return _as_tool_name(source) or _as_tool_name(self.plugin_type) or "tool"
 
     def effective_tool_description(self) -> str:
         """When to use it, defaulting to whatever the action says of itself.
@@ -137,13 +159,18 @@ class ToolMixin:
 
     def tool_messages(self) -> list[str]:
         """Editor warnings about the wiring, as opposed to the action."""
+        problems = []
+        if self.tool_name and not TOOL_NAME_RE.match(self.tool_name):
+            problems.append(
+                _("'%(name)s' cannot be a tool name. Use letters, digits, underscore or hyphen, up to 64.")
+                % {"name": self.tool_name}
+            )
         form = self.tool_data_form()
-        if form is None:
-            return []
-        unknown = [name for name in self.tool_inputs() if name not in form.base_fields]
-        if unknown:
-            return [_("Inputs not found on this action: %(names)s") % {"names": ", ".join(unknown)}]
-        return []
+        if form is not None:
+            unknown = [name for name in self.tool_inputs() if name not in form.base_fields]
+            if unknown:
+                problems.append(_("Inputs not found on this action: %(names)s") % {"names": ", ".join(unknown)})
+        return problems
 
     # -- the contract ------------------------------------------------------
 
@@ -263,14 +290,12 @@ class ToolMixin:
         if scratch.get("awaiting_input"):
             rows = data or []
             answer = scratch.get("input") or {}
-            self._record_observation(
-                action, scratch, ToolResult(call_id=call.id, content=str(answer or rows), rows=rows)
-            )
+            self._record_observation(action, ToolResult(call_id=call.id, content=str(answer or rows), rows=rows))
             return COMPLETED, rows
 
         arguments, refusal = self.validate_call(call)
         if refusal is not None:
-            self._record_observation(action, scratch, refusal)
+            self._record_observation(action, refusal)
             return COMPLETED, []
 
         if self.needs_approval() and not scratch.get("approved"):
@@ -282,17 +307,25 @@ class ToolMixin:
 
         state, result, output = self.run_tool_call(call, action, data or [], arguments)
         if state == WAITING:
-            # The action wants a person of its own. It has already set what it
-            # needs on this action to say so; the call waits with it, keeping
-            # whatever the action wrote for that person to read.
-            scratch["awaiting_input"] = True
+            # Read back rather than reused: what just ran may have written its
+            # own state here — a nested AI step saves its conversation and the
+            # calls it is waiting on — and the snapshot taken before it ran no
+            # longer describes this row.
+            scratch = dict(action.scratch or {})
             scratch.pop("awaiting_approval", None)
+            if action.requires_interaction:
+                # Waiting for a *person*, so the answer arrives by resume and
+                # this node reports it. Anything else waits on work of its own
+                # and the engine wakes it — marking that as human input would
+                # complete the call the moment it came back, having asked
+                # nobody and run nothing.
+                scratch["awaiting_input"] = True
             AutomationAction.objects.filter(pk=action.pk).update(scratch=scratch)
             action.scratch = scratch
             waiting = output if isinstance(output, dict) else {}
             return WAITING, {**waiting, **self._for_the_person(call)}
 
-        self._record_observation(action, scratch, result)
+        self._record_observation(action, result)
         return COMPLETED, output
 
     def do_work(self, action, data, single_step=False, plugin_dict=None):
@@ -364,10 +397,15 @@ class ToolMixin:
             "destructive": self.is_destructive(),
         }
 
-    def _record_observation(self, action, scratch, result: ToolResult) -> None:
-        """Leave the observation where the AI step will look for it."""
+    def _record_observation(self, action, result: ToolResult) -> None:
+        """Leave the observation where the AI step will look for it.
+
+        Read from the action rather than from a caller's snapshot: whatever ran
+        may have written here in the meantime, and a nested step's conversation
+        is not something to overwrite with a stale copy of the row.
+        """
         scratch = {
-            **scratch,
+            **(action.scratch or {}),
             "tool_result": {"call_id": result.call_id, "content": result.content, "is_error": result.is_error},
         }
         scratch.pop("awaiting_input", None)

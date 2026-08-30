@@ -347,6 +347,24 @@ class ActionPlugin(AutomationPlugin):
             self._add_wiring_switch(fields, f_name, wired, exposed)
         return fields
 
+    def _pair_placed_fields(self, fieldsets):
+        """Put each already-placed input beside its switch, in situ.
+
+        A plugin that arranges its own fields keeps that arrangement; only the
+        entries naming one of its inputs become a two-item row.
+        """
+        inputs = set(self.data_form.base_fields)
+        paired = []
+        for label, options in fieldsets:
+            fields = []
+            for entry in options.get("fields") or ():
+                if isinstance(entry, str) and entry in inputs:
+                    fields.append((entry, self.MODEL_FILLS + entry))
+                else:
+                    fields.append(entry)
+            paired.append((label, {**options, "fields": fields}))
+        return paired
+
     def _add_wiring_switch(self, fields, name, wired, exposed):
         """The companion switch for one input.
 
@@ -410,6 +428,12 @@ class ActionPlugin(AutomationPlugin):
             # one that arranges its own — the AI step groups its budgets away
             # from its prompt — would otherwise have every field twice.
             placed = _named_fields(fieldsets)
+            if wired:
+                # An input the plugin placed itself still needs its switch, and
+                # the switch has to be *in a fieldset* or the admin never
+                # renders it — the field would exist on the form and be
+                # invisible, so nothing could be exposed to the model.
+                fieldsets = self._pair_placed_fields(fieldsets)
             data_fields = [name for name in self.data_form.base_fields if name not in placed]
             if not data_fields:
                 return fieldsets
@@ -577,6 +601,9 @@ class WiredInputsMixin:
                 continue
             if cleaned.get(plugin.MODEL_FILLS + name):
                 continue
-            if not cleaned.get(name):
+            # The field's own idea of empty, not truthiness: ``0`` and ``False``
+            # are values somebody chose, and a required IntegerField holding
+            # zero is filled in.
+            if cleaned.get(name) in declared.empty_values:
                 self.add_error(name, _("Enter a value, or let the model decide."))
         return cleaned
