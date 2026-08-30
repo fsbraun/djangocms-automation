@@ -383,7 +383,7 @@ class ToolMixin:
             scratch["awaiting_approval"] = True
             AutomationAction.objects.filter(pk=action.pk).update(scratch=scratch)
             action.scratch = scratch
-            return WAITING, self._for_the_person(call)
+            return WAITING, self._for_the_person(call, data or [])
 
         state, result, output = self.run_tool_call(call, action, data or [], arguments)
         if state == WAITING:
@@ -403,7 +403,7 @@ class ToolMixin:
             AutomationAction.objects.filter(pk=action.pk).update(scratch=scratch)
             action.scratch = scratch
             waiting = output if isinstance(output, dict) else {}
-            return WAITING, {**waiting, **self._for_the_person(call)}
+            return WAITING, {**waiting, **self._for_the_person(call, data or [])}
 
         self._record_observation(action, result)
         return COMPLETED, output
@@ -501,20 +501,59 @@ class ToolMixin:
                 ),
                 [],
             )
-        return COMPLETED, ToolResult(call_id=call.id, content=str(rows_out), rows=rows_out), rows_out
+        return (
+            COMPLETED,
+            ToolResult(call_id=call.id, content=str(self._reportable(rows, rows_out)), rows=rows_out),
+            rows_out,
+        )
+
+    def _reportable(self, given: list, produced: list) -> list:
+        """What the model is told a call returned: what it *produced*.
+
+        Not the rows themselves. Most actions pass their input through and add
+        a field to it, so reporting the rows would hand back everything the
+        automation happens to be carrying — a token fetched by an earlier
+        query, a column nobody meant to expose — on the strength of having sent
+        an email. The model asked what happened, and what happened is the
+        difference.
+
+        An action that produces its own rows — a lookup, whose answer *is* the
+        rows — is reported in full. That is the case the distinction exists to
+        keep working.
+        """
+        given = [row if isinstance(row, dict) else {"value": row} for row in (given or [])]
+        produced = [row if isinstance(row, dict) else {"value": row} for row in (produced or [])]
+        if len(produced) != len(given):
+            return produced  # rows of its own making
+        changed = []
+        for before, after in zip(given, produced, strict=False):
+            changed.append({key: value for key, value in after.items() if before.get(key) != value})
+        if any(changed):
+            return changed
+        # It returned what it was given. Saying so beats a page of empty rows.
+        return [{"rows": len(produced)}]
 
     # -- what a person sees ------------------------------------------------
 
-    def _for_the_person(self, call) -> dict:
+    def _for_the_person(self, call, rows: list | None = None) -> dict:
         """What the *Open tasks* page needs in order to be worth reading.
 
         Somebody approving a call is being asked to make a decision, and cannot
         make it from the fact that a decision is due. They need to know which
-        tool wants to run, with what, and whether it can be taken back.
+        tool wants to run, with what, and whether it can be taken back — and
+        *what it will run against*, which the model did not choose and the
+        arguments therefore do not show. Approving a rewritten title without
+        being told which article, or a message without its recipient, is not
+        approval of anything in particular.
+
+        The bound half is resolved for this reader alone. They are a permitted
+        person looking at their own site's admin, which is the audience these
+        values were always for.
         """
         return {
             "tool": call.name,
             "arguments": call.arguments,
+            "bound": self._bound_values(rows),
             "destructive": self.is_destructive(),
         }
 

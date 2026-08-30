@@ -1431,7 +1431,7 @@ def test_an_action_with_cross_field_validation_works_as_a_tool(run_setup, settin
     """
     from django import forms as django_forms
 
-    from djangocms_automation.tools import ToolValidationError, validate_arguments
+    from djangocms_automation.tools import ToolError, ToolValidationError, validate_arguments
 
     class RangeForm(django_forms.Form):
         low = django_forms.IntegerField()
@@ -1440,7 +1440,8 @@ def test_an_action_with_cross_field_validation_works_as_a_tool(run_setup, settin
         def clean(self):
             cleaned = super().clean()
             if cleaned["low"] > cleaned["high"]:
-                raise django_forms.ValidationError("low must not exceed high")
+                # Addressed to the model, so raised as the type that reaches it.
+                raise ToolError("low must not exceed high")
             return cleaned
 
     # The editor bound `high`; the model fills `low`.
@@ -1598,7 +1599,7 @@ def test_every_row_is_checked_before_a_tool_runs(run_setup, settings):
     """
     from django import forms as django_forms
 
-    from djangocms_automation.tools import ToolValidationError, validate_arguments
+    from djangocms_automation.tools import ToolError, ToolValidationError, validate_arguments
 
     class SameDomainForm(django_forms.Form):
         subject = django_forms.CharField()
@@ -1607,7 +1608,7 @@ def test_every_row_is_checked_before_a_tool_runs(run_setup, settings):
         def clean(self):
             cleaned = super().clean()
             if not str(cleaned.get("recipient", "")).endswith("@example.com"):
-                raise django_forms.ValidationError("recipients must be internal")
+                raise ToolError("recipients must be internal")
             return cleaned
 
     # Row one passes, row two does not.
@@ -1815,3 +1816,121 @@ def test_a_partial_delivery_failure_does_not_carry_its_message(run_setup, settin
     assert out[1]["_mail"]["sent"] is False
     assert out[1]["_mail"]["error"] == "ValueError", "the kind, not the message"
     assert "No recipient" not in str(out[1])
+
+
+@pytest.mark.django_db
+def test_a_call_reports_what_it_produced_not_what_it_was_given(run_setup, settings):
+    """Most actions pass their input through and add a field to it.
+
+    Reporting the rows would hand back everything the automation happens to be
+    carrying — a token fetched by an earlier query, a column nobody meant to
+    expose — on the strength of having sent an email.
+    """
+    trigger, placeholder = run_setup
+    ai = add_step(placeholder, settings)
+    add_tool(
+        placeholder,
+        ai,
+        settings,
+        plugin_type="MailAction",
+        tool_name="reply",
+        exposed_fields=["subject"],
+        requires_approval=False,
+        config={"recipient_email": "'to@example.com'", "subject": "'x'", "body": "x"},
+    )
+    SCRIPT.append(says(calls=[ToolCall(id="c1", name="reply", arguments={"subject": "Ship it"})]))
+    SCRIPT.append(says(text="Sent."))
+
+    trigger.trigger_execution(data=[{"customer_token": "sk-do-not-share", "seed": 1}])
+
+    observation = observations(step_action())[0]["content"]
+    assert "_mail" in observation, "what the call did"
+    assert "sk-do-not-share" not in observation, "and not what it happened to be holding"
+
+    # The action's own rows are untouched: the automation still carries them on.
+    assert call_action().result[0]["customer_token"] == "sk-do-not-share"
+
+
+@pytest.mark.django_db
+def test_a_lookup_still_reports_everything_it_found(run_setup, settings, django_user_model):
+    """The case the distinction exists to keep working.
+
+    A read tool's answer *is* its rows, and a rule that reported only what
+    changed would report nothing at all.
+    """
+    settings.AUTOMATION_ALLOWED_MODELS = ["auth.User"]
+    django_user_model.objects.create(username="ada", email="ada@example.com")
+
+    trigger, placeholder = run_setup
+    ai = add_step(placeholder, settings)
+    add_tool(
+        placeholder,
+        ai,
+        settings,
+        plugin_type="QueryModelAction",
+        tool_name="find_users",
+        exposed_fields=["filters"],
+        requires_approval=False,
+        config={"model": "auth.User", "fields": "username,email", "limit": 5},
+    )
+    SCRIPT.append(says(calls=[ToolCall(id="c1", name="find_users", arguments={"filters": {"username": "ada"}})]))
+    SCRIPT.append(says(text="Found her."))
+
+    trigger.trigger_execution(data=[{"seed": 1}])
+
+    assert "ada@example.com" in observations(step_action())[0]["content"]
+
+
+@pytest.mark.django_db
+def test_an_approver_sees_what_the_call_will_act_on(run_setup, settings):
+    """The model chose the words; the automation chose the target.
+
+    Approving a message without its recipient is approving a sentence with no
+    subject.
+    """
+    trigger, placeholder = run_setup
+    ai = add_step(placeholder, settings)
+    add_tool(
+        placeholder,
+        ai,
+        settings,
+        plugin_type="MailAction",
+        tool_name="reply",
+        exposed_fields=["subject"],
+        requires_approval=True,
+        config={"recipient_email": "customer.email", "subject": "'x'", "body": "x"},
+    )
+    SCRIPT.append(says(calls=[ToolCall(id="c1", name="reply", arguments={"subject": "Ship it"})]))
+
+    trigger.trigger_execution(data=[{"customer": {"email": "ada@example.com"}}])
+
+    task = call_action()
+    assert task.result["arguments"] == {"subject": "Ship it"}
+    assert task.result["bound"]["recipient_email"] == "ada@example.com", "resolved, so it reads as an address"
+
+
+def test_a_complaint_about_a_bound_value_is_not_repeated_to_the_model():
+    """A validator's message is written for an administrator.
+
+    It may quote the value it objected to, and that value is one the model was
+    deliberately not shown.
+    """
+    from django import forms as django_forms
+
+    from djangocms_automation.tools import ToolValidationError, validate_arguments
+
+    class KeyedForm(django_forms.Form):
+        subject = django_forms.CharField()
+        api_key = django_forms.CharField()
+
+        def clean(self):
+            cleaned = super().clean()
+            if cleaned.get("api_key") != "good":
+                raise django_forms.ValidationError(f"key {cleaned.get('api_key')} was rejected")
+            return cleaned
+
+    with pytest.raises(ToolValidationError) as refused:
+        validate_arguments(KeyedForm, {"subject": "Hi"}, allowed=["subject"], bound={"api_key": "sk-secret-123"})
+
+    assert "sk-secret-123" not in str(refused.value)
+    assert "not something you can change" in str(refused.value)

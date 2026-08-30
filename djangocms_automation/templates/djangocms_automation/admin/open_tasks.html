@@ -31,10 +31,18 @@
                     <strong>{% trans "This cannot be undone." %}</strong>
                     {% endif %}
                 </p>
-                {% if task.result.arguments %}
+                {% if task.result.arguments or task.result.bound %}
                 <table>
                     {% for name, value in task.result.arguments.items %}
                     <tr><th>{{ name }}</th><td>{{ value }}</td></tr>
+                    {% endfor %}
+                    {% comment %}
+                    What the automation fixed rather than the model — the
+                    recipient, the record. Approving without it is approving a
+                    sentence with no subject.
+                    {% endcomment %}
+                    {% for name, value in task.result.bound.items %}
+                    <tr><th>{{ name }}</th><td>{{ value }} <em>{% translate "set by the automation" %}</em></td></tr>
                     {% endfor %}
                 </table>
                 {% endif %}

@@ -335,6 +335,11 @@ def validate_arguments(
 
     try:
         valid = form.is_valid()
+    except ToolError as exc:
+        # A validator addressing the model directly. Same rule as everywhere
+        # else here: ``ValidationError`` is for whoever administers this and
+        # ``ToolError`` is written for the model, so this one is passed on.
+        raise ToolValidationError(str(exc)) from exc
     except KeyError as exc:
         # A ``clean`` reaching for a field this call has no value for. Narrow
         # on purpose: anything else out of a form is a fault in the action, and
@@ -346,8 +351,22 @@ def validate_arguments(
             f"This tool cannot check its arguments without {exc}, which it does not offer."
         ) from exc
     if not valid:
-        problems = "; ".join(f"{name}: {' '.join(errors)}" for name, errors in form.errors.items())
-        raise ToolValidationError(f"Invalid argument(s): {problems}")
+        # Said in full only about the fields the model filled in. A complaint
+        # about a bound field, or about the combination of the two, is a
+        # validator's message written for an administrator — it may quote the
+        # value it objected to, and that value is one the model was
+        # deliberately not shown.
+        detailed = [f"{name}: {' '.join(errors)}" for name, errors in form.errors.items() if name in permitted]
+        withheld = [name for name in form.errors if name not in permitted]
+        if withheld:
+            logger.warning(
+                "automation.tool.rejected_bound_value",
+                extra={"fields": withheld, "errors": {name: form.errors[name] for name in withheld}},
+            )
+            detailed.append("the values this tool supplies itself were refused, which is not something you can change")
+        if not detailed:
+            detailed.append("this tool refused the call")
+        raise ToolValidationError(f"Invalid argument(s): {'; '.join(detailed)}")
 
     return {name: value for name, value in form.cleaned_data.items() if name in permitted}
 
