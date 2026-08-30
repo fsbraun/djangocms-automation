@@ -1749,3 +1749,69 @@ def test_the_stand_in_marks_arguments_it_could_not_read(run_setup, settings):
     call = reply.tool_calls[0]
     assert call.malformed is True
     assert call.arguments == {}
+
+
+@pytest.mark.django_db
+def test_a_failed_tool_tells_the_model_nothing_it_should_not_know(run_setup, settings):
+    """A failure payload is written for whoever operates this.
+
+    A nested AI step returns the provider's own error text; other actions
+    return diagnostics meant for an operator. Sanitising the exception path
+    and not this one left the same words travelling by a different route.
+    """
+    trigger, placeholder = run_setup
+    outer = add_step(placeholder, settings, prompt="outer")
+    add_plugin(
+        placeholder=placeholder,
+        plugin_type="AIStep",
+        language=settings.LANGUAGE_CODE,
+        target=outer,
+        tool_name="research",
+        tool_description="Look into it.",
+        exposed_fields=[],
+        requires_approval=False,
+        config={"model": "anthropic/claude-opus-4-8", "prompt": "inner"},
+    )
+
+    SCRIPT.append(says(calls=[ToolCall(id="o1", name="research", arguments={})]))
+    # The nested step's provider call fails, carrying a provider's raw text.
+    SCRIPT.append(llm.LLMError("LLM error from 'anthropic': 401 key sk-ant-secret is invalid"))
+    SCRIPT.append(says(text="I could not look into it."))
+
+    def complete(**kwargs):
+        assert SCRIPT
+        reply = SCRIPT.pop(0)
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+    with mock.patch.object(llm, "complete", side_effect=complete):
+        trigger.trigger_execution(data=[{"seed": 1}])
+
+    observation = observations(step_action())[0]
+    assert "This tool failed" in observation["content"]
+    assert "sk-ant-secret" not in observation["content"] and "401" not in observation["content"]
+
+
+@pytest.mark.django_db
+def test_a_partial_delivery_failure_does_not_carry_its_message(run_setup, settings):
+    """Half the rows succeeding is the case that returns *successfully*.
+
+    The failure then travels as data — to the next action, into the run's
+    record, and to a model when this action is somebody's tool — so what lands
+    in the row is the kind of failure, not its text.
+    """
+    from djangocms_automation.actions.mail import MailActionPluginModel
+
+    plugin = MailActionPluginModel(
+        plugin_type="MailAction",
+        config={"recipient_email": "email", "subject": "'Hi'", "body": "Hello"},
+    )
+    rows = [{"email": "ada@example.com"}, {"email": ""}]
+
+    out = plugin.perform(mock.Mock(pk=1), rows)
+
+    assert out[0]["_mail"]["sent"] is True
+    assert out[1]["_mail"]["sent"] is False
+    assert out[1]["_mail"]["error"] == "ValueError", "the kind, not the message"
+    assert "No recipient" not in str(out[1])

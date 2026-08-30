@@ -480,7 +480,27 @@ class ToolMixin:
             return WAITING, None, output
         rows_out = output if isinstance(output, list) else [{"value": output}]
         if state == FAILED:
-            return COMPLETED, ToolResult(call_id=call.id, content=str(output), is_error=True), []
+            # An action's failure payload is written for whoever operates this
+            # — a traceback, a provider's response body, the query that broke.
+            # It goes to the log. To say something to the model, an action
+            # raises ``ToolError``, whose text was written for that.
+            logger.warning(
+                "automation.tool.returned_failure",
+                extra={
+                    "automation_action_id": getattr(action, "pk", None),
+                    "tool": call.name,
+                    "output": output,
+                },
+            )
+            return (
+                COMPLETED,
+                ToolResult(
+                    call_id=call.id,
+                    content="This tool failed. Try a different approach, or say that it could not be done.",
+                    is_error=True,
+                ),
+                [],
+            )
         return COMPLETED, ToolResult(call_id=call.id, content=str(rows_out), rows=rows_out), rows_out
 
     # -- what a person sees ------------------------------------------------
