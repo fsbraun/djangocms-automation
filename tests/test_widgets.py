@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 from djangocms_automation.triggers import trigger_registry
 from djangocms_automation.widgets import ConditionBuilderWidget, SchemaWidget, TriggerSelectWidget
 
@@ -113,3 +115,43 @@ def test_both_schema_fields_use_the_same_json_widget(settings):
     assert isinstance(AIStepForm.base_fields["output_schema"].widget, SchemaWidget)
     assert "schema_widget.js" in str(CodeTrigger().media)
     assert "schema_widget.js" in str(AIStepForm().media)
+
+
+def test_an_unconfigured_schema_reaches_the_editor_empty():
+    """``JSONField`` renders "nothing" as the JSON literal ``null``.
+
+    Which is not an object, so the editor read it as a schema it could not show
+    and dropped to raw JSON with a warning — on every field nobody had
+    configured yet, which is to say on every field the first time it is opened.
+    """
+    widget = SchemaWidget()
+
+    assert widget.format_value(None) == ""
+    assert widget.format_value("") == ""
+    assert widget.format_value("null") == "", "a JSONField with nothing in it"
+    assert widget.format_value("  null  ") == ""
+
+    rendered = widget.render("data_schema", "null")
+    assert "<textarea" in rendered and ">null</textarea>" not in rendered
+
+
+@pytest.mark.django_db
+def test_the_admin_page_carries_the_widget(admin_client, admin_user):
+    """What the browser is actually sent: the script, the styles, the textarea
+    it enhances, and the container it draws into."""
+    from django.urls import reverse
+
+    from djangocms_automation.models import Automation, AutomationContent, AutomationTrigger
+
+    automation = Automation.objects.create(name="Widget", is_active=True)
+    content = AutomationContent.objects.with_user(admin_user).create(automation=automation, description="Widget")
+    trigger = AutomationTrigger.objects.create(automation_content=content, slot="start", type="code", position=0)
+
+    url = reverse("admin:djangocms_automation_automationtrigger_change", args=[trigger.pk])
+    html = admin_client.get(url).content.decode()
+
+    assert "schema_widget.js" in html and "schema_widget.css" in html
+    assert 'class="schema-widget-source"' in html
+    assert 'class="schema-widget"' in html
+    # Adjacent, because the script finds its textarea as the previous sibling.
+    assert 'class="schema-widget"' in html.split("</textarea>")[1][:200]

@@ -742,3 +742,68 @@ def test_no_icon_is_defined_twice_in_the_sprite():
     ids = re.findall(r'<symbol[^>]*\bid="([^"]+)"', source)
 
     assert len(ids) == len(set(ids)), f"defined twice: {sorted({i for i in ids if ids.count(i) > 1})}"
+
+
+SHAPE = {
+    "type": "object",
+    "properties": {"topic": {"type": "string"}},
+    "required": ["topic"],
+    "additionalProperties": False,
+}
+
+
+@pytest.mark.django_db
+def test_an_output_shape_saved_by_the_editor_is_a_dict(run_setup, settings):
+    """The field is a ``JSONField``, so what the editor saves is an object.
+
+    It used to be a string, and the tests still described it that way — so the
+    shape the widget actually produces was the one nothing exercised.
+    """
+    trigger, placeholder = run_setup
+    add_step(placeholder, settings, output_schema=SHAPE)
+    SCRIPT.append(says(json={"topic": "billing"}))
+
+    trigger.trigger_execution(data=[{"seed": 1}])
+
+    assert step_action().result == [{"topic": "billing"}]
+
+
+@pytest.mark.django_db
+def test_the_shape_reaches_the_provider(run_setup, settings):
+    """Constraining the answer is the point of asking for a shape."""
+    asked = []
+
+    def complete(**kwargs):
+        asked.append(kwargs.get("schema"))
+        assert SCRIPT
+        return SCRIPT.pop(0)
+
+    trigger, placeholder = run_setup
+    add_step(placeholder, settings, output_schema=SHAPE)
+    SCRIPT.append(says(json={"topic": "billing"}))
+
+    with mock.patch.object(llm, "complete", side_effect=complete):
+        trigger.trigger_execution(data=[{"seed": 1}])
+
+    assert asked == [SHAPE]
+
+
+@pytest.mark.django_db
+def test_the_editor_round_trips_a_shape_through_the_widget(run_setup, settings):
+    """What the form saves is what it shows again when reopened."""
+    from cms.plugin_pool import plugin_pool
+    from django.contrib.admin.sites import AdminSite
+    from django.test import RequestFactory
+
+    _trigger, placeholder = run_setup
+    ai = add_step(placeholder, settings, output_schema=SHAPE)
+
+    cls = plugin_pool.get_plugin("AIStep")
+    plugin = cls(cls.model, AdminSite())
+    request = RequestFactory().get("/")
+    request.user = None
+    form = plugin.get_form(request, obj=step.AIStepPluginModel.objects.get(pk=ai.pk))()
+
+    rendered = str(form["output_schema"])
+    assert "schema-widget" in rendered, "the editor gets the table, not a bare textarea"
+    assert "&quot;topic&quot;" in rendered or '"topic"' in rendered, "seeded with what was saved"

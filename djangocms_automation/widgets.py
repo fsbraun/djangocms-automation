@@ -132,7 +132,10 @@ class SchemaWidget(forms.Textarea):
         super().__init__(defaults)
 
     def format_value(self, value):
-        if value in (None, ""):
+        # ``"null"`` as well as ``None``: a ``JSONField`` with nothing in it
+        # serialises to the JSON literal, and "nothing configured" has to reach
+        # the editor as an empty table rather than as a schema it cannot read.
+        if value is None or (isinstance(value, str) and value.strip() in ("", "null")):
             return ""
         if isinstance(value, str):
             return value

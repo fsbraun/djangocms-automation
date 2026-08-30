@@ -182,12 +182,17 @@
             const raw = source.value.trim();
             if (raw) {
                 try {
-                    const decomposed = decomposeSchema(JSON.parse(raw));
-                    if (decomposed) {
-                        this.state = decomposed;
-                    } else {
-                        this.mode = 'json';
-                        this.unsupported = true;
+                    const parsed = JSON.parse(raw);
+                    // `null` is how "nothing configured" arrives from a
+                    // JSONField. An empty table, not an unreadable schema.
+                    if (parsed !== null) {
+                        const decomposed = decomposeSchema(parsed);
+                        if (decomposed) {
+                            this.state = decomposed;
+                        } else {
+                            this.mode = 'json';
+                            this.unsupported = true;
+                        }
                     }
                 } catch (error) {
                     this.mode = 'json';
