@@ -2077,11 +2077,51 @@ def test_a_complaint_the_model_alone_caused_is_one_it_is_asked_to_fix():
     with pytest.raises(ToolValidationError, match="low must not exceed high"):
         validate_arguments(RangeForm, {"low": 9, "high": 2}, allowed=["low", "high"])
 
-    # And still actionable once the editor pins one half: sending a smaller
-    # ``low`` is exactly how the model fixes this, and the message names no
-    # value it was not shown.
-    with pytest.raises(ToolValidationError, match="low must not exceed high"):
+    # Once the editor pins one half, the same message is withheld. Not because
+    # this one gives anything away — it does not — but because no reading of the
+    # text can tell it apart from one that does, and ``clean`` is the author's
+    # code either way. Saying it on purpose is what ``ToolError`` is for.
+    with pytest.raises(ToolValidationError, match="not something you can change"):
         validate_arguments(RangeForm, {"low": 9}, allowed=["low"], bound={"high": 2})
+
+    # What the *fields* said still comes back, bound values in the form or not:
+    # those messages are made from the value the model itself sent.
+    with pytest.raises(ToolValidationError, match="low"):
+        validate_arguments(RangeForm, {"low": "not a number"}, allowed=["low"], bound={"high": 2})
+
+
+def test_a_secret_filed_under_the_models_own_field_is_still_a_secret():
+    """Which field an error is filed under says nothing about who wrote it.
+
+    ``clean`` can call ``add_error`` naming any field it likes, so a message
+    holding the editor's API key lands under the very field the model filled —
+    and reading the text for that key catches only the case where it appears
+    whole. A prefix, a reformatting, or a value pulled out of a dictionary all
+    walk straight past it.
+    """
+    from django import forms as django_forms
+
+    from djangocms_automation.tools import ToolValidationError, validate_arguments
+
+    class ChargeForm(django_forms.Form):
+        amount = django_forms.IntegerField()
+        credentials = django_forms.JSONField()
+
+        def clean(self):
+            cleaned = super().clean()
+            key = (cleaned.get("credentials") or {}).get("api_key", "")
+            self.add_error("amount", f"key {key[:12]}… was rejected by the gateway")
+            return cleaned
+
+    with pytest.raises(ToolValidationError) as refused:
+        validate_arguments(
+            ChargeForm,
+            {"amount": 500},
+            allowed=["amount"],
+            bound={"credentials": {"api_key": "sk-live-do-not-share"}},
+        )
+    assert "sk-live" not in str(refused.value), "nested, truncated, and filed under the model's own field"
+    assert "not something you can change" in str(refused.value)
 
 
 def test_a_complaint_that_quotes_a_bound_value_is_not_repeated():
@@ -2284,3 +2324,51 @@ def test_repeated_targets_are_counted_not_collapsed(run_setup, settings):
     shown = call_action().result["bound"]
     assert len(shown) == 1, "one address"
     assert shown[0]["times"] == 3, "written to three times"
+
+
+@pytest.mark.django_db
+def test_turning_approval_off_does_not_wave_a_pending_call_through(run_setup, settings, admin_user):
+    """A call already waiting was started under the gate.
+
+    Reading only the current setting would make *disabling approval* the way to
+    run an operation nobody agreed to — the opposite of what disabling it is
+    for, and reachable by an editor who never saw the pending task.
+    """
+    from cms.plugin_pool import plugin_pool
+    from django.core import mail
+
+    from djangocms_automation.engine import resume_action
+
+    trigger, placeholder = run_setup
+    ai = add_step(placeholder, settings)
+    tool = add_tool(
+        placeholder,
+        ai,
+        settings,
+        plugin_type="MailAction",
+        tool_name="reply",
+        exposed_fields=["subject"],
+        config={"recipient_email": "'ada@example.com'", "subject": "'x'", "body": "x"},
+        requires_approval=True,
+    )
+    SCRIPT.append(says(calls=[ToolCall(id="c1", name="reply", arguments={"subject": "Ship it"})]))
+
+    trigger.trigger_execution(data=[{"seed": 1}])
+    call = call_action()
+    assert call.state == WAITING
+
+    # The recipient is repointed *and* the gate is switched off while it waits.
+    model = plugin_pool.get_plugin("MailAction").model
+    instance = model.objects.get(pk=tool.pk)
+    instance.config = {**instance.config, "recipient_email": "'someone-else@example.com'"}
+    instance.requires_approval = False
+    instance.save()
+
+    sent_before = len(mail.outbox)
+    SCRIPT.append(says(text="Sent."))
+    resume_action(call.pk, admin_user)
+
+    call.refresh_from_db()
+    assert len(mail.outbox) == sent_before, "still not what anybody approved"
+    assert call.state == WAITING
+    assert call.result["changed"] is True

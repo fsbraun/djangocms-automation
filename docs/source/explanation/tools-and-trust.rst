@@ -128,12 +128,21 @@ and is repeated in full. A complaint about a value the *editor* bound may quote
 a value the model was deliberately never shown, so it goes to the log and the
 model is told only that the tool refused.
 
-A complaint about the *combination* of fields is judged on what it says rather
-than on which fields took part. "Start must be before end" is fixed by sending a
-different start, whichever half the editor pinned, so it is passed on. A message
-spelling out the bound value is not. The test is a blunt one — does the text
-contain the value — and it errs towards withholding, because a withheld
-complaint costs the model a turn and a disclosed value cannot be taken back.
+Which field an error is filed under does not decide this, because it says
+nothing about who wrote it. A form's ``clean`` may call
+``add_error("amount", ...)`` and put the editor's API key in a message filed
+under the field the model itself filled. Nor can the text be read for the value:
+it may hold a prefix of it, a reformatting, or something taken out of a
+dictionary.
+
+So authorship is established rather than inferred. When the form holds bound
+values at all, it is validated a second time with its own ``clean`` removed, and
+only the messages that survive — the ones the field classes produced, from
+values the model sent and already knows — are repeated. Everything else is the
+action author's code talking, and gets the generic reply.
+
+An author with something to tell the model anyway raises ``ToolError``, which is
+delivered as written. That is the one route, and it is explicit on purpose.
 
 An action can address the model on purpose. A validator raising ``ValidationError``
 is talking to whoever administers the automation; one raising ``ToolError`` is

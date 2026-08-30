@@ -373,10 +373,17 @@ class ToolMixin:
             self._record_observation(action, refusal)
             return COMPLETED, []
 
-        if self.needs_approval():
+        # Gated because it *is* gated, or because it already was: a call
+        # carrying an approval — asked for, given, or still pending — was
+        # started under the gate, and turning the setting off afterwards is not
+        # retrospective consent. Reading the setting alone would make disabling
+        # approval the way to run an operation nobody agreed to, which is the
+        # opposite of what disabling it means.
+        under_the_gate = bool(scratch.get("approved_for") or scratch.get("awaiting_approval"))
+        if self.needs_approval() or under_the_gate:
             shown = self._for_the_person(call, data or [])
             operation = self._fingerprint(shown)
-            if not scratch.get("approved"):
+            if not scratch.get("approved") and (self.needs_approval() or under_the_gate):
                 action.requires_interaction = True
                 scratch["awaiting_approval"] = True
                 scratch["approved_for"] = operation

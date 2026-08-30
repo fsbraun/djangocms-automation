@@ -138,7 +138,8 @@ not happened at that point, and approving is what makes it happen.
 What was approved is that operation, not the plugin behind it. A call can wait
 for days, and if the automation is edited or its data changes in the meantime,
 resuming does not run it — the task comes back marked as changed, for somebody
-to read again.
+to read again. That check follows the *call*, not the setting: switching
+approval off afterwards does not release one that is already waiting.
 
 An action can also wait for a person *of its own*: a *Wait for User* tool is how
 a step escalates, and what the person answers is what the model hears back.
