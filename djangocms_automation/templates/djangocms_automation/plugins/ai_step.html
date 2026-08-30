@@ -7,7 +7,7 @@ and deleted like any other action.
 {% endcomment %}
 <div class="automation-step">
     {% include "djangocms_automation/includes/add.html" %}
-    <div class="automation-action automation-item">
+    <div class="automation-action automation-item"{% if request.toolbar.edit_mode_active and instance.comment %} data-comment="{{ instance.comment }}"{% endif %}>
         {% include "djangocms_automation/includes/errors.html" with errors=instance.messages %}
         <div class="card-title">
             <svg width="16" height="16"><use xlink:href="#bi-stars"></use></svg> {{ title }}
@@ -17,5 +17,6 @@ and deleted like any other action.
         {% empty %}
             <div class="modifier tool answers-only">{% translate "Answers only" %}</div>
         {% endfor %}
+        {% include "djangocms_automation/includes/comment_balloon.html" %}
     </div>
 </div>

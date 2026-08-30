@@ -8,7 +8,7 @@ It is a rendered plugin like any other, which is the point — django CMS wraps 
 so it can be double-clicked open, moved and deleted the same way as an action
 anywhere else.
 {% endcomment %}
-<div class="modifier tool">
+<div class="modifier tool"{% if request.toolbar.edit_mode_active and instance.comment %} data-comment="{{ instance.comment }}"{% endif %}>
     {% include "djangocms_automation/includes/errors.html" with errors=instance.tool_messages %}
     {{ instance.tool_name|default:title }}
     {% if instance.needs_approval %}
@@ -19,4 +19,5 @@ anywhere else.
     <div class="modifier-arrow tool-marker">
         <svg width="16" height="16"><use xlink:href="#{{ icon|default:'bi-plug' }}"></use></svg>
     </div>
+    {% include "djangocms_automation/includes/comment_balloon.html" %}
 </div>
