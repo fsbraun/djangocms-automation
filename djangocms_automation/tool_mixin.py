@@ -15,12 +15,15 @@ not.
 
 from __future__ import annotations
 
+import logging
+
 from django.utils.translation import gettext_lazy as _
 
 from .instances import COMPLETED, FAILED, WAITING, AutomationAction
 from .tools import (
     TOOL_NAME_RE,
     ToolCall,
+    ToolError,
     ToolResult,
     ToolSpec,
     ToolValidationError,
@@ -29,6 +32,8 @@ from .tools import (
 )
 
 __all__ = ["ToolMixin", "called_as_tool"]
+
+logger = logging.getLogger(__name__)
 
 
 def _as_tool_name(source: str) -> str:
@@ -444,8 +449,29 @@ class ToolMixin:
             # an observation for the model; it means "run me again later", and
             # only the engine can do that.
             raise
-        except Exception as exc:  # noqa: BLE001 — a failing tool is an observation
-            return COMPLETED, ToolResult(call_id=call.id, content=f"{type(exc).__name__}: {exc}", is_error=True), []
+        except ToolError as exc:
+            # Raised by an action to say something to the model. Its text was
+            # written for that, so it is passed on as it is.
+            return COMPLETED, ToolResult(call_id=call.id, content=str(exc), is_error=True), []
+        except Exception:
+            # Everything else is a fault, and a fault's text is not written for
+            # anybody: it can carry a query, a path, a token, or the body of
+            # somebody else's response. It stays here, in the log, and the
+            # model is told only that the tool did not work — which is the part
+            # it can actually act on.
+            logger.exception(
+                "automation.tool.failed",
+                extra={"automation_action_id": getattr(action, "pk", None), "tool": call.name},
+            )
+            return (
+                COMPLETED,
+                ToolResult(
+                    call_id=call.id,
+                    content="This tool failed. Try a different approach, or say that it could not be done.",
+                    is_error=True,
+                ),
+                [],
+            )
         finally:
             self.config = configured
             self._input_overrides = None

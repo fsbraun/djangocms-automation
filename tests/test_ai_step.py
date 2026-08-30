@@ -875,7 +875,9 @@ def test_a_tool_that_raises_becomes_an_observation(run_setup, settings):
     """One tool going wrong is something the model can work around.
 
     Failing the whole run instead would make an agent as brittle as its most
-    fragile tool.
+    fragile tool. But a fault's text is not written for anybody — it can carry
+    a query, a path, a token — and it is on its way to somebody else's
+    provider, so only the fact of the failure travels.
     """
     trigger, placeholder = run_setup
     ai = add_step(placeholder, settings)
@@ -886,12 +888,14 @@ def test_a_tool_that_raises_becomes_an_observation(run_setup, settings):
     # The proxy defines its own ``perform``; patching the base would miss it.
     with mock.patch(
         "djangocms_automation.actions.mail.MailActionPluginModel.perform",
-        side_effect=RuntimeError("the smtp server is on fire"),
+        side_effect=RuntimeError("could not connect to postgres://user:hunter2@db"),
     ):
         trigger.trigger_execution(data=[{"seed": 1}])
 
     observation = observations(step_action())[0]
-    assert "RuntimeError" in observation["content"] and "on fire" in observation["content"]
+    assert "This tool failed" in observation["content"], "the model is told what it can act on"
+    assert "hunter2" not in observation["content"], "and nothing it cannot"
+    assert "postgres" not in observation["content"] and "RuntimeError" not in observation["content"]
     assert step_action().state == COMPLETED, "the run carries on"
 
 
@@ -1695,3 +1699,53 @@ def test_a_row_that_is_not_a_mapping_is_checked_too(run_setup, settings):
         {"a": 1},
     ]
     assert instance._rows_to_check([]) == [{}], "and a call with no data is still checked once"
+
+
+@pytest.mark.django_db
+def test_an_action_can_still_speak_to_the_model_on_purpose(run_setup, settings):
+    """``ToolError`` exists to be reported; its text is written for the model.
+
+    Which is the line: an author saying "that customer has no open orders"
+    reaches the conversation, and a stack trace does not.
+    """
+    trigger, placeholder = run_setup
+    ai = add_step(placeholder, settings)
+    add_tool(
+        placeholder,
+        ai,
+        settings,
+        plugin_type="MailAction",
+        tool_name="reply",
+        exposed_fields=["subject"],
+        requires_approval=False,
+        config={"recipient_email": "'to@example.com'", "subject": "'x'", "body": "x"},
+    )
+    SCRIPT.append(says(calls=[ToolCall(id="c1", name="reply", arguments={"subject": "Hi"})]))
+    SCRIPT.append(says(text="Understood."))
+
+    from djangocms_automation.tools import ToolError
+
+    with mock.patch(
+        "djangocms_automation.actions.mail.MailActionPluginModel.perform",
+        side_effect=ToolError("that customer has no address on file"),
+    ):
+        trigger.trigger_execution(data=[{"seed": 1}])
+
+    assert "no address on file" in observations(step_action())[0]["content"]
+
+
+@pytest.mark.django_db
+def test_the_stand_in_marks_arguments_it_could_not_read(run_setup, settings):
+    """A stand-in that quietly emptied them would let an all-optional tool run
+    — the very thing the refusal exists to prevent."""
+    from djangocms_automation.ai import dummy
+
+    reply = dummy.answer(
+        "dummy/echo",
+        [{"role": "user", "content": "!call find_users {oops}"}],
+        [{"type": "function", "function": {"name": "find_users"}}],
+    )
+
+    call = reply.tool_calls[0]
+    assert call.malformed is True
+    assert call.arguments == {}

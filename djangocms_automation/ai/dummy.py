@@ -40,6 +40,8 @@ are done it answers with everything it saw.
 ``!json {...}`` makes it answer with that object instead of text, for trying an
 **Output shape** without a provider that honours one. ``!fail some message``
 makes the provider call fail, for trying what a step does when it cannot answer.
+Arguments that are not valid JSON — ``!call find_users {oops}`` — come through
+marked as such, so the refusal that a real garbled reply gets can be tried too.
 """
 
 from __future__ import annotations
@@ -93,16 +95,21 @@ def answer(model: str, messages: list[dict], tools: list | None):
             # Left to the step to report, exactly as a real model's mistake
             # would be: it is told what it actually has and asked again.
             pass
+        malformed = False
         try:
             arguments = json.loads(raw) if raw else {}
         except json.JSONDecodeError:
-            arguments = {}
+            # Marked, not silently emptied. A real provider's garbled arguments
+            # are refused before the tool runs, and a stand-in that quietly
+            # turned them into "no arguments" would let a tool whose inputs are
+            # all optional run — which is the very thing that refusal prevents.
+            arguments, malformed = {}, True
         return LLMResult(
             text="",
             json=None,
             model=model,
             usage={"input_tokens": len(task) // 4, "output_tokens": 8},
-            tool_calls=[ToolCall(id=call_id, name=name, arguments=arguments)],
+            tool_calls=[ToolCall(id=call_id, name=name, arguments=arguments, malformed=malformed)],
             finish_reason="tool_calls",
         )
 
