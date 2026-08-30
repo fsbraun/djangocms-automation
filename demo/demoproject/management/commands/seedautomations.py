@@ -17,12 +17,14 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.management.base import BaseCommand
 from django.utils.timezone import now
 
-from demoproject.models import Article, Order
+from demoproject.models import Article, Lead, Order
 from djangocms_automation.instances import PENDING, RUNNING, AutomationAction, AutomationInstance
 from djangocms_automation.models import Automation, AutomationContent, AutomationTrigger
 from djangocms_automation.queue import QueuedTask
 
 LANGUAGE = "en"
+#: Answers locally, so every reference automation runs without an API key.
+DUMMY_MODEL = "dummy/echo"
 
 
 class Command(BaseCommand):
@@ -172,6 +174,229 @@ class Command(BaseCommand):
         )
         return "Webhook order ingest"
 
+    def _contact_form(self, user):
+        """Form submission → Ask a Model → If/Then/Else → Send Email.
+
+        Proves that a model's judgement can pick the path: the step classifies
+        what was written, and the conditional after it routes on the answer
+        rather than on anything the sender chose.
+
+        The trigger is of type *Form Submission*; point a djangocms-form-builder
+        form at it (its *Trigger automation* action) to feed it from the site,
+        or call ``trigger_execution`` with the same fields to try it now.
+        """
+        content, created = self._automation(
+            user,
+            "Intelligent contact form",
+            "Read what somebody wrote in, decide what it is about, and reply accordingly.",
+        )
+        if not created:
+            return "Intelligent contact form (exists)"
+
+        placeholder = self._placeholder(content, "start")
+        AutomationTrigger.objects.create(
+            automation_content=content,
+            slot="start",
+            type="form_submission",
+            position=0,
+            config={
+                "data_schema": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "Who wrote in"},
+                        "email": {"type": "string", "format": "email"},
+                        "message": {"type": "string", "description": "What they said"},
+                    },
+                    "required": ["email", "message"],
+                    "additionalProperties": False,
+                }
+            },
+        )
+        add_plugin(
+            placeholder=placeholder,
+            plugin_type="AIStep",
+            language=LANGUAGE,
+            config={
+                "model": DUMMY_MODEL,
+                "prompt": (
+                    "Decide whether this message is about billing or about support, "
+                    "and answer with that one word.\n\n{{ message }}\n\n"
+                    '!json {"topic": "billing"}'
+                ),
+                "output_schema": {
+                    "type": "object",
+                    "properties": {"topic": {"type": "string", "enum": ["billing", "support"]}},
+                    "required": ["topic"],
+                    "additionalProperties": False,
+                },
+            },
+        )
+        branch = add_plugin(
+            placeholder=placeholder,
+            plugin_type="AutomationIf",
+            language=LANGUAGE,
+            # Both sides are expressions, so the literal is quoted — bare
+            # ``billing`` would be read as a path into the data.
+            condition={"logic": "and", "conditions": [{"field": "topic", "operator": "==", "value": "'billing'"}]},
+        )
+        for child_type, recipient, subject in (
+            ("ThenPlugin", '"billing@example.com"', '"A billing question came in"'),
+            ("ElsePlugin", '"support@example.com"', '"A support question came in"'),
+        ):
+            path = add_plugin(placeholder=placeholder, plugin_type=child_type, language=LANGUAGE, target=branch)
+            add_plugin(
+                placeholder=placeholder,
+                plugin_type="MailAction",
+                language=LANGUAGE,
+                target=path,
+                config={
+                    "subject": subject,
+                    "body": "It reads as {{ topic }}. Forwarded for a reply.",
+                    "recipient_email": recipient,
+                },
+            )
+        return "Intelligent contact form"
+
+    def _editorial_review(self, user):
+        """Ask a Model, with Update Records as a tool behind an approval gate.
+
+        Proves the part of an agent worth being careful about: the model writes
+        the change, a person sees the arguments it chose, and nothing is written
+        until they say so.
+        """
+        content, created = self._automation(
+            user,
+            "Editorial AI review",
+            "Draft a fresh title for an article; publish it only once an editor approves.",
+        )
+        if not created:
+            return "Editorial AI review (exists)"
+
+        placeholder = self._placeholder(content, "start")
+        AutomationTrigger.objects.create(automation_content=content, slot="start", type="click", position=0, config={})
+        step = add_plugin(
+            placeholder=placeholder,
+            plugin_type="AIStep",
+            language=LANGUAGE,
+            config={
+                "model": DUMMY_MODEL,
+                "prompt": (
+                    "Retitle the article so it reads better, then publish it.\n\n"
+                    '!call publish_article {"field_mapping": {"title": "A clearer title"}}'
+                ),
+            },
+        )
+        add_plugin(
+            placeholder=placeholder,
+            plugin_type="UpdateModelAction",
+            language=LANGUAGE,
+            target=step,
+            tool_name="publish_article",
+            tool_description=(
+                "Rewrite an article's title and publish it. Use this once you have a title you are "
+                "happy with. It cannot be undone."
+            ),
+            # The model writes the new title; which article, and the fact that
+            # it is being published, stay bound to the automation.
+            exposed_fields=["field_mapping"],
+            config={
+                "model": "demoproject.Article",
+                "filters": {"slug": "slug"},
+                "field_mapping": {"is_published": "'True'"},
+            },
+        )
+        return "Editorial AI review"
+
+    def _lead_qualification(self, user):
+        """Ask a Model → Update Records → If/Then/Else → Send Email.
+
+        Proves the ordinary shape of this: a model judges, the judgement is
+        stored on the record, and the flow after it is drawn rather than
+        decided by anybody clever.
+        """
+        content, created = self._automation(
+            user,
+            "Lead qualification",
+            "Score an incoming lead, record the score, and tell sales about the good ones.",
+        )
+        if not created:
+            return "Lead qualification (exists)"
+
+        placeholder = self._placeholder(content, "start")
+        AutomationTrigger.objects.create(
+            automation_content=content,
+            slot="start",
+            type="code",
+            position=0,
+            config={
+                "data_schema": {
+                    "type": "object",
+                    "properties": {
+                        "email": {"type": "string", "format": "email"},
+                        "company": {"type": "string"},
+                        "message": {"type": "string"},
+                    },
+                    "required": ["email"],
+                    "additionalProperties": False,
+                }
+            },
+        )
+        add_plugin(
+            placeholder=placeholder,
+            plugin_type="AIStep",
+            language=LANGUAGE,
+            config={
+                "model": DUMMY_MODEL,
+                "prompt": (
+                    "Score this lead hot, warm or cold from what they wrote, and give back "
+                    "the address it came from.\n\n"
+                    "{{ email }} at {{ company }}: {{ message }}\n\n"
+                    '!json {"score": "hot", "email": "{{ email }}"}'
+                ),
+                # The answer *becomes* the automation's data, so anything a
+                # later step needs has to be part of it — the address included,
+                # or the update below would have nothing to match on.
+                "output_schema": {
+                    "type": "object",
+                    "properties": {
+                        "score": {"type": "string", "enum": ["hot", "warm", "cold"]},
+                        "email": {"type": "string", "format": "email"},
+                    },
+                    "required": ["score", "email"],
+                    "additionalProperties": False,
+                },
+            },
+        )
+        add_plugin(
+            placeholder=placeholder,
+            plugin_type="UpdateModelAction",
+            language=LANGUAGE,
+            config={
+                "model": "demoproject.Lead",
+                "filters": {"email": "email"},
+                "field_mapping": {"score": "score"},
+            },
+        )
+        branch = add_plugin(
+            placeholder=placeholder,
+            plugin_type="AutomationIf",
+            language=LANGUAGE,
+            condition={"logic": "and", "conditions": [{"field": "score", "operator": "==", "value": "'hot'"}]},
+        )
+        path = add_plugin(placeholder=placeholder, plugin_type="ThenPlugin", language=LANGUAGE, target=branch)
+        add_plugin(
+            placeholder=placeholder,
+            plugin_type="MailAction",
+            language=LANGUAGE,
+            target=path,
+            config={
+                "subject": '"A hot lead just came in"',
+                "body": "{{ company }} scored {{ score }}. Call them.",
+                "recipient_email": '"sales@example.com"',
+            },
+        )
+        return "Lead qualification"
+
     # -- failure injection ------------------------------------------------
 
     def _inject(self, scenario):
@@ -245,9 +470,23 @@ class Command(BaseCommand):
         if not Order.objects.exists():
             Order.objects.create(reference="SEED-1", email="customer@example.com", total="42.00")
             self.stdout.write("  created 1 demo order")
+        if not Lead.objects.exists():
+            Lead.objects.create(
+                name="Ada Lovelace",
+                email="ada@example.com",
+                company="Analytical Engines",
+                message="We need this for 200 seats by Q3.",
+            )
+            self.stdout.write("  created 1 demo lead")
 
         self.stdout.write("Reference automations:")
-        for builder in (self._nightly_digest, self._webhook_ingest):
+        for builder in (
+            self._nightly_digest,
+            self._webhook_ingest,
+            self._contact_form,
+            self._editorial_review,
+            self._lead_qualification,
+        ):
             self.stdout.write(f"  - {builder(user)}")
 
         if options["scenario"]:

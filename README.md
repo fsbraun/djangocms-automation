@@ -95,6 +95,32 @@ python manage.py runworker          # in a second shell
 `enqueue-rejection`, `duplicate-webhook`, `timer-backlog`) injects failure
 conditions so recovery can be watched rather than only trusted.
 
+### What it looks like in practice
+
+Every automation below is seeded by `seedautomations` and runs against the
+bundled `dummy/echo` model, so none of them needs an API key or an account
+anywhere.
+
+| Example | What it shows | |
+|---|---|---|
+| **Intelligent contact form** | A form submission, a model deciding what the message is about, and a conditional routing it to billing or support | ✅ |
+| **Editorial AI review** | A model drafting a change to an article, a person seeing the exact wording it chose, and nothing written until they approve | ✅ |
+| **Lead qualification** | A model scoring a lead, the score written back to the record, and sales told about the good ones | ✅ |
+| **Nightly content digest** | A recurring timer, a query, and one email per row — with bounded catch-up after downtime | ✅ |
+| **Webhook order ingest** | An outside service starting a workflow over HTTP, idempotently, with retries, dead letters and replay | ✅ |
+
+Two notes so this does not read as more than it is:
+
+- The **contact form** automation is complete and runnable, but the form itself
+  is yours to draw: give a [djangocms-form-builder](https://github.com/fsbraun/djangocms-form-builder)
+  form the *Trigger automation* action and point it at the seeded *Form
+  Submission* trigger. Without that, trigger it by hand with the same fields.
+- **Calling out to an external API is not built yet.** Webhooks work *inbound*
+  — anything can start an automation over HTTP — but there is no HTTP action, so
+  an automation cannot yet call a service back. Until there is, that half is a
+  Python action you write (see *Writing your own action* in the
+  [actions guide](docs/source/howto/actions.rst)).
+
 ### Built-in actions
 
 - **Send Email** — one email per data row via Django's email framework.

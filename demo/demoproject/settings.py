@@ -103,6 +103,7 @@ TASKS = {
 AUTOMATION_ALLOWED_MODELS = [
     "demoproject.Order",
     "demoproject.Article",
+    "demoproject.Lead",
 ]
 
 AUTOMATION_LEASE_SECONDS = 300
