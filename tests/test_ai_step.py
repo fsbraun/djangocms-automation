@@ -1445,9 +1445,10 @@ def test_an_action_with_cross_field_validation_works_as_a_tool(run_setup, settin
         validate_arguments(RangeForm, {"low": 99}, allowed=["low"], bound={"high": 10})
 
     # And with nothing to compare against, the model is told rather than the
-    # run being failed.
-    with pytest.raises(ToolValidationError):
+    # run being failed — without being told anything about the failure itself.
+    with pytest.raises(ToolValidationError) as refused:
         validate_arguments(RangeForm, {"low": 1}, allowed=["low"])
+    assert "KeyError" not in str(refused.value)
 
 
 @pytest.mark.django_db
@@ -1462,3 +1463,68 @@ def test_an_answer_names_the_model_that_gave_it(run_setup, settings):
     row = step_action().result[0]
     assert set(row) == {"text", "model", "turns", "usage"}
     assert row["model"] == "anthropic/claude-opus-4-8"
+
+
+@pytest.mark.django_db
+def test_a_bound_expression_is_resolved_before_the_form_sees_it(run_setup, settings):
+    """An expression-configured action can have cross-field validation too.
+
+    What ``trigger.from`` comes to is knowable when the call is checked — the
+    automation's data is in hand — so the form is given the same pair of values
+    the action is about to use, not one half and a hole.
+    """
+    from cms.plugin_pool import plugin_pool
+
+    _trigger, placeholder = run_setup
+    ai = add_step(placeholder, settings)
+    tool = add_tool(
+        placeholder,
+        ai,
+        settings,
+        plugin_type="MailAction",
+        tool_name="reply",
+        exposed_fields=["subject"],
+        config={"recipient_email": "customer.email", "subject": "'x'", "body": "x"},
+    )
+    instance = plugin_pool.get_plugin("MailAction").model.objects.get(pk=tool.pk)
+    instance.exposed_fields = ["subject"]
+
+    rows = [{"customer": {"email": "ada@example.com"}}]
+    bound = instance._bound_values(rows)
+
+    assert bound["recipient_email"] == "ada@example.com", "resolved, not the expression"
+    assert "subject" not in bound, "what the model fills is not bound"
+
+    # An expression that cannot resolve is left out rather than guessed at.
+    assert "recipient_email" not in instance._bound_values([{"nothing": "here"}])
+
+
+def test_a_fault_in_an_action_is_not_described_to_the_model():
+    """An exception's text can carry a query, a path or a credential.
+
+    None of that is an argument a model can correct, and all of it would be
+    sent to somebody else's provider.
+    """
+    from django import forms as django_forms
+
+    from djangocms_automation.tools import ToolValidationError, validate_arguments
+
+    class ExplodingForm(django_forms.Form):
+        a = django_forms.CharField()
+
+        def clean(self):
+            raise RuntimeError("connection to postgres://user:hunter2@db failed")
+
+    with pytest.raises(RuntimeError):
+        validate_arguments(ExplodingForm, {"a": "x"}, allowed=["a"])
+
+    class MissingHalfForm(django_forms.Form):
+        a = django_forms.CharField()
+        b = django_forms.CharField()
+
+        def clean(self):
+            return {"both": self.cleaned_data["a"] + self.cleaned_data["b"]}
+
+    with pytest.raises(ToolValidationError) as refused:
+        validate_arguments(MissingHalfForm, {"a": "x"}, allowed=["a"])
+    assert "cannot check its arguments" in str(refused.value)

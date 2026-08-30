@@ -174,7 +174,7 @@ class ToolMixin:
 
     # -- the contract ------------------------------------------------------
 
-    def validate_tool_arguments(self, call) -> tuple[dict, ToolResult | None]:
+    def validate_tool_arguments(self, call, rows: list | None = None) -> tuple[dict, ToolResult | None]:
         """Check what the model sent against the action's own form."""
         form = self.tool_data_form()
         if form is None:
@@ -185,21 +185,24 @@ class ToolMixin:
                 call.arguments,
                 allowed=self.tool_inputs(),
                 literal_mappings=frozenset(getattr(self, "expression_mappings", frozenset())),
-                bound=self._bound_values(),
+                bound=self._bound_values(rows),
             )
         except ToolValidationError as exc:
             # Handed back for the model to correct rather than failing the run.
             return {}, ToolResult(call_id=call.id, content=str(exc), is_error=True)
         return arguments, None
 
-    def _bound_values(self) -> dict:
-        """What the editor configured, where it is a value rather than a path.
+    def _bound_values(self, rows: list | None = None) -> dict:
+        """What the editor configured, as the values the action will actually use.
 
-        An action whose inputs are expressions has nothing to offer here: what
-        ``trigger.from`` means is not known until the automation runs, and a
-        half-resolved expression would fail the form it was handed to. Actions
-        configured with literal values can hand theirs over, which is what lets
-        a cross-field ``clean`` see both halves.
+        Not the expressions but what they come to. They are knowable here — the
+        automation's data is in hand, and resolving them is what the action is
+        about to do anyway — so a cross-field ``clean`` sees the same pair of
+        values the action will, rather than one half and a hole.
+
+        An input whose expression will not resolve is left out rather than
+        guessed at: that is the action's own problem to report when it runs,
+        not a reason to refuse the model's arguments.
         """
         from cms.plugin_pool import plugin_pool
 
@@ -207,12 +210,20 @@ class ToolMixin:
             plugin = plugin_pool.get_plugin(self.plugin_type)
         except KeyError:
             return {}
-        if getattr(plugin, "convert_data_form", True):
-            return {}
         exposed = set(self.tool_inputs())
-        return {name: value for name, value in (self.config or {}).items() if name not in exposed}
+        configured = {name: value for name, value in (self.config or {}).items() if name not in exposed}
+        if getattr(plugin, "convert_data_form", True) is False:
+            return configured  # already literal values
 
-    def validate_call(self, call) -> tuple[dict, ToolResult | None]:
+        rows = rows or []
+        row = rows[0] if rows and isinstance(rows[0], dict) else {}
+        try:
+            resolved = self.resolve_inputs(row, rows)
+        except Exception:  # noqa: BLE001 — an expression that will not resolve
+            return {}
+        return {name: resolved[name] for name in configured if name in resolved}
+
+    def validate_call(self, call, rows: list | None = None) -> tuple[dict, ToolResult | None]:
         """Check a call before anything is done about it.
 
         Before the approval gate, not after. Approval is for calls that could
@@ -229,7 +240,7 @@ class ToolMixin:
                 content="Your arguments were not valid JSON. Send the call again with a JSON object.",
                 is_error=True,
             )
-        return self.validate_tool_arguments(call)
+        return self.validate_tool_arguments(call, rows)
 
     # -- execution ---------------------------------------------------------
 
@@ -314,7 +325,7 @@ class ToolMixin:
             self._record_observation(action, ToolResult(call_id=call.id, content=str(answer or rows), rows=rows))
             return COMPLETED, rows
 
-        arguments, refusal = self.validate_call(call)
+        arguments, refusal = self.validate_call(call, data or [])
         if refusal is not None:
             self._record_observation(action, refusal)
             return COMPLETED, []

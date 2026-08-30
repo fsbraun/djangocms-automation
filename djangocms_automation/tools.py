@@ -15,6 +15,7 @@ key that was not offered.
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
@@ -60,6 +61,8 @@ class ToolCall:
 
 #: Tool names must satisfy every provider we support, so this is the
 #: intersection rather than any one provider's rule.
+logger = logging.getLogger(__name__)
+
 TOOL_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 
 
@@ -332,12 +335,16 @@ def validate_arguments(
 
     try:
         valid = form.is_valid()
-    except Exception as exc:
-        # A ``clean`` that assumes every field is present raises rather than
-        # rejecting. That is a fact about this call's arguments, so the model
-        # is told and can try again — failing the run would make an action with
-        # ordinary cross-field validation unusable as a tool.
-        raise ToolValidationError(f"Invalid argument(s): {type(exc).__name__}: {exc}") from exc
+    except KeyError as exc:
+        # A ``clean`` reaching for a field this call has no value for. Narrow
+        # on purpose: anything else out of a form is a fault in the action, and
+        # a fault is not something to describe to a model — an error's text can
+        # carry a query, a path, a credential, and none of that is an argument
+        # the model can correct.
+        logger.warning("automation.tool.validation_incomplete", exc_info=True)
+        raise ToolValidationError(
+            f"This tool cannot check its arguments without {exc}, which it does not offer."
+        ) from exc
     if not valid:
         problems = "; ".join(f"{name}: {' '.join(errors)}" for name, errors in form.errors.items())
         raise ToolValidationError(f"Invalid argument(s): {problems}")

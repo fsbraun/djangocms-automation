@@ -408,3 +408,24 @@ def test_a_schema_declaring_an_email_is_accepted_by_the_form(content):
 
     assert form.is_valid(), form.errors
     assert form.save().data_schema == EMAIL_SCHEMA
+
+
+@pytest.mark.django_db
+def test_a_form_submission_arrives_as_its_fields(content):
+    """Nested under ``data`` they were doubly hidden.
+
+    An automation's row list is itself exposed as ``data`` when a template
+    renders, so the payload's own ``data`` key was shadowed and every reference
+    to it came back empty — silently, since a missing path renders as nothing.
+    """
+    from djangocms_automation.utilities.templates import safe_render
+
+    flat = {"name": "Ada", "email": "ada@example.com", "message": "My invoice is wrong", "user_id": 1}
+    rows = [flat]
+    context = {**rows[0], "data": rows}
+
+    assert str(safe_render("{{ message }}", context)) == "My invoice is wrong"
+
+    nested = [{"data": {"message": "My invoice is wrong"}, "user_id": 1}]
+    shadowed = {**nested[0], "data": nested}
+    assert str(safe_render("{{ data.message }}", shadowed)) == "", "which is what it used to do"

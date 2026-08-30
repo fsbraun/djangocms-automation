@@ -590,16 +590,17 @@ if apps.is_installed("djangocms_form_builder"):
                 automation_content__automation_id=automation["pk"],
                 type="form_submission",
             )
+            # The submitted fields arrive at the top level, where an editor
+            # writing ``{{ message }}`` will find them. Nested under a ``data``
+            # key they were doubly hidden: an automation's row list is itself
+            # exposed as ``data`` when a template renders, so the payload's own
+            # ``data`` was shadowed and every reference to it came back empty.
+            submitted = cleaned_data_to_json_serializable(form.cleaned_data)
+            payload = dict(submitted)
+            if "user_id" not in payload:
+                payload["user_id"] = request.user.pk if request.user.is_authenticated else None
             for trigger in qs:
-                trigger.trigger_execution(
-                    data=[
-                        {
-                            "data": cleaned_data_to_json_serializable(form.cleaned_data),
-                            "user_id": request.user.pk if request.user.is_authenticated else None,
-                        }
-                    ],
-                    start=True,
-                )
+                trigger.trigger_execution(data=[payload], start=True)
 
 
 # Register example triggers
