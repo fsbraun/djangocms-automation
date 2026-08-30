@@ -2416,12 +2416,14 @@ def test_the_probe_holds_a_literal_mapping_to_the_same_rules_as_the_call():
     """
     from django import forms as django_forms
 
-    from djangocms_automation.tools import ToolValidationError, validate_arguments
+    from djangocms_automation.tools import EXPRESSION_SYNTAX_CHECK, ToolValidationError, validate_arguments
 
     def expressions_only(value):
         for key, entry in (value or {}).items():
             if " " in str(entry):
                 raise django_forms.ValidationError(f"{key}: not valid expression syntax")
+
+    setattr(expressions_only, EXPRESSION_SYNTAX_CHECK, True)
 
     class QueryForm(django_forms.Form):
         filters = django_forms.JSONField(validators=[expressions_only])
@@ -2475,3 +2477,47 @@ def test_a_field_configured_from_bound_data_does_not_carry_it_into_the_probe():
             bound={"credentials": {"api_key": "sk-secret-123"}},
         )
     assert "sk-secret-123" not in str(refused.value), "the probe's field never saw it"
+
+
+def test_an_actions_own_rule_about_a_mapping_still_binds_a_model():
+    """Only the expression check is the editor's question. The rest are rules.
+
+    A limit on how many entries a mapping may hold, or on which keys are
+    allowed, is about the shape of the request and holds however the request
+    was written. Setting those aside along with the syntax check would let a
+    tool accept exactly what the action refuses — which is the one outcome
+    validating through the action's own form exists to prevent.
+    """
+    from django import forms as django_forms
+
+    from djangocms_automation.tools import EXPRESSION_SYNTAX_CHECK, ToolValidationError, validate_arguments
+
+    def expressions_only(value):
+        for key, entry in (value or {}).items():
+            if " " in str(entry):
+                raise django_forms.ValidationError(f"{key}: not valid expression syntax")
+
+    setattr(expressions_only, EXPRESSION_SYNTAX_CHECK, True)
+
+    def at_most_one(value):
+        if len(value or {}) > 1:
+            raise django_forms.ValidationError("filter on one field at a time")
+
+    class QueryForm(django_forms.Form):
+        filters = django_forms.JSONField(validators=[expressions_only, at_most_one])
+
+    mappings = frozenset({"filters"})
+
+    # The action's own rule is enforced...
+    with pytest.raises(ToolValidationError, match="one field at a time"):
+        validate_arguments(
+            QueryForm,
+            {"filters": {"username": "ann smith", "email": "a@b.c"}},
+            allowed=["filters"],
+            literal_mappings=mappings,
+        )
+
+    # ...while the model is still free to send a value rather than an expression.
+    assert validate_arguments(
+        QueryForm, {"filters": {"username": "ann smith"}}, allowed=["filters"], literal_mappings=mappings
+    ) == {"filters": {"username": "ann smith"}}

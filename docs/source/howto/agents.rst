@@ -257,6 +257,29 @@ mistakes a re-sort for a hundred new values.
 This affects only what the model is told. The rows themselves are untouched, and
 downstream steps see everything as usual.
 
+Fields that hold expressions
+----------------------------
+
+An action reading a config field as a mapping of expressions — a filter, a field
+mapping — names it in ``expression_mappings``, and the form's validator for it
+demands expression syntax. That is the editor's question. A model supplies
+values, and ``ann smith`` is a good value and not an expression, so the check is
+set aside when the field is offered to a model.
+
+Only that check. Every other validator on the field still applies, because a
+rule about which keys are allowed or how many entries there may be is a rule
+about the request and holds however it was written. Mark the syntax check so it
+can be told apart:
+
+.. code-block:: python
+
+    from djangocms_automation.tools import EXPRESSION_SYNTAX_CHECK
+
+    setattr(my_expression_validator, EXPRESSION_SYNTAX_CHECK, True)
+
+An unmarked one stays on, and the tool then refuses ordinary values — which is
+visible immediately, and the safe direction to be wrong in.
+
 When not to use one
 -------------------
 

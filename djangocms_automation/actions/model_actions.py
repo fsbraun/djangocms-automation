@@ -14,6 +14,7 @@ from django.db import transaction
 from django.utils.translation import gettext_lazy as _
 
 from ..models import BaseActionPluginModel
+from ..tools import EXPRESSION_SYNTAX_CHECK
 from ..utilities.expressions import ExpressionError, Literal, resolve_expression, validate_expression
 from ..utilities.json import model_to_row
 
@@ -57,6 +58,12 @@ def _validate_expression_mapping(value):
             validate_expression(str(expr))
         except ExpressionError as exc:
             raise forms.ValidationError(_("Invalid expression for '%(key)s': %(error)s") % {"key": key, "error": exc})
+
+
+# The one question a model cannot be asked: it supplies values, not paths into
+# the automation's data. Marked so that offering one of these fields to a model
+# sets this check aside and keeps every other one the action declared.
+setattr(_validate_expression_mapping, EXPRESSION_SYNTAX_CHECK, True)
 
 
 def _resolve_mapping(mapping: dict, context: dict) -> dict:

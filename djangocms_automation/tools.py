@@ -260,6 +260,14 @@ def schema_from_form(form_class: type[forms.Form], include: list[str] | None = N
     }
 
 
+#: Marks a validator as checking expression *syntax*, and so as the editor's
+#: question rather than the model's. A field named in an action's
+#: ``expression_mappings`` keeps every validator except these when it is offered
+#: to a model. An expression validator left unmarked simply stays on and the
+#: tool refuses ordinary values — visibly, and on the safe side.
+EXPRESSION_SYNTAX_CHECK = "checks_expression_syntax"
+
+
 def _validate_flat_mapping(value) -> None:
     """A mapping of names to plain values, and nothing cleverer.
 
@@ -398,12 +406,28 @@ def _prepared(form_class: type[forms.Form], data: dict, permitted: set, literal_
             del form.fields[name]
     for name in literal_mappings & permitted:
         if name in form.fields:
-            form.fields[name] = forms.JSONField(
-                label=form.fields[name].label,
-                required=form.fields[name].required,
-                validators=[_validate_flat_mapping],
-            )
+            form.fields[name] = _asking_for_values(form.fields[name])
     return form
+
+
+def _asking_for_values(field: forms.Field) -> forms.Field:
+    """The same field, asking a model for values instead of expressions.
+
+    Only the validator that checks *expression syntax* is set aside — that is
+    the one question a model cannot be asked, since it supplies values and
+    ``ann smith`` is a fine value and not an expression. Everything else the
+    action put there stays: a rule about which keys are allowed, or how many
+    entries there may be, is a rule about the shape of the request and holds
+    however the request was written. Dropping those lets a tool accept what the
+    action itself refuses, which is the one thing validating through the
+    action's own form exists to prevent.
+    """
+    kept = [check for check in field.validators if not getattr(check, EXPRESSION_SYNTAX_CHECK, False)]
+    return forms.JSONField(
+        label=field.label,
+        required=field.required,
+        validators=[_validate_flat_mapping, *kept],
+    )
 
 
 def _field_level_errors(
