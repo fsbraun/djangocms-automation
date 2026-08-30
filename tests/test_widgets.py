@@ -182,3 +182,34 @@ def test_the_mode_toggle_sits_in_the_same_place_in_both_modes():
 
     assert "justify-content: flex-end;" in css, "inline-end in both modes"
     assert ".schema-widget__toggle {" in css and "border-radius" in css, "and looks like a button"
+
+
+def test_email_is_offered_as_a_kind_of_value():
+    """Not a JSON type — a ``format`` on a string, the way ``string_array`` is
+    an array of them. What an editor picks is a kind of value; what is emitted
+    stays canonical."""
+    offered = dict(SchemaWidget.schema_types)
+
+    assert "email" in offered
+    assert "string" in offered, "and plain text is still there"
+
+    js = _widget_js()
+    assert "format: 'email'" in js, "composed as a format"
+    assert "definition.format !== 'email'" in js, "and only that one is understood"
+
+
+def _widget_js():
+    from pathlib import Path
+
+    return (
+        Path(__file__).resolve().parent.parent / "djangocms_automation/static/djangocms_automation/js/schema_widget.js"
+    ).read_text()
+
+
+def test_a_format_beside_choices_goes_to_the_json_editor():
+    """An email row carries no choices, so recomposing one would drop the enum.
+
+    The widget's one hard rule is that it never round-trips a schema into a
+    lossy one, so it declines to show the table instead.
+    """
+    assert "Object.hasOwn(definition, 'enum')" in _widget_js()

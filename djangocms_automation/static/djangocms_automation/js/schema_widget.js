@@ -64,6 +64,19 @@
 
             if (type === 'string') {
                 allowed.add('enum');
+                // `email` is a format on a string rather than a type of its
+                // own — the same trick `string_array` uses, so the JSON stays
+                // canonical while the editor offers one choice.
+                if (Object.hasOwn(definition, 'format')) {
+                    // Both at once has no row to be: an email row carries no
+                    // choices, so recomposing would drop the enum. Refusing
+                    // sends it to the JSON editor with everything intact.
+                    if (definition.format !== 'email' || Object.hasOwn(definition, 'enum')) {
+                        return null;
+                    }
+                    allowed.add('format');
+                    type = 'email';
+                }
                 if (Object.hasOwn(definition, 'enum')) {
                     if (
                         !Array.isArray(definition.enum) ||
@@ -122,9 +135,14 @@
                 if (!row.name) {
                     return;
                 }
-                const definition = row.type === 'string_array'
-                    ? { type: 'array', items: { type: 'string' } }
-                    : { type: row.type };
+                let definition;
+                if (row.type === 'string_array') {
+                    definition = { type: 'array', items: { type: 'string' } };
+                } else if (row.type === 'email') {
+                    definition = { type: 'string', format: 'email' };
+                } else {
+                    definition = { type: row.type };
+                }
                 if (row.descriptionPresent || row.description !== '') {
                     definition.description = row.description;
                 }

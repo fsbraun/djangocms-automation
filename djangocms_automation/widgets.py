@@ -110,8 +110,13 @@ class SchemaWidget(forms.Textarea):
     existing behaviour and validation path.
     """
 
+    #: The choices offered for a field's type. Two of them are not JSON Schema
+    #: types at all — ``email`` is a ``format`` on a string and ``string_array``
+    #: an array of them — because what an editor picks is a kind of value,
+    #: while what is emitted stays canonical.
     schema_types = (
         ("string", _("Text")),
+        ("email", _("Email address")),
         ("number", _("Number")),
         ("integer", _("Whole number")),
         ("boolean", _("Yes / no")),

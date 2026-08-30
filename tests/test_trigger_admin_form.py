@@ -367,3 +367,44 @@ def test_something_that_is_not_a_schema_is_refused(content):
 
     assert not form.is_valid()
     assert "additionalProperties" in str(form.errors["data_schema"])
+
+
+EMAIL_SCHEMA = {
+    "type": "object",
+    "properties": {"email": {"type": "string", "format": "email"}},
+    "required": ["email"],
+    "additionalProperties": False,
+}
+
+
+@pytest.mark.django_db
+def test_a_declared_email_is_checked_not_merely_noted(content):
+    """``format`` is an annotation unless a validator is asked to assert it.
+
+    Left as one, a trigger declaring an email would accept "nonsense" — which
+    reads to whoever wrote the schema like a constraint they set.
+    """
+    trigger = AutomationTrigger.objects.create(
+        automation_content=content, slot="start", type="code", position=0, config={"data_schema": EMAIL_SCHEMA}
+    )
+    definition = trigger.get_definition()()
+
+    assert definition.validate_payload({"email": "ann@example.com"}, config=trigger.config)
+    assert not definition.validate_payload({"email": "nonsense"}, config=trigger.config, raise_errors=False)
+
+
+@pytest.mark.django_db
+def test_a_schema_declaring_an_email_is_accepted_by_the_form(content):
+    form = composed_form(
+        "code",
+        data={
+            "automation_content": content.pk,
+            "type": "code",
+            "slot": "start",
+            "position": 0,
+            "data_schema": EMAIL_SCHEMA,
+        },
+    )
+
+    assert form.is_valid(), form.errors
+    assert form.save().data_schema == EMAIL_SCHEMA

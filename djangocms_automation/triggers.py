@@ -115,7 +115,11 @@ class Trigger(forms.Form):
                 validator(schema, payload)
                 return True
             if Draft202012Validator is not None:
-                Draft202012Validator(schema).validate(payload)
+                # With a format checker, so ``"format": "email"`` is a rule
+                # rather than a note. Without one jsonschema treats format as an
+                # annotation and ignores it — which would make a declared
+                # contract read like a constraint and enforce nothing.
+                Draft202012Validator(schema, format_checker=Draft202012Validator.FORMAT_CHECKER).validate(payload)
                 return True
             # Fallback shallow check
             required = schema.get("required", [])
