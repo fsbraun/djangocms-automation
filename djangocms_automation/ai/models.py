@@ -151,6 +151,47 @@ class AgentToolPluginModel(AutomationPluginModel):
             destructive=self.is_destructive(),
         )
 
+    def validate(self, call) -> tuple[dict, ToolResult | None]:
+        """Check a call before anything is done about it.
+
+        Separate from running it because it happens earlier — before the
+        approval gate, not after. Approval is for calls that could run: a call
+        that cannot spends a person's attention on a decision with no outcome,
+        and holds back the error the model needs in order to correct itself
+        until someone has been found to look at it.
+
+        :returns: The validated arguments, and the refusal to report to the
+            model instead of running — ``None`` when there is none.
+        """
+        plugin = self._action_plugin()
+        if plugin is None:
+            return {}, ToolResult(call_id=call.id, content="This tool has no action to run.", is_error=True)
+
+        if call.malformed:
+            # Not run under any circumstances. A tool whose inputs are all
+            # optional would otherwise accept the empty set this parsed to and
+            # do something wholly unasked for — an unfiltered query, say.
+            return {}, ToolResult(
+                call_id=call.id,
+                content="Your arguments were not valid JSON. Send the call again with a JSON object.",
+                is_error=True,
+            )
+
+        form = self._data_form()
+        if form is None:
+            return {}, None
+        try:
+            arguments = validate_arguments(
+                form,
+                call.arguments,
+                allowed=list(self.exposed_fields or []),
+                literal_mappings=frozenset(getattr(plugin, "expression_mappings", frozenset())),
+            )
+        except ToolValidationError as exc:
+            # Handed back for the model to correct rather than failing the run.
+            return {}, ToolResult(call_id=call.id, content=str(exc), is_error=True)
+        return arguments, None
+
     def run(self, call, action: AutomationAction, rows: list) -> tuple[str, ToolResult | None, list]:
         """Validate the model's arguments and run the wrapped action.
 
@@ -169,34 +210,13 @@ class AgentToolPluginModel(AutomationPluginModel):
             model (``None`` while waiting for a person), and the output — rows
             for a finished call, the wrapped action's own output while it waits.
         """
+        # Checked again here rather than trusted from the caller: this is the
+        # last point before an action runs, and it is cheap and deterministic.
+        arguments, refusal = self.validate(call)
+        if refusal is not None:
+            return COMPLETED, refusal, []
         plugin = self._action_plugin()
-        if plugin is None:
-            return COMPLETED, ToolResult(call_id=call.id, content="This tool has no action to run.", is_error=True), []
-
-        if call.malformed:
-            # Not run under any circumstances. A tool whose inputs are all
-            # optional would otherwise accept the empty set this parsed to and
-            # do something wholly unasked for — an unfiltered query, say.
-            return (
-                COMPLETED,
-                ToolResult(
-                    call_id=call.id,
-                    content="Your arguments were not valid JSON. Send the call again with a JSON object.",
-                    is_error=True,
-                ),
-                [],
-            )
-
-        form = self._data_form()
-        exposed = list(self.exposed_fields or [])
         mappings = frozenset(getattr(plugin, "expression_mappings", frozenset()))
-        try:
-            arguments = (
-                validate_arguments(form, call.arguments, allowed=exposed, literal_mappings=mappings) if form else {}
-            )
-        except ToolValidationError as exc:
-            # Handed back for the model to correct rather than failing the run.
-            return COMPLETED, ToolResult(call_id=call.id, content=str(exc), is_error=True), []
 
         # An action reads its inputs in one of two ways, so the model's values
         # are put where each kind will look.
@@ -319,6 +339,12 @@ class AgentToolPluginModel(AutomationPluginModel):
             rows = data or []
             self._record(action, scratch, ToolResult(call_id=call.id, content=str(answer or rows)))
             return COMPLETED, rows
+
+        # Before the gate: see :meth:`validate`.
+        _arguments, refusal = self.validate(call)
+        if refusal is not None:
+            self._record(action, scratch, refusal)
+            return COMPLETED, []
 
         if self.needs_approval() and not scratch.get("approved"):
             action.requires_interaction = True

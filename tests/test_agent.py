@@ -853,3 +853,77 @@ def test_arguments_that_were_not_valid_json_do_not_run_the_tool(run_setup, setti
     assert not call.result, "no query ran"
     observation = next(m for m in AgentState.load(agent_action()).messages if m["role"] == "tool")
     assert "JSON" in observation["content"], "the model is told what to fix"
+
+
+def _create_agent(placeholder, settings, exposed):
+    """An agent with one Create Record tool — destructive, so gated by default."""
+    agent = add_plugin(
+        placeholder=placeholder,
+        plugin_type="AutomationAgent",
+        language=settings.LANGUAGE_CODE,
+        model="anthropic/claude-opus-4-8",
+        prompt="add someone",
+    )
+    tool = add_plugin(
+        placeholder=placeholder,
+        plugin_type="AutomationAgentTool",
+        language=settings.LANGUAGE_CODE,
+        target=agent,
+        tool_name="add_user",
+        tool_description="Add a user.",
+        exposed_fields=exposed,
+    )
+    add_plugin(
+        placeholder=placeholder,
+        plugin_type="CreateModelAction",
+        language=settings.LANGUAGE_CODE,
+        target=tool,
+        config={"model": "auth.User", "field_mapping": {"username": "'placeholder'"}},
+    )
+    return agent
+
+
+@pytest.mark.django_db
+def test_a_call_that_cannot_be_valid_never_reaches_a_person(run_setup, settings):
+    """Approval is for calls that could run, not for every call.
+
+    A malformed one cannot run whatever anybody decides, so pausing for it
+    spends someone's attention on a decision with no outcome — and holds back
+    the error the model needs to correct itself until a human has been found.
+    """
+    settings.AUTOMATION_ALLOWED_MODELS = ["auth.User"]
+    _trigger, placeholder = run_setup
+    _create_agent(placeholder, settings, ["field_mapping"])
+    SCRIPT.append(says(calls=[ToolCall(id="c1", name="add_user", arguments={}, malformed=True)]))
+    SCRIPT.append(says(text="Never mind."))
+
+    _trigger.trigger_execution(data=[{"seed": 1}])
+
+    call = AutomationAction.objects.exclude(parent__isnull=True).latest("id")
+    assert call.state == COMPLETED, "it was refused, not queued for a person"
+    assert not call.requires_interaction, "nobody was asked to approve it"
+    observation = next(m for m in AgentState.load(agent_action()).messages if m["role"] == "tool")
+    assert "JSON" in observation["content"]
+
+
+@pytest.mark.django_db
+def test_arguments_a_person_could_not_fix_are_refused_before_the_gate(run_setup, settings):
+    """The same holds for arguments the action's own form rejects."""
+    settings.AUTOMATION_ALLOWED_MODELS = ["auth.User"]
+    _trigger, placeholder = run_setup
+    _create_agent(placeholder, settings, ["field_mapping"])
+    SCRIPT.append(says(calls=[ToolCall(id="c1", name="add_user", arguments={"field_mapping": {"nested": {"no": 1}}})]))
+    SCRIPT.append(says(text="Never mind."))
+
+    _trigger.trigger_execution(data=[{"seed": 1}])
+
+    call = AutomationAction.objects.exclude(parent__isnull=True).latest("id")
+    assert call.state == COMPLETED
+    assert not call.requires_interaction
+    assert AutomationAction.get_open_tasks(_open_task_user()) == (), "no task was left for anyone"
+
+
+def _open_task_user():
+    from django.contrib.auth import get_user_model
+
+    return get_user_model().objects.create(username="reviewer", is_superuser=True, is_staff=True)

@@ -79,6 +79,11 @@ decision is then made when the call happens rather than when you saved the form.
 Swap the action inside a tool for a more dangerous one and the gate appears on
 its own.
 
+A call is checked before it is put to anyone. Arguments that could not run —
+malformed JSON, a value the action's form rejects — come back to the model as a
+correctable error instead of becoming somebody's task; approval is for calls
+that could go ahead.
+
 An approval pauses the call as a normal human-in-the-loop step: it appears under
 *Automations → Execution Instances → Open tasks*, naming the tool, listing the
 arguments the model chose, and saying so when the action cannot be undone. It
