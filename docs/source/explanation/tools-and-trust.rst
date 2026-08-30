@@ -143,10 +143,15 @@ messages that survive that are repeated: they came from a field class, about a
 value the model itself sent. Everything else is the action author's code
 talking, and gets the generic reply.
 
-The copies are the fields the real validation used, replacements included, so
-the two agree about what a valid argument is. A probe holding the editor's own
-validator would answer a complaint about a bound value with a second complaint
-about arguments that were never wrong.
+Those fields are set up the way the real validation sets them up, replacements
+included, so the two agree about what a valid argument is — a probe holding the
+editor's own validator would answer a complaint about a bound value with a
+second complaint about arguments that were never wrong. But they come from a
+form of their own, built from the model's arguments alone. A field is not a
+constant: a form's ``__init__`` can read ``self.data`` and put what it finds
+into a validator or an error message, and a field taken from the real form
+carries that with it. Only a form that never saw a bound value can hand over one
+that never captured it.
 
 An author with something to tell the model anyway raises ``ToolError``, which is
 delivered as written. That is the one route, and it is explicit on purpose.

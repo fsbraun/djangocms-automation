@@ -318,22 +318,7 @@ def validate_arguments(
     supplied = {name: arguments.get(name) for name in permitted}
     placed = {name: value for name, value in (bound or {}).items() if name not in permitted}
     supplied.update(placed)
-    form = form_class(data=supplied)
-    # Fields the tool did not expose are the editor's to fill in. Those whose
-    # value is known are left in place so the form can validate as a whole;
-    # the rest are removed, because a value the editor writes as an expression
-    # is not known until the automation runs and must not be required of the
-    # model in the meantime.
-    for name in list(form.fields):
-        if name not in permitted and name not in supplied:
-            del form.fields[name]
-    for name in literal_mappings & permitted:
-        if name in form.fields:
-            form.fields[name] = forms.JSONField(
-                label=form.fields[name].label,
-                required=form.fields[name].required,
-                validators=[_validate_flat_mapping],
-            )
+    form = _prepared(form_class, supplied, permitted, literal_mappings)
 
     try:
         valid = form.is_valid()
@@ -371,10 +356,7 @@ def validate_arguments(
             # removed, and only the messages that still appear are repeated.
             # An action with something to say to the model regardless raises
             # ``ToolError``, which is delivered as written.
-            safe = _field_level_errors(
-                {name: field for name, field in form.fields.items() if name in permitted},
-                {name: arguments.get(name) for name in permitted},
-            )
+            safe = _field_level_errors(form_class, arguments, permitted, literal_mappings)
 
         detailed = [
             " ".join(errors) if name == NON_FIELD_ERRORS else f"{name}: {' '.join(errors)}"
@@ -397,7 +379,36 @@ def validate_arguments(
     return {name: value for name, value in form.cleaned_data.items() if name in permitted}
 
 
-def _field_level_errors(fields: dict, arguments: dict) -> dict:
+def _prepared(form_class: type[forms.Form], data: dict, permitted: set, literal_mappings: frozenset) -> forms.Form:
+    """The action's form, set up the way a tool call validates against it.
+
+    Fields the tool did not expose are the editor's to fill in. Those whose
+    value is known are left in place so the form can validate as a whole; the
+    rest are removed, because a value the editor writes as an expression is not
+    known until the automation runs and must not be required of the model in
+    the meantime.
+
+    Exposed fields the action reads as a mapping of expressions are replaced:
+    the editor's validator for those demands expression syntax, which is the
+    wrong question to ask a model.
+    """
+    form = form_class(data=data)
+    for name in list(form.fields):
+        if name not in permitted and name not in data:
+            del form.fields[name]
+    for name in literal_mappings & permitted:
+        if name in form.fields:
+            form.fields[name] = forms.JSONField(
+                label=form.fields[name].label,
+                required=form.fields[name].required,
+                validators=[_validate_flat_mapping],
+            )
+    return form
+
+
+def _field_level_errors(
+    form_class: type[forms.Form], arguments: dict, permitted: set, literal_mappings: frozenset
+) -> dict:
     """The complaints the fields themselves made about the model's own values.
 
     Which is *this is not a valid email address* and *this field is required* —
@@ -412,13 +423,22 @@ def _field_level_errors(fields: dict, arguments: dict) -> dict:
     test available here, like the field's own. Inheriting nothing is the only
     way to be sure nothing was inherited.
 
-    The fields are the ones the real form validated, replacements and all, so
-    the probe agrees with it about what a valid argument looks like. And the
-    data is the model's arguments alone: no bound value is present for a field
-    validator to find, quote, or complain about.
+    The fields are set up exactly as the real validation sets them up,
+    replacements and all, so the two agree about what a valid argument looks
+    like — but they come from a *fresh* form given the model's arguments and
+    nothing else. A field object is not a constant: ``__init__`` may reach into
+    ``self.data``, and a field copied from the real form carries whatever it
+    found there, error message and all. Only a form that never saw a bound
+    value can hand over one that never captured it.
     """
-    probe = type("_FieldsOnly", (forms.Form,), {})(data=arguments)
-    probe.fields = {name: copy.deepcopy(field) for name, field in fields.items()}
+    values = {name: arguments.get(name) for name in permitted}
+    try:
+        source = _prepared(form_class, values, permitted, literal_mappings)
+    except Exception:  # a form that will not build without the editor's half
+        logger.warning("automation.tool.probe_unavailable", exc_info=True)
+        return {}
+    probe = type("_FieldsOnly", (forms.Form,), {})(data=values)
+    probe.fields = {name: copy.deepcopy(field) for name, field in source.fields.items() if name in permitted}
     probe.is_valid()
     return dict(probe.errors)
 

@@ -2440,3 +2440,38 @@ def test_the_probe_holds_a_literal_mapping_to_the_same_rules_as_the_call():
         )
     assert "expression syntax" not in str(refused.value), "the model's arguments were fine"
     assert "not something you can change" in str(refused.value)
+
+
+def test_a_field_configured_from_bound_data_does_not_carry_it_into_the_probe():
+    """A field object is not a constant.
+
+    A form's ``__init__`` may reach into ``self.data`` and build a validator or
+    an error message out of what it finds. Copy that field into the probe and
+    the probe inherits the capture — it never runs the author's code and still
+    reports the author's secret, as something the field itself said.
+    """
+    from django import forms as django_forms
+
+    from djangocms_automation.tools import ToolValidationError, validate_arguments
+
+    class ChargeForm(django_forms.Form):
+        amount = django_forms.IntegerField()
+        credentials = django_forms.JSONField()
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            key = (self.data.get("credentials") or {}).get("api_key", "")
+
+            def under_policy(value):
+                raise django_forms.ValidationError(f"policy for {key} rejected this")
+
+            self.fields["amount"].validators.append(under_policy)
+
+    with pytest.raises(ToolValidationError) as refused:
+        validate_arguments(
+            ChargeForm,
+            {"amount": 500},
+            allowed=["amount"],
+            bound={"credentials": {"api_key": "sk-secret-123"}},
+        )
+    assert "sk-secret-123" not in str(refused.value), "the probe's field never saw it"
