@@ -1335,3 +1335,81 @@ def test_a_name_the_editor_typed_is_checked_in_the_editor(run_setup, settings):
     tool.tool_name = "not a legal name!"
 
     assert any("cannot be a tool name" in str(message) for message in tool.tool_messages())
+
+
+@pytest.mark.django_db
+def test_a_required_checkbox_must_still_be_ticked(run_setup, settings):
+    """Whether an input is filled in is a question only the field can answer.
+
+    ``0`` satisfies an IntegerField; an unticked box does not satisfy a
+    required BooleanField. No test of emptiness written here gets both right,
+    so the field is asked.
+    """
+    from django import forms as django_forms
+    from django.contrib.admin.sites import AdminSite
+    from django.test import RequestFactory
+
+    from djangocms_automation.cms_plugins import ActionPlugin
+
+    class ConfirmForm(django_forms.Form):
+        count = django_forms.IntegerField()
+        confirmed = django_forms.BooleanField()
+
+    class Confirming(ActionPlugin):
+        data_form = ConfirmForm
+        convert_data_form = False
+
+    _trigger, placeholder = run_setup
+    ai = add_step(placeholder, settings)
+    plugin = Confirming(ActionPlugin.model, AdminSite())
+    request = RequestFactory().get(f"/?plugin_parent={ai.pk}")
+    request.user = None
+    form_class = plugin.get_form(request, None)
+
+    unticked = form_class(data={"count": 0, "comment": ""})
+    assert not unticked.is_valid(), "an unticked required box is not filled in"
+    assert "confirmed" in unticked.errors
+    assert "count" not in unticked.errors, "but zero is a value"
+
+    assert form_class(data={"count": 0, "confirmed": "on", "comment": ""}).is_valid()
+
+    left_to_the_model = form_class(data={"count": 0, "model_fills__confirmed": "on", "comment": ""})
+    assert left_to_the_model.is_valid(), "unless the model fills it"
+
+
+@pytest.mark.django_db
+def test_fields_grouped_on_one_line_get_their_switches(run_setup, settings):
+    """A fieldset entry can be a tuple rendered on one line.
+
+    Counted as placed but never paired, those inputs kept their switches out of
+    every fieldset — so the admin drew none of them.
+    """
+    from django import forms as django_forms
+    from django.contrib.admin.sites import AdminSite
+    from django.test import RequestFactory
+
+    from djangocms_automation.cms_plugins import ActionPlugin
+
+    class PairForm(django_forms.Form):
+        first = django_forms.CharField()
+        second = django_forms.CharField()
+
+    class Grouped(ActionPlugin):
+        data_form = PairForm
+        convert_data_form = False
+        fieldsets = [(None, {"fields": [("first", "second")]})]
+
+    _trigger, placeholder = run_setup
+    ai = add_step(placeholder, settings)
+    plugin = Grouped(ActionPlugin.model, AdminSite())
+    request = RequestFactory().get(f"/?plugin_parent={ai.pk}")
+    request.user = None
+
+    rendered = [
+        name
+        for _label, options in plugin.get_fieldsets(request, None)
+        for entry in options["fields"]
+        for name in (entry if isinstance(entry, (list, tuple)) else [entry])
+    ]
+
+    assert "model_fills__first" in rendered and "model_fills__second" in rendered

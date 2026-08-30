@@ -354,16 +354,26 @@ class ActionPlugin(AutomationPlugin):
         entries naming one of its inputs become a two-item row.
         """
         inputs = set(self.data_form.base_fields)
-        paired = []
-        for label, options in fieldsets:
-            fields = []
-            for entry in options.get("fields") or ():
-                if isinstance(entry, str) and entry in inputs:
-                    fields.append((entry, self.MODEL_FILLS + entry))
-                else:
-                    fields.append(entry)
-            paired.append((label, {**options, "fields": fields}))
-        return paired
+
+        def paired_entry(entry):
+            # A fieldset entry is a field name or a tuple of them rendered on
+            # one line. Both can name inputs, and a switch left out of either
+            # is a control the admin never draws.
+            if isinstance(entry, (list, tuple)):
+                names = []
+                for name in entry:
+                    names.append(name)
+                    if name in inputs:
+                        names.append(self.MODEL_FILLS + name)
+                return tuple(names)
+            if entry in inputs:
+                return (entry, self.MODEL_FILLS + entry)
+            return entry
+
+        return [
+            (label, {**options, "fields": [paired_entry(entry) for entry in options.get("fields") or ()]})
+            for label, options in fieldsets
+        ]
 
     def _add_wiring_switch(self, fields, name, wired, exposed):
         """The companion switch for one input.
@@ -601,9 +611,12 @@ class WiredInputsMixin:
                 continue
             if cleaned.get(plugin.MODEL_FILLS + name):
                 continue
-            # The field's own idea of empty, not truthiness: ``0`` and ``False``
-            # are values somebody chose, and a required IntegerField holding
-            # zero is filled in.
-            if cleaned.get(name) in declared.empty_values:
+            # Asked of the field itself, because "is this filled in" is a
+            # question only it can answer. ``0`` satisfies an IntegerField and
+            # an unticked box does not satisfy a required BooleanField, and no
+            # test of emptiness written here gets both right.
+            try:
+                declared.validate(cleaned.get(name))
+            except django_forms.ValidationError:
                 self.add_error(name, _("Enter a value, or let the model decide."))
         return cleaned

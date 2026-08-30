@@ -274,6 +274,20 @@ class Command(BaseCommand):
 
         placeholder = self._placeholder(content, "start")
         AutomationTrigger.objects.create(automation_content=content, slot="start", type="click", position=0, config={})
+        # Started by hand from the admin, so it arrives with no data at all —
+        # the article to work on has to be fetched rather than assumed.
+        add_plugin(
+            placeholder=placeholder,
+            plugin_type="QueryModelAction",
+            language=LANGUAGE,
+            config={
+                "model": "demoproject.Article",
+                "filters": {},
+                "fields": "slug,title",
+                "order_by": "-updated",
+                "limit": 1,
+            },
+        )
         step = add_plugin(
             placeholder=placeholder,
             plugin_type="AIStep",
@@ -281,7 +295,7 @@ class Command(BaseCommand):
             config={
                 "model": DUMMY_MODEL,
                 "prompt": (
-                    "Retitle the article so it reads better, then publish it.\n\n"
+                    "Retitle {{ title }} so it reads better, then publish it.\n\n"
                     '!call publish_article {"field_mapping": {"title": "A clearer title"}}'
                 ),
             },
@@ -351,7 +365,7 @@ class Command(BaseCommand):
                     "Score this lead hot, warm or cold from what they wrote, and give back "
                     "the address it came from.\n\n"
                     "{{ email }} at {{ company }}: {{ message }}\n\n"
-                    '!json {"score": "hot", "email": "{{ email }}"}'
+                    '!json {"score": "hot", "email": "{{ email }}", "company": "{{ company }}"}'
                 ),
                 # The answer *becomes* the automation's data, so anything a
                 # later step needs has to be part of it — the address included,
@@ -361,6 +375,9 @@ class Command(BaseCommand):
                     "properties": {
                         "score": {"type": "string", "enum": ["hot", "warm", "cold"]},
                         "email": {"type": "string", "format": "email"},
+                        # Carried only because the email below says it. Anything
+                        # left out of the answer is gone by the time it renders.
+                        "company": {"type": "string"},
                     },
                     "required": ["score", "email"],
                     "additionalProperties": False,
