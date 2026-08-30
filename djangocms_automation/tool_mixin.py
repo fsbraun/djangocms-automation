@@ -208,8 +208,13 @@ class ToolMixin:
         return arguments, None
 
     def _rows_to_check(self, rows: list | None) -> list:
-        """Every row the action will run against, or one empty one."""
-        actual = [row for row in (rows or []) if isinstance(row, dict)]
+        """Every row the action will run against, or one empty one.
+
+        Normalised the way the actions themselves normalise: a row that is not
+        a mapping is run as ``{"value": row}``, so discarding it here would let
+        it through unchecked while it still had effects.
+        """
+        actual = [row if isinstance(row, dict) else {"value": row} for row in (rows or [])]
         return actual or [{}]
 
     def _bound_values_for(self, row: dict, rows: list) -> dict:

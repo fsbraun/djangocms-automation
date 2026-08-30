@@ -1627,3 +1627,71 @@ def test_a_submitted_field_cannot_claim_to_be_somebody():
 
     assert 'payload["user_id"] = request.user.pk if request.user.is_authenticated else None' in source
     assert 'if "user_id" not in payload' not in source, "assigned, never merged"
+
+
+@pytest.mark.django_db
+def test_a_second_turn_keeps_what_the_first_one_had(run_setup, settings, django_user_model):
+    """Coming back to itself, an action reuses its own input.
+
+    A join waking, a paused action revived, an approval going ahead — none of
+    them carry data, and the instance holds the trigger's payload until the run
+    ends. Falling back to that hands the second turn the input of the first
+    step, so a tool called after one has already run loses every field produced
+    since.
+    """
+    from django.core import mail
+
+    settings.AUTOMATION_ALLOWED_MODELS = ["auth.User"]
+    django_user_model.objects.create(username="ada", email="ada@example.com")
+
+    trigger, placeholder = run_setup
+    add_plugin(
+        placeholder=placeholder,
+        plugin_type="QueryModelAction",
+        language=settings.LANGUAGE_CODE,
+        config={"model": "auth.User", "filters": {"username": "'ada'"}, "fields": "email", "limit": 1},
+    )
+    ai = add_step(placeholder, settings)
+    add_tool(placeholder, ai, settings, tool_name="look")
+    add_tool(
+        placeholder,
+        ai,
+        settings,
+        plugin_type="MailAction",
+        tool_name="reply",
+        exposed_fields=["subject"],
+        requires_approval=False,
+        config={"recipient_email": "email", "subject": "'x'", "body": "x"},
+    )
+
+    # Two turns: something harmless, then the one that needs the queried row.
+    SCRIPT.append(says(calls=[ToolCall(id="c1", name="look", arguments={})]))
+    SCRIPT.append(says(calls=[ToolCall(id="c2", name="reply", arguments={"subject": "Ship it"})]))
+    SCRIPT.append(says(text="Sent."))
+
+    trigger.trigger_execution(data=[{"seed": 1}])
+
+    assert step_action().state == COMPLETED
+    assert mail.outbox, "the second turn's tool ran"
+    assert mail.outbox[-1].to == ["ada@example.com"], "against the row the query produced"
+
+
+@pytest.mark.django_db
+def test_a_row_that_is_not_a_mapping_is_checked_too(run_setup, settings):
+    """Actions run a bare value as ``{"value": row}``.
+
+    Dropping such a row from the check would let it through unvalidated while
+    it still had effects.
+    """
+    from cms.plugin_pool import plugin_pool
+
+    _trigger, placeholder = run_setup
+    ai = add_step(placeholder, settings)
+    tool = add_tool(placeholder, ai, settings, plugin_type="MailAction", tool_name="reply")
+    instance = plugin_pool.get_plugin("MailAction").model.objects.get(pk=tool.pk)
+
+    assert instance._rows_to_check(["ada@example.com", {"a": 1}]) == [
+        {"value": "ada@example.com"},
+        {"a": 1},
+    ]
+    assert instance._rows_to_check([]) == [{}], "and a call with no data is still checked once"

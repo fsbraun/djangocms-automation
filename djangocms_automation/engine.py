@@ -682,7 +682,17 @@ def run_action(action_id: int, data=None, single_step: bool = False) -> None:
 
     plugin_map = build_plugin_map(pending.automation_instance.automation_content_id)
     plugin = plugin_map.get(pending.plugin_ptr)
-    rows = normalize_rows(data if data is not None else pending.automation_instance.data)
+    # Nothing passed means this is the action coming back to itself — a join
+    # waking, a paused action revived, an approval going ahead. What it had is
+    # on the row; the instance holds the trigger's payload until the run ends,
+    # so falling back to that would hand a second turn the input of the first
+    # step, discarding everything produced since.
+    if data is not None:
+        rows = normalize_rows(data)
+    elif pending.input_data is not None:
+        rows = normalize_rows(pending.input_data)
+    else:
+        rows = normalize_rows(pending.automation_instance.data)
 
     claim_updates = None
     if plugin is not None:
