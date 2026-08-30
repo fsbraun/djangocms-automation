@@ -90,6 +90,11 @@ Leaving it empty keeps the current behaviour: anything is accepted. Filling it
 in makes the trigger check its payload, and gives a caller something to read
 before calling — ``AutomationTrigger.data_schema`` returns it.
 
+The field editor covers a flat record: name each field, choose its type, mark
+required fields, and describe them for the next caller. **Edit as JSON** keeps
+the existing escape hatch for schemas that use nesting or other advanced JSON
+Schema features; such values are never simplified automatically.
+
 ``additionalProperties: false`` is required rather than encouraged, because
 this schema is the trigger's answer to "what may I send you", and one that
 permits anything extra does not answer it.

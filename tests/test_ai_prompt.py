@@ -342,6 +342,7 @@ def test_llm_form_valid_and_default_model(llm_settings):
     )
     assert form.fields["model"].initial == "openai/gpt-4.1"
     assert form.is_valid(), form.errors
+    assert form.cleaned_data["output_schema"] == {"type": "object", "additionalProperties": False}
 
 
 @pytest.mark.django_db

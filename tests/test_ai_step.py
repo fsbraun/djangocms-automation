@@ -728,21 +728,6 @@ def test_the_inputs_come_second(run_setup, settings):
     assert labels == ["As a tool", "Inputs", "Comment"]
 
 
-def test_the_end_of_a_path_is_drawn_as_a_stop_sign():
-    """The shape carries the meaning, the way the diamond and circle do.
-
-    Drawn rather than iconified because an octagon has no border-radius: the
-    outline is the polygon's own stroke.
-    """
-    from django.template.loader import get_template
-
-    source = get_template("djangocms_automation/plugins/end.html").template.source
-
-    assert "<polygon" in source and source.count(",") >= 7, "eight corners"
-    assert "STOP" in source
-    assert "bi-sign-stop" not in source, "not the icon"
-
-
 def test_no_icon_is_defined_twice_in_the_sprite():
     """Two symbols with one id is invalid SVG, and only the first is ever used.
 

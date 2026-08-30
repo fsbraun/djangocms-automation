@@ -1,16 +1,27 @@
+from __future__ import annotations
+
 import json
 from collections.abc import Iterable
+from typing import TYPE_CHECKING
 
 from django import forms
 from django.utils.html import escape
 from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
 
-from .triggers import Trigger, trigger_registry
+if TYPE_CHECKING:
+    from .triggers import Trigger
+
+
+def _trigger_registry():
+    """Import lazily so trigger declarations may themselves use our widgets."""
+    from .triggers import trigger_registry
+
+    return trigger_registry
 
 
 def _get_trigger(trigger_id: str) -> Trigger | None:
-    return trigger_registry.get(trigger_id)
+    return _trigger_registry().get(trigger_id)
 
 
 class TriggerSelectWidget(forms.Select):
@@ -31,7 +42,7 @@ class TriggerSelectWidget(forms.Select):
         super().__init__(attrs, choices=self._build_choices())
 
     def _build_choices(self):
-        return trigger_registry.get_choices()
+        return _trigger_registry().get_choices()
 
     def render(self, name, value, attrs=None, renderer=None):
         if value is None:
@@ -88,6 +99,81 @@ class TriggerSelectWidget(forms.Select):
                     "schema": schema_str,
                 }
         return json.dumps(mapping, ensure_ascii=False)
+
+
+class SchemaWidget(forms.Textarea):
+    """Progressively enhanced editor for a deliberately small JSON Schema subset.
+
+    The textarea remains the only successful form control. JavaScript turns it
+    into a table for flat object schemas and keeps the JSON value synchronized;
+    without JavaScript it stays a normal textarea, preserving the field's
+    existing behaviour and validation path.
+    """
+
+    schema_types = (
+        ("string", _("Text")),
+        ("number", _("Number")),
+        ("integer", _("Whole number")),
+        ("boolean", _("Yes / no")),
+        ("string_array", _("List of text")),
+    )
+
+    class Media:
+        js = ("djangocms_automation/js/schema_widget.js",)
+        css = {"all": ("djangocms_automation/css/schema_widget.css",)}
+
+    def __init__(self, attrs=None):
+        defaults = {"rows": 12, "class": "schema-widget-source"}
+        if attrs:
+            supplied = dict(attrs)
+            if supplied.get("class"):
+                defaults["class"] = f"{defaults['class']} {supplied.pop('class')}"
+            defaults.update(supplied)
+        super().__init__(defaults)
+
+    def format_value(self, value):
+        if value in (None, ""):
+            return ""
+        if isinstance(value, str):
+            return value
+        return json.dumps(value, indent=2, ensure_ascii=False)
+
+    def render(self, name, value, attrs=None, renderer=None):
+        value_json = self.format_value(value)
+        textarea_attrs = self.build_attrs(self.attrs, attrs)
+        textarea_attrs["name"] = name
+        textarea = f"<textarea{forms.utils.flatatt(textarea_attrs)}>{escape(value_json)}</textarea>"
+
+        source_id = textarea_attrs.get("id", name)
+        container_attrs = {
+            "id": f"{source_id}_builder",
+            "class": "schema-widget",
+            "data-schema-types": json.dumps(
+                [{"value": key, "label": str(label)} for key, label in self.schema_types],
+                ensure_ascii=False,
+            ),
+            "data-field-label": str(_("Field")),
+            "data-type-label": str(_("Type")),
+            "data-required-label": str(_("Required")),
+            "data-description-label": str(_("Description")),
+            "data-choices-label": str(_("Choices")),
+            "data-choices-help": str(_("One choice per line")),
+            "data-add-label": str(_("Add a field")),
+            "data-remove-label": str(_("Remove field")),
+            "data-name-required": str(_("Enter a field name.")),
+            "data-name-duplicate": str(_("Field names must be unique.")),
+            "data-json-label": str(_("Edit as JSON")),
+            "data-builder-label": str(_("Use field editor")),
+            "data-consequence": str(_("Anything not listed here is refused.")),
+            "data-unsupported": str(
+                _(
+                    "This schema uses features the editor cannot show — nesting, oneOf, or a pattern. "
+                    "Edit it as JSON, or simplify it."
+                )
+            ),
+        }
+        container = f"<div{forms.utils.flatatt(container_attrs)}></div>"
+        return mark_safe(textarea + container)
 
 
 class ConditionBuilderWidget(forms.Widget):

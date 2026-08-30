@@ -33,6 +33,7 @@ from ..models import BaseActionPluginModel
 from ..tool_mixin import called_as_tool
 from ..tools import ToolResult
 from ..utilities.templates import validate_template
+from ..widgets import SchemaWidget
 from . import llm
 from .budget import AgentBudget, BudgetExceeded
 from .state import AgentState
@@ -81,14 +82,15 @@ class AIStepForm(forms.Form):
         validators=[validate_template],
         help_text=_("What to do this run. Supports {{ dotted.path }} substitution."),
     )
-    output_schema = forms.CharField(
+    output_schema = forms.JSONField(
         label=_("Output shape"),
         required=False,
-        widget=forms.Textarea(attrs={"rows": 4}),
+        widget=SchemaWidget(),
         validators=[_validate_json_schema],
+        error_messages={"invalid": _("Invalid JSON.")},
         help_text=_(
-            "Optional JSON schema. When set, the answer is constrained to valid JSON and "
-            "becomes the new data rows (an array) or a single row (an object)."
+            "Describe the fields the answer must contain. Field descriptions are read by the model and shape "
+            "what it puts there. The answer becomes the new data rows."
         ),
     )
     max_turns = forms.IntegerField(

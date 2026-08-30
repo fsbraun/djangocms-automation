@@ -176,6 +176,11 @@ Without tools, an **Output shape** constrains the answer to a JSON schema: an
 object becomes one data row, an array becomes rows. Downstream steps can then
 read a field instead of parsing prose.
 
+For an object answer, use the field editor to name and describe each value the
+model should produce. Those descriptions are part of the prompt the model sees.
+Use **Edit as JSON** for an array or a schema outside the flat-object editor;
+the original JSON is kept intact when the editor cannot represent it.
+
 A step that has tools ignores it and says so in the editor. Constraining the
 answer and offering tools on the same turn is provider-specific, and behaving
 differently per provider is worse than declining.

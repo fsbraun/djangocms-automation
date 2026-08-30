@@ -157,41 +157,6 @@ body {
         min-height: 75px;
     }
 
-    /* The end of a path: an octagon, which no border-radius can make, so the
-       shape and its outline are the polygon's own. The card's chrome is turned
-       off and the drawing is the node. */
-    .automation-end {
-        width: 75px;
-        height: 75px;
-        min-height: 75px;
-        border: none;
-        background: none;
-        box-shadow: none;
-        > svg.stop-sign {
-            /* The card centres and enlarges an icon; this is not an icon. */
-            zoom: 100%;
-            position: static;
-            transform: none;
-            display: block;
-            overflow: visible;
-            filter: drop-shadow(0 0 5px color-mix(in srgb, var(--dca-black) 20%, transparent));
-            polygon {
-                fill: var(--dca-white);
-                stroke: var(--dca-black);
-                stroke-width: 2;
-                stroke-linejoin: round;
-            }
-            text {
-                fill: var(--dca-black);
-                font-size: 22px;
-                font-weight: bold;
-                letter-spacing: 1px;
-                text-anchor: middle;
-                dominant-baseline: middle;
-            }
-        }
-    }
-
     .automation-noop {
         width: 0;
         height: 0;

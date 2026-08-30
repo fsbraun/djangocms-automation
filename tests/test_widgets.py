@@ -1,9 +1,9 @@
-"""Tests for TriggerSelectWidget and ConditionBuilderWidget rendering and value extraction."""
+"""Tests for the custom structured-value widgets."""
 
 import json
 
 from djangocms_automation.triggers import trigger_registry
-from djangocms_automation.widgets import ConditionBuilderWidget, TriggerSelectWidget
+from djangocms_automation.widgets import ConditionBuilderWidget, SchemaWidget, TriggerSelectWidget
 
 
 def test_trigger_select_widget_renders_choices_and_description():
@@ -62,3 +62,54 @@ def test_condition_builder_widget_renders_and_extracts():
         "condition": json.dumps({"logic": "and", "conditions": [{"field": "", "operator": "==", "value": ""}]})
     }
     assert widget.value_from_datadict(empty_data, None, "condition") == ""
+
+
+def test_schema_widget_renders_dict_as_the_single_fallback_textarea():
+    widget = SchemaWidget()
+    schema = {
+        "type": "object",
+        "properties": {"email": {"type": "string", "description": "Who wrote in"}},
+        "required": ["email"],
+        "additionalProperties": False,
+    }
+
+    html = widget.render("data_schema", schema, attrs={"id": "id_data_schema"})
+
+    assert html.count('name="data_schema"') == 1, "only one value is posted"
+    assert '<textarea class="schema-widget-source"' in html
+    assert 'id="id_data_schema_builder"' in html
+    assert "Who wrote in" in html
+    assert "Anything not listed here is refused." in html
+
+
+def test_schema_widget_preserves_raw_json_for_the_escape_hatch():
+    widget = SchemaWidget()
+    raw = '{\n  "oneOf": [{"type": "string"}, {"type": "number"}]\n}'
+
+    html = widget.render("schema", raw)
+
+    assert "&quot;oneOf&quot;" in html
+    assert "This schema uses features the editor cannot show" in html
+    assert widget.value_from_datadict({"schema": raw}, {}, "schema") == raw
+
+
+def test_schema_widget_declares_its_assets():
+    media = SchemaWidget().media
+
+    assert "djangocms_automation/js/schema_widget.js" in media._js
+    assert "djangocms_automation/css/schema_widget.css" in media._css["all"]
+
+
+def test_both_schema_fields_use_the_same_json_widget(settings):
+    from django import forms
+
+    from djangocms_automation.ai.step import AIStepForm
+    from djangocms_automation.triggers import CodeTrigger
+
+    settings.AUTOMATION_LLM_MODELS = ["anthropic/claude-opus-4-8"]
+    assert isinstance(CodeTrigger.base_fields["data_schema"], forms.JSONField)
+    assert isinstance(CodeTrigger.base_fields["data_schema"].widget, SchemaWidget)
+    assert isinstance(AIStepForm.base_fields["output_schema"], forms.JSONField)
+    assert isinstance(AIStepForm.base_fields["output_schema"].widget, SchemaWidget)
+    assert "schema_widget.js" in str(CodeTrigger().media)
+    assert "schema_widget.js" in str(AIStepForm().media)

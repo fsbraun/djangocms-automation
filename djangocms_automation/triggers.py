@@ -34,6 +34,7 @@ from django.utils.timezone import now
 from django.utils.translation import gettext_lazy as _
 
 from .utilities.json import cleaned_data_to_json_serializable
+from .widgets import SchemaWidget
 
 try:  # Optional dependency, added to pyproject but keep graceful fallback
     from jsonschema import Draft202012Validator, ValidationError
@@ -527,12 +528,11 @@ class CodeTrigger(Trigger):
     data_schema = forms.JSONField(
         label=_("Data schema"),
         required=False,
-        widget=forms.Textarea(attrs={"rows": 8}),
+        widget=SchemaWidget(),
         validators=[_validate_data_schema],
         help_text=_(
-            "Optional JSON schema describing the data this automation expects to be "
-            'called with, e.g. {"type": "object", "properties": {"email": {"type": "string"}}, '
-            '"required": ["email"], "additionalProperties": false}. Leave empty to accept anything.'
+            "Describe the fields callers must send. Descriptions document the contract for the next person. "
+            "Leave empty to accept anything."
         ),
     )
 

@@ -1,0 +1,125 @@
+.schema-widget-source {
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 14rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.schema-widget-source--hidden {
+    display: none;
+}
+
+.schema-widget {
+    width: 100%;
+}
+
+.schema-widget__table-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--hairline-color, #ddd);
+    border-radius: var(--border-radius, 4px);
+}
+
+.schema-widget__table {
+    width: 100%;
+    min-width: 52rem;
+    border-collapse: collapse;
+    background: var(--body-bg, #fff);
+}
+
+.schema-widget__table th,
+.schema-widget__table td {
+    padding: 0.5rem;
+    border-bottom: 1px solid var(--hairline-color, #ddd);
+    text-align: left;
+    vertical-align: middle;
+}
+
+.schema-widget__table th {
+    color: var(--body-quiet-color, #666);
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    background: var(--darkened-bg, #f8f8f8);
+}
+
+.schema-widget__table tbody tr:last-child td {
+    border-bottom: 0;
+}
+
+.schema-widget__table input[type="text"],
+.schema-widget__table select,
+.schema-widget__table textarea {
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 8rem;
+    margin: 0;
+}
+
+.schema-widget__table textarea {
+    min-height: 2.25rem;
+    resize: vertical;
+}
+
+.schema-widget__required,
+.schema-widget__remove-cell,
+.schema-widget__not-applicable {
+    width: 1%;
+    text-align: center !important;
+}
+
+.schema-widget__required input {
+    margin: 0;
+}
+
+.schema-widget__input--invalid {
+    border-color: var(--error-fg, #ba2121) !important;
+}
+
+.schema-widget__controls {
+    margin-top: 0.75rem;
+}
+
+.schema-widget__footer {
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 0.75rem;
+}
+
+.schema-widget__consequence,
+.schema-widget__notice {
+    margin: 0;
+    color: var(--body-quiet-color, #666);
+}
+
+.schema-widget__notice {
+    box-sizing: border-box;
+    width: 100%;
+    margin: 0.75rem 0;
+    padding: 0.75rem 1rem;
+    border-left: 3px solid var(--message-warning-bg, #f0ad4e);
+    background: var(--darkened-bg, #f8f8f8);
+}
+
+.schema-widget__toggle {
+    white-space: nowrap;
+}
+
+.schema-widget__remove {
+    display: inline-block;
+    width: 1.25rem;
+    height: 1.25rem;
+    padding: 0;
+    border: 0;
+    background-color: transparent;
+    cursor: pointer;
+}
+
+@media (max-width: 767px) {
+    .schema-widget__footer {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+}
