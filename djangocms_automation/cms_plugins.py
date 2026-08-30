@@ -222,6 +222,21 @@ class ActionPlugin(AutomationPlugin):
     #: It sets the automatic approval gate when the action is used as a tool.
     destructive = False
 
+    #: What a model is told this action returned, when it is used as a tool.
+    #:
+    #: ``"changes"`` — only what the action added to the rows it was handed.
+    #: The default, and the safe one: most actions pass their input through and
+    #: add a field, so reporting the rows would hand back whatever the
+    #: automation happens to be carrying.
+    #:
+    #: ``"rows"`` — the rows themselves, for an action whose answer *is* data.
+    #: A lookup has to say this, or it reports nothing worth having.
+    #:
+    #: Cardinality cannot tell the two apart — an action that filters its input
+    #: returns fewer rows without having produced any, and a lookup can return
+    #: exactly as many as it was given — so the action says which it is.
+    reports_to_model = "changes"
+
     #: Whether an editor may offer this action to a model. True for everything
     #: by default: an action is a capability, and which capabilities an agent is
     #: given is the editor's decision rather than the author's. Set False for an
@@ -520,6 +535,7 @@ class UpdateModelAction(ActionPlugin):
 @register_automation_plugin
 class QueryModelAction(ActionPlugin):
     name = _("Query Records")
+    reports_to_model = "rows"  # the records found are the answer
     module = Module.ACTION
     icon = "bi-database-down"
 

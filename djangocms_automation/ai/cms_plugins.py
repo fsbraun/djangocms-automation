@@ -21,6 +21,7 @@ class AIStep(ActionPlugin):
     icon = "bi-stars"
 
     model = step.AIStepPluginModel
+    reports_to_model = "rows"  # the answer is the step's own product
     data_form = step.AIStepForm
     convert_data_form = False
     render_template = "djangocms_automation/plugins/ai_step.html"

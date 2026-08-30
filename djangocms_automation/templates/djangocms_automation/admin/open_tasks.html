@@ -39,10 +39,20 @@
                     {% comment %}
                     What the automation fixed rather than the model — the
                     recipient, the record. Approving without it is approving a
-                    sentence with no subject.
+                    sentence with no subject. One group per row the call will
+                    act on: an action runs over every row it is given, so
+                    showing the first recipient and then sending to five is an
+                    approval of something that did not happen.
                     {% endcomment %}
-                    {% for name, value in task.result.bound.items %}
+                    {% for values in task.result.bound %}
+                    {% if task.result.bound|length > 1 %}
+                    <tr><th colspan="2" class="automation-bound-group">
+                        {% blocktranslate with number=forloop.counter total=task.result.bound|length %}Target {{ number }} of {{ total }}{% endblocktranslate %}
+                    </th></tr>
+                    {% endif %}
+                    {% for name, value in values.items %}
                     <tr><th>{{ name }}</th><td>{{ value }} <em>{% translate "set by the automation" %}</em></td></tr>
+                    {% endfor %}
                     {% endfor %}
                 </table>
                 {% endif %}

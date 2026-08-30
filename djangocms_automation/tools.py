@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
 from django import forms
-from django.core.exceptions import ValidationError
+from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
 
 __all__ = [
     "TOOL_NAME_RE",
@@ -315,7 +315,8 @@ def validate_arguments(
         )
 
     supplied = {name: arguments.get(name) for name in permitted}
-    supplied.update({name: value for name, value in (bound or {}).items() if name not in permitted})
+    placed = {name: value for name, value in (bound or {}).items() if name not in permitted}
+    supplied.update(placed)
     form = form_class(data=supplied)
     # Fields the tool did not expose are the editor's to fill in. Those whose
     # value is known are left in place so the form can validate as a whole;
@@ -352,12 +353,24 @@ def validate_arguments(
         ) from exc
     if not valid:
         # Said in full only about the fields the model filled in. A complaint
-        # about a bound field, or about the combination of the two, is a
-        # validator's message written for an administrator — it may quote the
-        # value it objected to, and that value is one the model was
-        # deliberately not shown.
-        detailed = [f"{name}: {' '.join(errors)}" for name, errors in form.errors.items() if name in permitted]
-        withheld = [name for name in form.errors if name not in permitted]
+        # about a bound field is a validator's message written for an
+        # administrator — it may quote the value it objected to, and that value
+        # is one the model was deliberately not shown.
+        actionable = set(permitted)
+        if not placed:
+            # No editor-supplied value went into this form, so every field in
+            # it is one the model filled. A complaint about their combination
+            # is therefore about the model's own work and can name nothing it
+            # was not already shown — telling it instead that the values cannot
+            # be changed would be false, and would leave it unable to correct a
+            # mistake it is entirely responsible for.
+            actionable.add(NON_FIELD_ERRORS)
+        detailed = [
+            " ".join(errors) if name == NON_FIELD_ERRORS else f"{name}: {' '.join(errors)}"
+            for name, errors in form.errors.items()
+            if name in actionable
+        ]
+        withheld = [name for name in form.errors if name not in actionable]
         if withheld:
             logger.warning(
                 "automation.tool.rejected_bound_value",

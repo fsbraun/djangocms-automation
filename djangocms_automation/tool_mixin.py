@@ -223,26 +223,16 @@ class ToolMixin:
         return actual or [{}]
 
     def _bound_values_for(self, row: dict, rows: list) -> dict:
-        """What the editor configured, as it resolves against a single row."""
-        from cms.plugin_pool import plugin_pool
+        """What the editor configured, as the values the action will use here.
 
-        try:
-            plugin = plugin_pool.get_plugin(self.plugin_type)
-        except KeyError:
-            return {}
-        exposed = set(self.tool_inputs())
-        configured = {name: value for name, value in (self.config or {}).items() if name not in exposed}
-        if getattr(plugin, "convert_data_form", True) is False:
-            return configured  # already literal values
-        return self._bound_for_row(configured, row, rows)
+        Not the expressions but what they come to, against *this* row. They are
+        knowable — the automation's data is in hand, and resolving them is what
+        the action is about to do anyway — so a cross-field ``clean`` sees the
+        same pair of values the action will, rather than one half and a hole.
 
-    def _bound_values(self, rows: list | None = None) -> dict:
-        """What the editor configured, as the values the action will actually use.
-
-        Not the expressions but what they come to. They are knowable here — the
-        automation's data is in hand, and resolving them is what the action is
-        about to do anyway — so a cross-field ``clean`` sees the same pair of
-        values the action will, rather than one half and a hole.
+        Per row, because an action runs over every row it is given and an
+        expression resolves differently against each: the recipient of row one
+        is not the recipient of row two.
 
         An input whose expression will not resolve is left out rather than
         guessed at: that is the action's own problem to report when it runs,
@@ -258,9 +248,6 @@ class ToolMixin:
         configured = {name: value for name, value in (self.config or {}).items() if name not in exposed}
         if getattr(plugin, "convert_data_form", True) is False:
             return configured  # already literal values
-
-        rows = rows or []
-        row = rows[0] if rows and isinstance(rows[0], dict) else {}
         return self._bound_for_row(configured, row, rows)
 
     def _bound_for_row(self, configured: dict, row: dict, rows: list) -> dict:
@@ -521,16 +508,29 @@ class ToolMixin:
         rows — is reported in full. That is the case the distinction exists to
         keep working.
         """
-        given = [row if isinstance(row, dict) else {"value": row} for row in (given or [])]
-        produced = [row if isinstance(row, dict) else {"value": row} for row in (produced or [])]
+        from cms.plugin_pool import plugin_pool
+
+        given = self._rows_to_check(given) if given else []
+        produced = self._rows_to_check(produced) if produced else []
+        try:
+            policy = getattr(plugin_pool.get_plugin(self.plugin_type), "reports_to_model", "changes")
+        except KeyError:
+            policy = "changes"
+
+        if policy == "rows":
+            return produced
         if len(produced) != len(given):
-            return produced  # rows of its own making
-        changed = []
-        for before, after in zip(given, produced, strict=False):
-            changed.append({key: value for key, value in after.items() if before.get(key) != value})
+            # Nothing to line the rows up against, and an action that returned
+            # a different number of them has not necessarily produced any — it
+            # may have dropped some of what it was handed. How many is all that
+            # can be said without guessing.
+            return [{"rows": len(produced)}]
+        changed = [
+            {key: value for key, value in after.items() if before.get(key) != value}
+            for before, after in zip(given, produced, strict=False)
+        ]
         if any(changed):
             return changed
-        # It returned what it was given. Saying so beats a page of empty rows.
         return [{"rows": len(produced)}]
 
     # -- what a person sees ------------------------------------------------
@@ -553,9 +553,26 @@ class ToolMixin:
         return {
             "tool": call.name,
             "arguments": call.arguments,
-            "bound": self._bound_values(rows),
+            "bound": self._bound_per_row(rows),
             "destructive": self.is_destructive(),
         }
+
+    def _bound_per_row(self, rows: list | None) -> list:
+        """The bound inputs as they resolve for each row the call will act on.
+
+        One row is the common case and the misleading one: an action runs over
+        every row it is given, so showing the first recipient and then sending
+        to five is an approval of something that did not happen.
+        """
+        seen, distinct = set(), []
+        for row in self._rows_to_check(rows):
+            resolved = self._bound_values_for(row, rows or [])
+            key = tuple(sorted((name, str(value)) for name, value in resolved.items()))
+            if key in seen:
+                continue
+            seen.add(key)
+            distinct.append(resolved)
+        return distinct
 
     def _record_observation(self, action, result: ToolResult) -> None:
         """Leave the observation where the AI step will look for it.

@@ -122,10 +122,25 @@ on: *that argument was not accepted, here is why*. The next turn usually gets it
 right. The automation only fails when something genuinely cannot proceed —
 which is a different situation, and worth being able to tell apart.
 
-The same reasoning runs one level down. When a model emits arguments that are
-not valid JSON at all, the LLM layer turns them into an empty argument set
-rather than raising, precisely so they meet the schema check and come back as a
-correctable error.
+Not everything comes back, though, and the line is drawn by audience rather than
+by severity. A complaint about a field the model filled is written for the model
+and is repeated in full. A complaint about a value the *editor* bound — or about
+the combination of one with the other — may quote a value the model was
+deliberately never shown, so it goes to the log and the model is told only that
+the tool refused. The exception is a form where the editor bound nothing at all:
+every field there is the model's own, so a cross-field message can name nothing
+new and is passed on.
+
+An action can address the model on purpose. A validator raising ``ValidationError``
+is talking to whoever administers the automation; one raising ``ToolError`` is
+talking to the model, and that message is delivered as written. The same rule
+governs everything a call sends back — a raised exception, a failed action's
+output, the rows it returns.
+
+What a successful call returns follows from the same question. By default the
+model is told what the action *added*, not the rows it was given, because those
+rows are the automation's and may hold anything. An action whose answer is its
+rows says so with ``reports_to_model = "rows"``.
 
 What this does not protect against
 ----------------------------------

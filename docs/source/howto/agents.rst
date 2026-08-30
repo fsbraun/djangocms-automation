@@ -205,7 +205,7 @@ action* in :doc:`actions`. An action works as a step in a flow and as a tool
 from one piece of code, and a third-party action becomes a tool with no work by
 anyone.
 
-Two things worth setting on an action meant for agents:
+Three things worth setting on an action meant for agents:
 
 .. code-block:: python
 
@@ -214,6 +214,32 @@ Two things worth setting on an action meant for agents:
         destructive = True
         #: Set False for an action that makes no sense unless a person chose it.
         can_be_tool = True
+        #: "changes" (the default) or "rows". See below.
+        reports_to_model = "changes"
+
+What a call reports back
+------------------------
+
+A tool call returns something to the model, and the default is deliberately
+narrow: **what the action added** to the rows it was handed. A *Send Email* tool
+reports ``_mail``, not the rows — which may carry a token an earlier query
+fetched, or a column nobody meant to show anyone.
+
+An action whose answer *is* data has to say so:
+
+.. code-block:: python
+
+    class FindSubscriptions(ActionPlugin):
+        reports_to_model = "rows"
+
+Nothing about the data can decide this. An action that filters returns fewer
+rows than it was given without having produced a single one of them; a lookup
+asked "does this user exist" returns exactly the row it was asked about. Both
+look the same from outside, so the action declares which it is, and an action
+that says nothing is treated as the first.
+
+This affects only what the model is told. The rows themselves are untouched, and
+downstream steps see everything as usual.
 
 When not to use one
 -------------------

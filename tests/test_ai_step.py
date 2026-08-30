@@ -1496,13 +1496,13 @@ def test_a_bound_expression_is_resolved_before_the_form_sees_it(run_setup, setti
     instance.exposed_fields = ["subject"]
 
     rows = [{"customer": {"email": "ada@example.com"}}]
-    bound = instance._bound_values(rows)
+    bound = instance._bound_values_for(rows[0], rows)
 
     assert bound["recipient_email"] == "ada@example.com", "resolved, not the expression"
     assert "subject" not in bound, "what the model fills is not bound"
 
     # An expression that cannot resolve is left out rather than guessed at.
-    assert "recipient_email" not in instance._bound_values([{"nothing": "here"}])
+    assert "recipient_email" not in instance._bound_values_for({"nothing": "here"}, [{"nothing": "here"}])
 
 
 def test_a_fault_in_an_action_is_not_described_to_the_model():
@@ -1906,7 +1906,47 @@ def test_an_approver_sees_what_the_call_will_act_on(run_setup, settings):
 
     task = call_action()
     assert task.result["arguments"] == {"subject": "Ship it"}
-    assert task.result["bound"]["recipient_email"] == "ada@example.com", "resolved, so it reads as an address"
+    assert len(task.result["bound"]) == 1, "one row, one target"
+    assert task.result["bound"][0]["recipient_email"] == "ada@example.com", "resolved, so it reads as an address"
+    assert "subject" not in task.result["bound"][0], "what the model chose is listed as the model's"
+
+
+@pytest.mark.django_db
+def test_an_approver_sees_every_row_the_call_will_act_on(run_setup, settings):
+    """An action runs over every row it is given.
+
+    So showing the first recipient and then sending to five is an approval of
+    something that did not happen — the one shape of this mistake where the
+    approver has no way of noticing.
+    """
+    trigger, placeholder = run_setup
+    ai = add_step(placeholder, settings)
+    add_tool(
+        placeholder,
+        ai,
+        settings,
+        plugin_type="MailAction",
+        tool_name="reply",
+        exposed_fields=["subject"],
+        requires_approval=True,
+        config={"recipient_email": "customer.email", "subject": "'x'", "body": "x"},
+    )
+    SCRIPT.append(says(calls=[ToolCall(id="c1", name="reply", arguments={"subject": "Ship it"})]))
+
+    trigger.trigger_execution(
+        data=[
+            {"customer": {"email": "ada@example.com"}},
+            {"customer": {"email": "grace@example.com"}},
+            {"customer": {"email": "alan@example.com"}},
+        ]
+    )
+
+    shown = call_action().result["bound"]
+    assert [entry["recipient_email"] for entry in shown] == [
+        "ada@example.com",
+        "grace@example.com",
+        "alan@example.com",
+    ], "all three, because all three will be written to"
 
 
 def test_a_complaint_about_a_bound_value_is_not_repeated_to_the_model():
@@ -1934,3 +1974,108 @@ def test_a_complaint_about_a_bound_value_is_not_repeated_to_the_model():
 
     assert "sk-secret-123" not in str(refused.value)
     assert "not something you can change" in str(refused.value)
+
+
+@pytest.mark.django_db
+def test_a_call_that_drops_rows_reports_how_many_not_which(run_setup, settings):
+    """Returning fewer rows is not evidence of having produced any.
+
+    An action that filters its input returns a different number of rows without
+    having made a single one of them — they are the automation's rows, minus
+    some. Counting them was the wrong way to tell the two apart, and got this
+    case exactly backwards.
+    """
+    from cms.plugin_pool import plugin_pool
+
+    _trigger, placeholder = run_setup
+    ai = add_step(placeholder, settings)
+    tool = add_tool(
+        placeholder,
+        ai,
+        settings,
+        plugin_type="MailAction",
+        tool_name="reply",
+        exposed_fields=["subject"],
+        config={"recipient_email": "'to@example.com'", "subject": "'x'", "body": "x"},
+    )
+    instance = plugin_pool.get_plugin("MailAction").model.objects.get(pk=tool.pk)
+
+    given = [{"token": "sk-do-not-share", "keep": bool(n)} for n in (0, 1, 1)]
+    survivors = [row for row in given if row["keep"]]
+
+    reported = str(instance._reportable(given, survivors))
+    assert "sk-do-not-share" not in reported, "they are its input, however few came back"
+    assert "2" in reported, "how many survived is what there is to say"
+
+
+@pytest.mark.django_db
+def test_a_lookup_reports_its_rows_even_when_it_finds_as_many_as_it_was_given(run_setup, settings):
+    """And the mirror image: a lookup can find exactly what it was asked about.
+
+    "Does this user exist" is a query filtered on the row's own data, so the
+    record that comes back matches the row that went in. Cardinality says
+    "unchanged", the delta is empty, and a read tool answers ``{"rows": 1}``
+    where it meant "yes, here she is". What it returns is its answer because of
+    what it *is*, and no shape of the data will say so.
+    """
+    from cms.plugin_pool import plugin_pool
+
+    _trigger, placeholder = run_setup
+    ai = add_step(placeholder, settings)
+    tool = add_tool(
+        placeholder,
+        ai,
+        settings,
+        plugin_type="QueryModelAction",
+        tool_name="find_users",
+        exposed_fields=["filters"],
+        config={"model": "auth.User", "fields": "username", "limit": 5},
+    )
+    instance = plugin_pool.get_plugin("QueryModelAction").model.objects.get(pk=tool.pk)
+
+    asked_about = [{"username": "ada", "email": "ada@example.com"}]
+    found = [{"username": "ada", "email": "ada@example.com"}]
+    reported = str(instance._reportable(asked_about, found))
+    assert "ada@example.com" in reported, "the rows are the answer, identical or not"
+
+
+def test_an_action_says_what_it_reports_rather_than_being_guessed_at():
+    """The policy is a declaration, because nothing else can tell."""
+    from cms.plugin_pool import plugin_pool
+
+    from djangocms_automation.cms_plugins import ActionPlugin
+
+    assert ActionPlugin.reports_to_model == "changes", "the conservative one is the default"
+    assert plugin_pool.get_plugin("QueryModelAction").reports_to_model == "rows"
+    assert plugin_pool.get_plugin("MailAction").reports_to_model == "changes"
+
+
+def test_a_complaint_the_model_alone_caused_is_one_it_is_asked_to_fix():
+    """Not every non-field error is about a value the model cannot reach.
+
+    When every field in the form is one the model filled, a complaint about
+    their combination is about its own work. Telling it the values cannot be
+    changed would be false, and would leave it stuck on a mistake that is
+    entirely its to correct.
+    """
+    from django import forms as django_forms
+
+    from djangocms_automation.tools import ToolValidationError, validate_arguments
+
+    class RangeForm(django_forms.Form):
+        low = django_forms.IntegerField()
+        high = django_forms.IntegerField()
+
+        def clean(self):
+            cleaned = super().clean()
+            if cleaned["low"] > cleaned["high"]:
+                raise django_forms.ValidationError("low must not exceed high")
+            return cleaned
+
+    with pytest.raises(ToolValidationError, match="low must not exceed high"):
+        validate_arguments(RangeForm, {"low": 9, "high": 2}, allowed=["low", "high"])
+
+    # And the same rule, once one of the two is the editor's: the message may
+    # quote the value the model was not shown, so it is not repeated.
+    with pytest.raises(ToolValidationError, match="not something you can change"):
+        validate_arguments(RangeForm, {"low": 9}, allowed=["low"], bound={"high": 2})
