@@ -105,7 +105,7 @@ Fields:
 - **Output JSON schema** (optional) — constrains the response to valid
   JSON. A JSON *array* response becomes the new data rows; an *object*
   becomes a single row. Without a schema, one
-  ``{"text", "model", "usage"}`` row is emitted. Object schemas must set
+  ``{"text", "model", "turns", "usage"}`` row is emitted. Object schemas must set
   ``"additionalProperties": false``.
 
 Rate limits pause the action and it is retried automatically by the

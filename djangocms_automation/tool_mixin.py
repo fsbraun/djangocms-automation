@@ -185,11 +185,32 @@ class ToolMixin:
                 call.arguments,
                 allowed=self.tool_inputs(),
                 literal_mappings=frozenset(getattr(self, "expression_mappings", frozenset())),
+                bound=self._bound_values(),
             )
         except ToolValidationError as exc:
             # Handed back for the model to correct rather than failing the run.
             return {}, ToolResult(call_id=call.id, content=str(exc), is_error=True)
         return arguments, None
+
+    def _bound_values(self) -> dict:
+        """What the editor configured, where it is a value rather than a path.
+
+        An action whose inputs are expressions has nothing to offer here: what
+        ``trigger.from`` means is not known until the automation runs, and a
+        half-resolved expression would fail the form it was handed to. Actions
+        configured with literal values can hand theirs over, which is what lets
+        a cross-field ``clean`` see both halves.
+        """
+        from cms.plugin_pool import plugin_pool
+
+        try:
+            plugin = plugin_pool.get_plugin(self.plugin_type)
+        except KeyError:
+            return {}
+        if getattr(plugin, "convert_data_form", True):
+            return {}
+        exposed = set(self.tool_inputs())
+        return {name: value for name, value in (self.config or {}).items() if name not in exposed}
 
     def validate_call(self, call) -> tuple[dict, ToolResult | None]:
         """Check a call before anything is done about it.

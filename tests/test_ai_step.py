@@ -1413,3 +1413,52 @@ def test_fields_grouped_on_one_line_get_their_switches(run_setup, settings):
     ]
 
     assert "model_fills__first" in rendered and "model_fills__second" in rendered
+
+
+@pytest.mark.django_db
+def test_an_action_with_cross_field_validation_works_as_a_tool(run_setup, settings):
+    """The form validates whole, or it cannot validate at all.
+
+    Comparing two fields is the ordinary way to write a ``clean``. Handed only
+    the exposed half it raises ``KeyError``, which used to escape as a failed
+    run — so an action with perfectly normal validation could not be a tool,
+    against the promise that any action can.
+    """
+    from django import forms as django_forms
+
+    from djangocms_automation.tools import ToolValidationError, validate_arguments
+
+    class RangeForm(django_forms.Form):
+        low = django_forms.IntegerField()
+        high = django_forms.IntegerField()
+
+        def clean(self):
+            cleaned = super().clean()
+            if cleaned["low"] > cleaned["high"]:
+                raise django_forms.ValidationError("low must not exceed high")
+            return cleaned
+
+    # The editor bound `high`; the model fills `low`.
+    assert validate_arguments(RangeForm, {"low": 1}, allowed=["low"], bound={"high": 10}) == {"low": 1}
+
+    with pytest.raises(ToolValidationError, match="exceed"):
+        validate_arguments(RangeForm, {"low": 99}, allowed=["low"], bound={"high": 10})
+
+    # And with nothing to compare against, the model is told rather than the
+    # run being failed.
+    with pytest.raises(ToolValidationError):
+        validate_arguments(RangeForm, {"low": 1}, allowed=["low"])
+
+
+@pytest.mark.django_db
+def test_an_answer_names_the_model_that_gave_it(run_setup, settings):
+    """Documented as part of the row, and a downstream step may read it."""
+    trigger, placeholder = run_setup
+    add_step(placeholder, settings)
+    SCRIPT.append(says(text="Hello."))
+
+    trigger.trigger_execution(data=[{"seed": 1}])
+
+    row = step_action().result[0]
+    assert set(row) == {"text", "model", "turns", "usage"}
+    assert row["model"] == "anthropic/claude-opus-4-8"

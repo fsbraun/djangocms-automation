@@ -277,6 +277,7 @@ def validate_arguments(
     arguments: dict[str, Any],
     allowed: list[str],
     literal_mappings: frozenset[str] = frozenset(),
+    bound: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Validate and coerce a model's arguments through the action's own form.
 
@@ -293,6 +294,11 @@ def validate_arguments(
         which is the wrong question to ask a model: it supplies values, and
         ``ann smith`` is a perfectly good value and not a valid expression. They
         are checked as a flat object of scalars instead.
+    :param bound: What the editor configured for the inputs the model may not
+        fill, where those are literal values. Supplied so the form is *whole*
+        when it validates: a form-level ``clean`` comparing two fields is the
+        ordinary way to write one, and given only half of them it either raises
+        ``KeyError`` or cannot do its job. Only the exposed keys are returned.
     :raises ToolValidationError: If anything is unknown, missing or invalid.
     """
     if not isinstance(arguments, dict):
@@ -305,11 +311,16 @@ def validate_arguments(
             f"Unknown argument(s): {', '.join(unexpected)}. This tool accepts: {', '.join(sorted(permitted)) or 'nothing'}."
         )
 
-    form = form_class(data={name: arguments.get(name) for name in permitted})
-    # Fields the tool did not expose are the editor's to fill in, so they must
-    # not be required of the model.
+    supplied = {name: arguments.get(name) for name in permitted}
+    supplied.update({name: value for name, value in (bound or {}).items() if name not in permitted})
+    form = form_class(data=supplied)
+    # Fields the tool did not expose are the editor's to fill in. Those whose
+    # value is known are left in place so the form can validate as a whole;
+    # the rest are removed, because a value the editor writes as an expression
+    # is not known until the automation runs and must not be required of the
+    # model in the meantime.
     for name in list(form.fields):
-        if name not in permitted:
+        if name not in permitted and name not in supplied:
             del form.fields[name]
     for name in literal_mappings & permitted:
         if name in form.fields:
@@ -319,7 +330,15 @@ def validate_arguments(
                 validators=[_validate_flat_mapping],
             )
 
-    if not form.is_valid():
+    try:
+        valid = form.is_valid()
+    except Exception as exc:
+        # A ``clean`` that assumes every field is present raises rather than
+        # rejecting. That is a fact about this call's arguments, so the model
+        # is told and can try again — failing the run would make an action with
+        # ordinary cross-field validation unusable as a tool.
+        raise ToolValidationError(f"Invalid argument(s): {type(exc).__name__}: {exc}") from exc
+    if not valid:
         problems = "; ".join(f"{name}: {' '.join(errors)}" for name, errors in form.errors.items())
         raise ToolValidationError(f"Invalid argument(s): {problems}")
 

@@ -200,14 +200,18 @@ class Command(BaseCommand):
             type="form_submission",
             position=0,
             config={
+                # What djangocms-form-builder actually posts: the cleaned form
+                # under ``data``, and who submitted it. Not the fields
+                # themselves — hence ``data.message`` below rather than
+                # ``message``. Nested, so the schema editor shows this one as
+                # JSON rather than as a table.
                 "data_schema": {
                     "type": "object",
                     "properties": {
-                        "name": {"type": "string", "description": "Who wrote in"},
-                        "email": {"type": "string", "format": "email"},
-                        "message": {"type": "string", "description": "What they said"},
+                        "data": {"type": "object", "description": "The submitted form"},
+                        "user_id": {"type": ["integer", "null"], "description": "Who submitted it"},
                     },
-                    "required": ["email", "message"],
+                    "required": ["data"],
                     "additionalProperties": False,
                 }
             },
@@ -220,7 +224,7 @@ class Command(BaseCommand):
                 "model": DUMMY_MODEL,
                 "prompt": (
                     "Decide whether this message is about billing or about support, "
-                    "and answer with that one word.\n\n{{ message }}\n\n"
+                    "and answer with that one word.\n\n{{ data.message }}\n\n"
                     '!json {"topic": "billing"}'
                 ),
                 "output_schema": {

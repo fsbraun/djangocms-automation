@@ -354,7 +354,7 @@ class AIStepPluginModel(BaseActionPluginModel):
         if reply.json is not None:
             rows = reply.json if isinstance(reply.json, list) else [reply.json]
             return COMPLETED, [row if isinstance(row, dict) else {"value": row} for row in rows]
-        return COMPLETED, [{"text": reply.text, "turns": state.turn, "usage": state.usage}]
+        return COMPLETED, [{"text": reply.text, "model": reply.model, "turns": state.turn, "usage": state.usage}]
 
     def _timeout(self, config, budget, state) -> int:
         """How long to wait for the provider.
