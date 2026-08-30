@@ -1,0 +1,23 @@
+{% load i18n %}
+{% comment %}
+An action inside an AI step is a tool, and draws as one: a modifier-shaped row
+in the step's card, with a square marker rather than a round one so a tool and a
+modifier are not mistaken for each other.
+
+It is a rendered plugin like any other, which is the point — django CMS wraps it,
+so it can be double-clicked open, moved and deleted the same way as an action
+anywhere else.
+{% endcomment %}
+<div class="modifier tool"{% if request.toolbar.edit_mode_active and instance.comment %} data-comment="{{ instance.comment }}"{% endif %}>
+    {% include "djangocms_automation/includes/errors.html" with errors=instance.tool_messages %}
+    {{ instance.tool_name|default:title }}
+    {% if instance.needs_approval %}
+    <span class="tool-approval" title="{% translate 'A person approves each call before it runs' %}">
+        <svg width="16" height="16"><use xlink:href="#bi-shield-exclamation"></use></svg>
+    </span>
+    {% endif %}
+    <div class="modifier-arrow tool-marker">
+        <svg width="16" height="16"><use xlink:href="#{{ icon|default:'bi-plug' }}"></use></svg>
+    </div>
+    {% include "djangocms_automation/includes/comment_balloon.html" %}
+</div>

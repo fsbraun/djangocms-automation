@@ -12,3 +12,6 @@ class Module:
 
     # Modifier
     MODIFIER = _("Modifier")
+
+    # Tool
+    TOOL = _("Tool")

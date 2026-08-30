@@ -1,0 +1,22 @@
+{% load cms_tags i18n %}
+{% comment %}
+An AI step draws like an action, because it is one — with its tools listed
+inside its card the way an action lists its modifiers. Each tool is rendered as
+the plugin it is, so it carries the CMS's own markup and can be opened, moved
+and deleted like any other action.
+{% endcomment %}
+<div class="automation-step">
+    {% include "djangocms_automation/includes/add.html" %}
+    <div class="automation-action automation-item"{% if request.toolbar.edit_mode_active and instance.comment %} data-comment="{{ instance.comment }}"{% endif %}>
+        {% include "djangocms_automation/includes/errors.html" with errors=instance.messages %}
+        <div class="card-title">
+            <svg width="16" height="16"><use xlink:href="#bi-stars"></use></svg> {{ title }}
+        </div>
+        {% for tool in tools %}
+            {% render_plugin tool %}
+        {% empty %}
+            <div class="modifier tool answers-only">{% translate "Answers only" %}</div>
+        {% endfor %}
+        {% include "djangocms_automation/includes/comment_balloon.html" %}
+    </div>
+</div>

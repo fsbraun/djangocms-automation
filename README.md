@@ -95,14 +95,42 @@ python manage.py runworker          # in a second shell
 `enqueue-rejection`, `duplicate-webhook`, `timer-backlog`) injects failure
 conditions so recovery can be watched rather than only trusted.
 
+### What it looks like in practice
+
+Every automation below is seeded by `seedautomations` and runs against the
+bundled `dummy/echo` model, so none of them needs an API key or an account
+anywhere.
+
+| Example | What it shows | |
+|---|---|---|
+| **Intelligent contact form** | A form submission, a model deciding what the message is about, and a conditional routing it to billing or support | ✅ |
+| **Editorial AI review** | A model drafting a change to an article, a person seeing the exact wording it chose, and nothing written until they approve | ✅ |
+| **Lead qualification** | A model scoring a lead, the score written back to the record, and sales told about the good ones | ✅ |
+| **Nightly content digest** | A recurring timer, a query, and one email per row — with bounded catch-up after downtime | ✅ |
+| **Webhook order ingest** | An outside service starting a workflow over HTTP, idempotently, with retries, dead letters and replay | ✅ |
+
+Two notes so this does not read as more than it is:
+
+- The **contact form** automation is complete and runnable, but the form itself
+  is yours to draw: give a [djangocms-form-builder](https://github.com/fsbraun/djangocms-form-builder)
+  form the *Trigger automation* action and point it at the seeded *Form
+  Submission* trigger. Without that, trigger it by hand with the same fields.
+- **Calling out to an external API is not built yet.** Webhooks work *inbound*
+  — anything can start an automation over HTTP — but there is no HTTP action, so
+  an automation cannot yet call a service back. Until there is, that half is a
+  Python action you write (see *Writing your own action* in the
+  [actions guide](docs/source/howto/actions.rst)).
+
 ### Built-in actions
 
 - **Send Email** — one email per data row via Django's email framework.
 - **Create / Update / Query Records** — Django model CRUD, gated by the `AUTOMATION_ALLOWED_MODELS` setting.
-- **LLM Prompt** — provider-independent LLM calls via [LiteLLM](https://docs.litellm.ai/) (`pip install djangocms-automation[llm]`, models via `AUTOMATION_LLM_MODELS`, API keys in the admin *Secrets* store).
+- **Ask a Model** — provider-independent LLM calls via [LiteLLM](https://docs.litellm.ai/). Install with `pip install djangocms-automation[llm]` and add `"djangocms_automation.ai"` to `INSTALLED_APPS`; models via `AUTOMATION_LLM_MODELS`, API keys in the admin *Secrets* store. On its own it answers a question; put actions inside it and it becomes an agent.
 - **Wait for User** — human-in-the-loop pause/resume from the admin.
 
-Flow control includes conditionals (If/Then/Else with a visual condition builder), parallel splits with automatic joins, and timer/form/manual/code/webhook triggers.
+- **Tools are actions.** Any action placed inside an *Ask a Model* step is offered to the model, with a switch beside each of its inputs saying whether you bind it or the model fills it — so it can write an email's subject and body while the recipient stays bound to your expression. Nothing extra to write: a third-party action becomes a tool with no work by anyone. Every tool call is a first-class execution step, inspectable, retryable, and pausable for human approval before anything irreversible runs. Bounded by turns, tool calls, tokens and wall clock; reaching a limit fails the run rather than returning a confident half-answer.
+
+Flow control includes conditionals (If/Then/Else with a visual condition builder), while loops with a bounded iteration count, parallel splits with automatic joins, and timer/form/manual/code/webhook triggers.
 
 ### Webhooks
 

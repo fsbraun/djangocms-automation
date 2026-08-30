@@ -13,8 +13,8 @@ from cms.api import add_plugin
 from cms.models import Placeholder
 from django.contrib.contenttypes.models import ContentType
 
-from djangocms_automation import llm
-from djangocms_automation.actions.llm_action import LLMActionPluginModel
+from djangocms_automation.ai import llm
+from djangocms_automation.ai.step import AIStepPluginModel
 from djangocms_automation.instances import COMPLETED, FAILED, PENDING, AutomationAction
 from djangocms_automation.models import APIKey, Automation, AutomationContent, AutomationTrigger
 
@@ -178,8 +178,8 @@ def run_setup(automation_content, llm_settings, api_key):
 
 
 def _add_llm_action(placeholder, config, settings):
-    plugin = add_plugin(placeholder=placeholder, plugin_type="LLMAction", language=settings.LANGUAGE_CODE)
-    model = LLMActionPluginModel.objects.get(pk=plugin.pk)
+    plugin = add_plugin(placeholder=placeholder, plugin_type="AIStep", language=settings.LANGUAGE_CODE)
+    model = AIStepPluginModel.objects.get(pk=plugin.pk)
     model.config = config
     model.save()
     return model
@@ -263,7 +263,7 @@ def test_llm_action_rate_limit_pauses_action(run_setup, llm_settings):
     )
     assert action.state == PENDING
     assert action.paused_until is not None
-    assert action.result["_llm_retries"] == 1
+    assert action.scratch["llm_retries"] == 1
     assert "rate limited" in action.message.lower()
 
 
@@ -292,7 +292,7 @@ def test_llm_action_api_error_fails_action(run_setup, llm_settings):
 
 @pytest.mark.django_db
 def test_llm_action_gives_up_after_max_retries(run_setup, llm_settings):
-    from djangocms_automation.actions.llm_action import MAX_LLM_RETRIES
+    from djangocms_automation.ai.step import MAX_LLM_RETRIES
 
     trigger, placeholder = run_setup
     _add_llm_action(
@@ -323,16 +323,16 @@ def test_llm_action_gives_up_after_max_retries(run_setup, llm_settings):
 
 
 # ---------------------------------------------------------------------------
-# LLMActionForm validation
+# AIStepForm validation
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.django_db
 def test_llm_form_valid_and_default_model(llm_settings):
-    from djangocms_automation.actions.llm_action import LLMActionForm
+    from djangocms_automation.ai.step import AIStepForm
 
     llm_settings.AUTOMATION_LLM_DEFAULT = "openai/gpt-4.1"
-    form = LLMActionForm(
+    form = AIStepForm(
         data={
             "model": "anthropic/claude-opus-4-8",
             "system_prompt": "Be brief.",
@@ -342,6 +342,7 @@ def test_llm_form_valid_and_default_model(llm_settings):
     )
     assert form.fields["model"].initial == "openai/gpt-4.1"
     assert form.is_valid(), form.errors
+    assert form.cleaned_data["output_schema"] == {"type": "object", "additionalProperties": False}
 
 
 @pytest.mark.django_db
@@ -354,26 +355,30 @@ def test_llm_form_valid_and_default_model(llm_settings):
     ],
 )
 def test_llm_form_rejects_bad_schema(llm_settings, schema, error_fragment):
-    from djangocms_automation.actions.llm_action import LLMActionForm
+    from djangocms_automation.ai.step import AIStepForm
 
-    form = LLMActionForm(data={"model": "anthropic/claude-opus-4-8", "prompt": "p", "output_schema": schema})
+    form = AIStepForm(data={"model": "anthropic/claude-opus-4-8", "prompt": "p", "output_schema": schema})
     assert not form.is_valid()
     assert error_fragment in str(form.errors["output_schema"])
 
 
 @pytest.mark.django_db
 def test_llm_form_rejects_unlisted_model(llm_settings):
-    from djangocms_automation.actions.llm_action import LLMActionForm
+    from djangocms_automation.ai.step import AIStepForm
 
-    form = LLMActionForm(data={"model": "anthropic/claude-haiku-4-5", "prompt": "p"})
+    form = AIStepForm(data={"model": "anthropic/claude-haiku-4-5", "prompt": "p"})
     assert not form.is_valid()
     assert "model" in form.errors
 
 
 @pytest.mark.django_db
 def test_llm_form_rejects_malformed_prompt_template(llm_settings):
-    from djangocms_automation.actions.llm_action import LLMActionForm
+    from djangocms_automation.ai.step import AIStepForm
 
-    form = LLMActionForm(data={"model": "anthropic/claude-opus-4-8", "prompt": "Broken {{ unclosed"})
+    form = AIStepForm(data={"model": "anthropic/claude-opus-4-8", "prompt": "Broken {{ unclosed"})
     assert not form.is_valid()
     assert "prompt" in form.errors
+
+
+# A truncated reply now fails the step from inside the turn loop rather than
+# raising out of a perform(); covered by tests/test_ai_step.py.

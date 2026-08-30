@@ -142,6 +142,18 @@ class AutomationInstance(models.Model):
         blank=True,
         verbose_name=_("Finished"),
     )
+    #: The action that started this run, when something inside another
+    #: automation did — an agent's tool call, or a sub-workflow step. It is what
+    #: the run reports back to when it finishes, and what makes the nesting
+    #: depth countable rather than unbounded.
+    parent_action = models.ForeignKey(
+        "AutomationAction",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="child_instances",
+        verbose_name=_("Started by"),
+    )
     idempotency_key = models.CharField(
         max_length=255,
         null=True,
@@ -325,6 +337,16 @@ class AutomationAction(models.Model):
         help_text=_(
             "How often a waiting node resumed after its children finished. Counted separately from "
             "retry attempts: a split or agent that re-enters many times has not failed even once."
+        ),
+    )
+    scratch = models.JSONField(
+        default=dict,
+        blank=True,
+        verbose_name=_("Scratch state"),
+        help_text=_(
+            "Working state a node keeps between re-entries: an agent's conversation so far, "
+            "its accumulated usage, the tool calls it has dispatched. Private to the node, "
+            "unlike `result`, which the engine overwrites when a failure propagates."
         ),
     )
     input_data = models.JSONField(

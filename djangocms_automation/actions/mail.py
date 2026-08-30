@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import logging
+
 from django.conf import settings
 from django.core.mail import EmailMessage
 
 from ..models import BaseActionPluginModel
+
+logger = logging.getLogger(__name__)
 
 
 class MailActionPluginModel(BaseActionPluginModel):
@@ -47,10 +51,21 @@ class MailActionPluginModel(BaseActionPluginModel):
                 message.send(fail_silently=False)
                 mail_status["sent"] = True
                 mail_status["recipient"] = str(recipient)
-            except Exception as exc:  # noqa: BLE001 - recorded per row
+            except Exception as exc:
                 errors += 1
-                mail_status["error"] = str(exc)
+                # The type, not the message. This lands in the automation's own
+                # data, which travels — to the next action, into the run's
+                # record, and to a model when this action is somebody's tool —
+                # and a delivery error's text carries hosts, addresses and
+                # occasionally credentials. The message goes to the log.
+                logger.warning(
+                    "automation.mail.failed",
+                    exc_info=True,
+                    extra={"automation_action_id": getattr(action, "pk", None)},
+                )
+                mail_status["error"] = type(exc).__name__
             output.append({**row, "_mail": mail_status})
         if errors == len(output):
             raise RuntimeError(f"Sending failed for all {errors} recipient(s): {output[0]['_mail']['error']}")
+
         return output

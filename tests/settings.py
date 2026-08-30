@@ -20,6 +20,7 @@ INSTALLED_APPS = [
     "treebeard",
     "sekizai",
     "djangocms_automation",
+    "djangocms_automation.ai",
     "djangocms_versioning",
     "djangocms_form_builder",
 ]

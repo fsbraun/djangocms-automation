@@ -10,7 +10,7 @@ This module owns the orchestration of automation runs:
 * pausing and reviving actions.
 
 Module responsibilities: :mod:`.instances` holds the runtime state models,
-:mod:`.models` holds the graph-node (plugin) models with their node-local
+:mod:`djangocms_automation.models` holds the graph-node (plugin) models with their node-local
 ``execute``/``get_next_actions`` behavior, and :mod:`.tasks` holds only the
 ``django.tasks`` entry points delegating here.
 
@@ -419,7 +419,53 @@ def finish_instance(instance_id: int, status: str) -> bool:
 
     :returns: True if this call finished the instance.
     """
-    return transition_instance(instance_id, status, unfinished_only=True) is not None
+    instance = transition_instance(instance_id, status, unfinished_only=True)
+    if instance is None:
+        return False
+    notify_parent_action(instance, status)
+    return True
+
+
+def notify_parent_action(instance: AutomationInstance, status: str) -> bool:
+    """Wake the action that started this run, if one did.
+
+    A run started from inside another automation — an agent's tool call, a
+    sub-workflow step — leaves an action waiting on something no other wake-up
+    reaches. It is not waiting for a person, and the run is not its child
+    action, so neither the human-in-the-loop resume nor the join applies.
+
+    Done here rather than from the ``instance_finished`` signal, which is
+    deliberately best-effort: receivers are isolated so an exception in one
+    cannot disturb the transition it observes. That is right for an observer
+    and wrong for this, because a wake-up that is quietly dropped leaves the
+    caller waiting for something that already happened.
+
+    :returns: True if a waiting caller was woken by this call.
+    """
+    if instance.parent_action_id is None:
+        return False
+    caller = AutomationAction.objects.filter(pk=instance.parent_action_id, state=WAITING).first()
+    if caller is None:
+        return False
+    scratch = dict(caller.scratch or {})
+    scratch["called"] = {
+        "instance": instance.pk,
+        "status": status,
+        "data": instance.data if status == COMPLETED else None,
+    }
+    woken = transition_action(
+        caller.pk,
+        PENDING,
+        allowed_from=(WAITING,),
+        continuation=True,
+        message="Called automation finished",
+        field_updates={"scratch": scratch},
+        metadata={"woken_by_instance": instance.pk},
+    )
+    if woken is None:
+        return False
+    enqueue_action(caller.pk, data=instance.data or [])
+    return True
 
 
 def maybe_finish_instance(instance: AutomationInstance) -> None:
@@ -455,7 +501,20 @@ def _wake_if_children_done(action: AutomationAction) -> None:
 
     If all children finished while the parent was still ``RUNNING`` (their
     ``notify_parent`` found no ``WAITING`` row), re-enqueue the parent now.
+
+    The same window exists one level up. An action that started another
+    automation is not waiting for child actions but for a whole run, and that
+    run can finish before this action is marked as waiting for it — trivially
+    so with an immediate task backend, where the run happens inside the call
+    that starts it. Its ``notify_parent_action`` then finds nothing waiting.
     """
+    finished_run = (
+        AutomationInstance.objects.filter(parent_action=action, finished__isnull=False).order_by("-finished").first()
+    )
+    if finished_run is not None:
+        notify_parent_action(finished_run, finished_run.status)
+        return
+
     children = AutomationAction.objects.filter(parent=action)
     if children.exists() and not children.filter(finished__isnull=True).exists():
         woken = transition_action(
@@ -623,7 +682,17 @@ def run_action(action_id: int, data=None, single_step: bool = False) -> None:
 
     plugin_map = build_plugin_map(pending.automation_instance.automation_content_id)
     plugin = plugin_map.get(pending.plugin_ptr)
-    rows = normalize_rows(data if data is not None else pending.automation_instance.data)
+    # Nothing passed means this is the action coming back to itself — a join
+    # waking, a paused action revived, an approval going ahead. What it had is
+    # on the row; the instance holds the trigger's payload until the run ends,
+    # so falling back to that would hand a second turn the input of the first
+    # step, discarding everything produced since.
+    if data is not None:
+        rows = normalize_rows(data)
+    elif pending.input_data is not None:
+        rows = normalize_rows(pending.input_data)
+    else:
+        rows = normalize_rows(pending.automation_instance.data)
 
     claim_updates = None
     if plugin is not None:
@@ -742,8 +811,17 @@ def resume_action(action_id: int, user, data: dict | None = None) -> AutomationA
     if user not in action.get_users_with_permission():
         raise PermissionError("User may not interact with this action.")
 
-    rows = normalize_rows(action.automation_instance.data)
-    if data:
+    # What this action was given, not what the run started with. An instance's
+    # ``data`` is the trigger's payload until the run finishes, so resuming from
+    # it hands the action the input of a step that came before everything —
+    # discarding whatever the steps in between produced, which is usually the
+    # very thing the person was asked to approve.
+    rows = normalize_rows(action.input_data if action.input_data is not None else action.automation_instance.data)
+    if data and not (action.scratch or {}).get("awaiting_approval"):
+        # Approving is a decision about the rows already there, not a
+        # contribution of another one. A resume form posting any field at all
+        # would otherwise append a row — and so a target — that nobody read
+        # and nobody approved.
         rows = rows + [data]
 
     # Reject a stale claim before doing anything else. The transition below is
@@ -767,6 +845,27 @@ def resume_action(action_id: int, user, data: dict | None = None) -> AutomationA
         fail_action(action, "Plugin no longer exists in the automation", allowed_from=(WAITING,))
         action.refresh_from_db()
         return action
+
+    # Some nodes pause *before* doing their work, so resuming them means "go
+    # ahead" rather than "you are done". Those re-enter: the decision is
+    # recorded, the action goes back to PENDING as a continuation — not a
+    # retry, it has not failed at anything — and it runs again.
+    if plugin.resume_reenters(action):
+        with transaction.atomic():
+            plugin.on_resume(action, user, data)
+            woken = transition_action(
+                action.pk,
+                PENDING,
+                allowed_from=(WAITING,),
+                message="Resumed by user",
+                field_updates={"requires_interaction": False},
+                metadata={"resumed_by": getattr(user, "pk", None)},
+                continuation=True,
+            )
+            if woken is None:
+                raise ValueError("Action is no longer waiting.")
+            enqueue_action(action.pk, data=rows)
+        return woken
 
     # The resume and what follows it commit together, for the same reason as an
     # action's outcome: a resume that lands without its continuation leaves a
@@ -1140,6 +1239,12 @@ def replay_action(action_id: int) -> AutomationAction | None:
     if original is None or original.state not in (FAILED, CANCELED):
         return None
 
+    # Most of what an action needs is its input, which is seeded below. A node
+    # whose instruction lives on itself rather than in the data says so, and
+    # says which part of it survives a replay.
+    plugin = build_plugin_map(original.automation_instance.automation_content_id).get(original.plugin_ptr)
+    carried = plugin.scratch_for_replay(dict(original.scratch or {})) if plugin is not None else {}
+
     with transaction.atomic():
         replacement = AutomationAction.objects.create(
             previous=original.previous,
@@ -1148,6 +1253,7 @@ def replay_action(action_id: int) -> AutomationAction | None:
             plugin_ptr=original.plugin_ptr,
             max_attempts=original.max_attempts,
             replayed_from=original,
+            scratch=carried,
             finished=None,
         )
         _reopen_ancestors(original, replacement.pk)

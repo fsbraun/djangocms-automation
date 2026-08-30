@@ -34,6 +34,7 @@ from django.utils.timezone import now
 from django.utils.translation import gettext_lazy as _
 
 from .utilities.json import cleaned_data_to_json_serializable
+from .widgets import SchemaWidget
 
 try:  # Optional dependency, added to pyproject but keep graceful fallback
     from jsonschema import Draft202012Validator, ValidationError
@@ -61,11 +62,27 @@ class Trigger(forms.Form):
     icon: str
     data_schema: dict[str, Any] = {}
 
+    def get_data_schema(self, config: dict[str, Any] | None = None) -> dict[str, Any]:
+        """The schema this trigger's payload is checked against.
+
+        Most triggers know their payload from the outside world they listen to,
+        and declare it once on the class. A trigger that is *called* — by
+        another automation, or by an agent using it as a tool — cannot: the
+        shape is whatever the automation behind it was built to expect, which
+        only its author knows. Those declare it per trigger, in the admin, and
+        it is stored in ``config``.
+
+        :param config: The stored configuration of the trigger row, if any.
+        """
+        configured = (config or {}).get("data_schema")
+        return configured if isinstance(configured, dict) and configured else self.data_schema or {}
+
     def validate_payload(
         self,
         payload: dict[str, Any],
         validator: Callable[[dict[str, Any], dict[str, Any]], None] | None = None,
         raise_errors: bool = True,
+        config: dict[str, Any] | None = None,
     ) -> bool:
         """Validate a payload against this trigger's ``data_schema``.
 
@@ -80,13 +97,16 @@ class Trigger(forms.Form):
             Custom validator function (schema, payload) -> None (raise on error).
         raise_errors: bool
             If True, raise ValidationError/ValueError on failure; else return False.
+        config: dict | None
+            The trigger row's stored configuration, for a trigger that declares
+            its schema there rather than on the class.
 
         Returns
         -------
         bool
             True if validation successful, otherwise False (in non-raising mode).
         """
-        schema = self.data_schema or {}
+        schema = self.get_data_schema(config)
         if not schema:
             return True  # No schema to validate against
 
@@ -95,7 +115,11 @@ class Trigger(forms.Form):
                 validator(schema, payload)
                 return True
             if Draft202012Validator is not None:
-                Draft202012Validator(schema).validate(payload)
+                # With a format checker, so ``"format": "email"`` is a rule
+                # rather than a note. Without one jsonschema treats format as an
+                # annotation and ignores it — which would make a declared
+                # contract read like a constraint and enforce nothing.
+                Draft202012Validator(schema, format_checker=Draft202012Validator.FORMAT_CHECKER).validate(payload)
                 return True
             # Fallback shallow check
             required = schema.get("required", [])
@@ -374,7 +398,10 @@ class TimerTrigger(Trigger):
     icon = "bi-alarm"
 
     # Configuration form fields
-    scheduled_at = forms.DateTimeField(
+    # A split *field* for a split widget. ``AdminSplitDateTime`` reads two
+    # inputs and hands back a two-item list, which a plain ``DateTimeField``
+    # cannot parse — posting the form raises before validation even runs.
+    scheduled_at = forms.SplitDateTimeField(
         label=_("Scheduled at"),
         help_text=_("When should this trigger fire?"),
         required=True,
@@ -463,12 +490,55 @@ class TimerTrigger(Trigger):
     }
 
 
+def _validate_data_schema(value) -> None:
+    """Check that what an editor typed is actually a JSON schema.
+
+    ``additionalProperties: false`` is required rather than encouraged. This
+    schema is handed to callers as the description of what to send — including,
+    eventually, a language model choosing arguments — and a schema that permits
+    anything extra tells them nothing about what is refused.
+    """
+    # ``forms.ValidationError`` explicitly: the ``ValidationError`` imported at
+    # the top of this module is jsonschema's, and a form validator has to raise
+    # Django's for the form to collect it into an error message.
+    if not value:
+        return
+    try:
+        parsed = json.loads(value) if isinstance(value, str) else value
+    except json.JSONDecodeError as exc:
+        raise forms.ValidationError(_("Invalid JSON: %(error)s") % {"error": exc}) from exc
+    if not isinstance(parsed, dict):
+        raise forms.ValidationError(_("The schema must be a JSON object."))
+    if parsed.get("type") == "object" and parsed.get("additionalProperties") is not False:
+        raise forms.ValidationError(_('Object schemas must set "additionalProperties": false.'))
+    if Draft202012Validator is not None:
+        try:
+            Draft202012Validator.check_schema(parsed)
+        except Exception as exc:  # jsonschema raises its own error type here
+            raise forms.ValidationError(_("Not a valid JSON schema: %(error)s") % {"error": exc}) from exc
+
+
 class CodeTrigger(Trigger):
     id = "code"
     name = _("Automation")
     description = _("Starts when triggered by another automation.")
     icon = "bi-code-slash"
-    data_schema = {}
+
+    # Declared as a config field rather than a class attribute, so each trigger
+    # carries its own. Django's form metaclass moves this into
+    # ``declared_fields``, leaving the inherited empty default in its place —
+    # which is what an unconfigured trigger should have. ``get_data_schema``
+    # prefers whatever the editor stored.
+    data_schema = forms.JSONField(
+        label=_("Data schema"),
+        required=False,
+        widget=SchemaWidget(),
+        validators=[_validate_data_schema],
+        help_text=_(
+            "Describe the fields callers must send. Descriptions document the contract for the next person. "
+            "Leave empty to accept anything."
+        ),
+    )
 
 
 class FormSubmissionTrigger(Trigger):
@@ -520,16 +590,20 @@ if apps.is_installed("djangocms_form_builder"):
                 automation_content__automation_id=automation["pk"],
                 type="form_submission",
             )
+            # The submitted fields arrive at the top level, where an editor
+            # writing ``{{ message }}`` will find them. Nested under a ``data``
+            # key they were doubly hidden: an automation's row list is itself
+            # exposed as ``data`` when a template renders, so the payload's own
+            # ``data`` was shadowed and every reference to it came back empty.
+            submitted = cleaned_data_to_json_serializable(form.cleaned_data)
+            payload = dict(submitted)
+            # Assigned, never merged. ``user_id`` says who submitted the form,
+            # and a form field of that name is a value the submitter chose — so
+            # letting it through would let anyone claim to be anyone, in the one
+            # field an automation is most likely to trust.
+            payload["user_id"] = request.user.pk if request.user.is_authenticated else None
             for trigger in qs:
-                trigger.trigger_execution(
-                    data=[
-                        {
-                            "data": cleaned_data_to_json_serializable(form.cleaned_data),
-                            "user_id": request.user.pk if request.user.is_authenticated else None,
-                        }
-                    ],
-                    start=True,
-                )
+                trigger.trigger_execution(data=[payload], start=True)
 
 
 # Register example triggers

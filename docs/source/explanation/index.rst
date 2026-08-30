@@ -10,4 +10,5 @@ Design rationale, background information and conceptual explanation of the
    architecture
    execution-lifecycle
    performance
+   tools-and-trust
    admin

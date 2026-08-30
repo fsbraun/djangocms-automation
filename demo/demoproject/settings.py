@@ -30,6 +30,7 @@ INSTALLED_APPS = [
     "djangocms_versioning",
     "djangocms_form_builder",
     "djangocms_automation",
+    "djangocms_automation.ai",
     "demoproject",
 ]
 
@@ -102,6 +103,7 @@ TASKS = {
 AUTOMATION_ALLOWED_MODELS = [
     "demoproject.Order",
     "demoproject.Article",
+    "demoproject.Lead",
 ]
 
 AUTOMATION_LEASE_SECONDS = 300
@@ -120,3 +122,8 @@ LOGGING = {
         "djangocms_automation": {"handlers": ["console"], "level": "INFO", "propagate": False},
     },
 }
+
+# A model that answers locally, so an AI step can be built and run without an
+# API key. See djangocms_automation.ai.dummy for the directives it understands.
+AUTOMATION_LLM_MODELS = ["dummy/echo"]
+AUTOMATION_LLM_DEFAULT = "dummy/echo"

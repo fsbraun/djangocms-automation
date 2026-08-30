@@ -175,9 +175,10 @@ class TestFormBuilderActionExecute:
 
         instance = content.automationinstance_set.first()
         assert instance is not None
-        assert instance.initial_data == [
-            {"data": {"name": "Alice", "email": "alice@example.com"}, "user_id": admin_user.pk}
-        ]
+        # Flat, so an editor writing ``{{ email }}`` finds it. Nested under a
+        # ``data`` key it was unreachable: a template already exposes the row
+        # list as ``data``, so the payload's own key was shadowed.
+        assert instance.initial_data == [{"name": "Alice", "email": "alice@example.com", "user_id": admin_user.pk}]
         run_action = AutomationAction.objects.get(automation_instance=instance)
         assert run_action.state == COMPLETED
         assert trigger.automation_content == content

@@ -52,6 +52,8 @@ MUTABLE_ACTION_FIELDS = frozenset(
         "paused_until",
         "timeout_seconds",
         "max_attempts",
+        # A node's own working state, written as it re-enters.
+        "scratch",
         # Reopening a terminal action for replay has to clear its finish time,
         # or it stays invisible to the "any unfinished actions?" checks that
         # decide when an instance is complete.

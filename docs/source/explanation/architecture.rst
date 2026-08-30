@@ -42,6 +42,7 @@ The nested plugin tree is used to build control flow constructs:
 - Splits / Paths (parallel branches)
 - Joins (re-joining branches)
 - Loops (a test, and the steps it repeats)
+- AI steps (a model, and the actions it may call as tools)
 
 This nested structure enables both linear sequences and complex branching
 workflows.
@@ -80,6 +81,25 @@ engine counting re-entries separately from attempts (see
 :doc:`execution-lifecycle`). Without that distinction a loop of fifty iterations
 would look like fifty failed attempts and exhaust a retry budget it never
 touched.
+
+AI steps
+~~~~~~~~
+
+An AI step with tools is the same re-entrant node again, with the termination
+rule handed to a model: it goes round until the model stops asking for tools. One engine
+execution is one turn, so every tool call is a first-class ``AutomationAction``
+— recorded, retryable, and interruptible by a human before it runs.
+
+That is the reason for building it this way rather than looping inside a single
+action. A loop held in one process would finish or lose everything; suspended
+between turns, an agent survives a worker dying, shows its working, and can be
+stopped half way by someone who does not like what it is about to do.
+
+Its state cannot be derived from the action tree the way a loop's iteration
+count or a conditional's branch can — a conversation is not implied by anything
+— so it is the first node to use ``AutomationAction.scratch``, a field the
+engine does not write. See :doc:`tools-and-trust` for what constrains what an
+agent may do.
 
 Every loop is bounded by ``max_iterations`` and **fails** when it exceeds it,
 rather than stopping quietly. A silently truncated loop produces a wrong result

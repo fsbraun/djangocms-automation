@@ -97,6 +97,20 @@ body {
             padding-block: 0.5em;
             position: relative;
         }
+        /* A tool is a modifier-shaped row: it belongs to the card it sits in
+           rather than standing beside it. */
+        .modifier.tool {
+            .tool-approval {
+                margin-inline-start: 4px;
+                svg {
+                    vertical-align: text-bottom;
+                }
+            }
+            &.answers-only {
+                color: var(--dca-gray);
+                font-style: italic;
+            }
+        }
         .modifier-arrow {
             &::before {
                 content: '';
@@ -114,6 +128,14 @@ body {
             transform: translate(-50%, -50%);
             border-radius: 50%;
             border: var(--dca-black) 1px solid;
+            background: var(--dca-white);
+            display: grid;
+            place-items: center;
+        }
+        /* Square, so a tool is distinguishable from a modifier at a glance.
+           Everything else about the two rows is deliberately identical. */
+        .modifier-arrow.tool-marker {
+            border-radius: var(--dca-border-radius-sm, 3px);
         }
         .errors, .paused {
             position: absolute;
@@ -126,6 +148,64 @@ body {
 
         .paused {
             color: orange;
+        }
+
+        .automation-comment-trigger {
+            position: absolute;
+            top: -10px;
+            inset-inline-start: -10px;
+            width: 22px;
+            height: 22px;
+            padding: 3px;
+            display: grid;
+            place-items: center;
+            color: var(--dca-black);
+            background: var(--dca-white);
+            border: var(--dca-black) 1px solid;
+            border-radius: 50%;
+            cursor: help;
+            z-index: 20;
+        }
+
+        .automation-comment-balloon {
+            position: absolute;
+            display: none;
+            inset-inline-start: -1px;
+            bottom: calc(100% + 12px);
+            box-sizing: border-box;
+            width: max-content;
+            max-width: min(300px, 80vw);
+            padding: 8px 12px;
+            color: var(--dca-black);
+            background: var(--dca-white);
+            border: var(--dca-black) 1px solid;
+            border-radius: 6px;
+            box-shadow: 0 2px 12px color-mix(in srgb,var(--dca-black) 15%,transparent);
+            font-size: 13px;
+            font-style: normal;
+            font-weight: normal;
+            line-height: 1.4;
+            text-align: start;
+            white-space: pre-wrap;
+            z-index: 19;
+
+            &::after {
+                content: '';
+                position: absolute;
+                top: 100%;
+                inset-inline-start: 10px;
+                width: 10px;
+                height: 10px;
+                background: var(--dca-white);
+                border-inline-end: var(--dca-black) 1px solid;
+                border-bottom: var(--dca-black) 1px solid;
+                transform: translateY(-5px) rotate(45deg);
+            }
+        }
+
+        .automation-comment-trigger:hover + .automation-comment-balloon,
+        .automation-comment-trigger:focus-visible + .automation-comment-balloon {
+            display: block;
         }
     }
     .automation-trigger {
