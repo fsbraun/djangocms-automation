@@ -266,10 +266,11 @@ demands expression syntax. That is the editor's question. A model supplies
 values, and ``ann smith`` is a good value and not an expression, so the check is
 set aside when the field is offered to a model.
 
-Only that check. Every other validator on the field still applies, because a
+Only that check. The field itself is the action's own, copied — so its
+``validate``, its ``to_python`` and every other validator on it still apply. A
 rule about which keys are allowed or how many entries there may be is a rule
-about the request and holds however it was written. Mark the syntax check so it
-can be told apart:
+about the request, and holds however the request was written. Mark the syntax
+check so it can be told apart:
 
 .. code-block:: python
 

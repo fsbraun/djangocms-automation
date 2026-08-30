@@ -413,21 +413,24 @@ def _prepared(form_class: type[forms.Form], data: dict, permitted: set, literal_
 def _asking_for_values(field: forms.Field) -> forms.Field:
     """The same field, asking a model for values instead of expressions.
 
-    Only the validator that checks *expression syntax* is set aside — that is
+    The action's own field, deep-copied, with one validator removed. Not a
+    stand-in built to look like it: a field's checking does not live only in
+    its ``validators`` list. ``validate``, ``to_python`` and ``clean`` can all
+    be overridden, and a substitute assembled from a label, a required flag and
+    a list of callables inherits none of it — so a subclass rejecting a
+    forbidden key would be enforced against the editor and not against the
+    model, which is the one arrangement this whole path exists to rule out.
+
+    What is set aside is the check on *expression syntax*, and only that. It is
     the one question a model cannot be asked, since it supplies values and
-    ``ann smith`` is a fine value and not an expression. Everything else the
-    action put there stays: a rule about which keys are allowed, or how many
-    entries there may be, is a rule about the shape of the request and holds
-    however the request was written. Dropping those lets a tool accept what the
-    action itself refuses, which is the one thing validating through the
-    action's own form exists to prevent.
+    ``ann smith`` is a fine value and not an expression. Every other rule — which
+    keys are allowed, how many entries there may be — is about the shape of the
+    request and holds however the request was written.
     """
-    kept = [check for check in field.validators if not getattr(check, EXPRESSION_SYNTAX_CHECK, False)]
-    return forms.JSONField(
-        label=field.label,
-        required=field.required,
-        validators=[_validate_flat_mapping, *kept],
-    )
+    relaxed = copy.deepcopy(field)
+    relaxed.validators = [check for check in relaxed.validators if not getattr(check, EXPRESSION_SYNTAX_CHECK, False)]
+    relaxed.validators.append(_validate_flat_mapping)
+    return relaxed
 
 
 def _field_level_errors(

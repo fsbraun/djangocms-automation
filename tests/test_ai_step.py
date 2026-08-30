@@ -2521,3 +2521,47 @@ def test_an_actions_own_rule_about_a_mapping_still_binds_a_model():
     assert validate_arguments(
         QueryForm, {"filters": {"username": "ann smith"}}, allowed=["filters"], literal_mappings=mappings
     ) == {"filters": {"username": "ann smith"}}
+
+
+def test_a_mapping_fields_own_validate_still_binds_a_model():
+    """A field's checking does not live only in its ``validators`` list.
+
+    ``validate``, ``to_python`` and ``clean`` can all be overridden. A
+    substitute built from a label, a required flag and a list of callables
+    keeps none of that, so a subclass refusing a forbidden key would hold
+    against the editor and not against the model.
+    """
+    from django import forms as django_forms
+
+    from djangocms_automation.tools import EXPRESSION_SYNTAX_CHECK, ToolValidationError, validate_arguments
+
+    def expressions_only(value):
+        for key, entry in (value or {}).items():
+            if " " in str(entry):
+                raise django_forms.ValidationError(f"{key}: not valid expression syntax")
+
+    setattr(expressions_only, EXPRESSION_SYNTAX_CHECK, True)
+
+    class RestrictedMappingField(django_forms.JSONField):
+        def validate(self, value):
+            super().validate(value)
+            if "is_superuser" in (value or {}):
+                raise django_forms.ValidationError("that field is not yours to set")
+
+    class UpdateForm(django_forms.Form):
+        field_mapping = RestrictedMappingField(validators=[expressions_only])
+
+    mappings = frozenset({"field_mapping"})
+
+    with pytest.raises(ToolValidationError, match="not yours to set"):
+        validate_arguments(
+            UpdateForm,
+            {"field_mapping": {"is_superuser": True}},
+            allowed=["field_mapping"],
+            literal_mappings=mappings,
+        )
+
+    # And the field still does its ordinary work for what the model may set.
+    assert validate_arguments(
+        UpdateForm, {"field_mapping": {"title": "a new title"}}, allowed=["field_mapping"], literal_mappings=mappings
+    ) == {"field_mapping": {"title": "a new title"}}
