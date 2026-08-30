@@ -11,6 +11,7 @@ from unittest import mock
 import pytest
 from cms.api import add_plugin
 from cms.models import Placeholder
+from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 
 from djangocms_automation.ai import llm, step
@@ -1528,3 +1529,101 @@ def test_a_fault_in_an_action_is_not_described_to_the_model():
     with pytest.raises(ToolValidationError) as refused:
         validate_arguments(MissingHalfForm, {"a": "x"}, allowed=["a"])
     assert "cannot check its arguments" in str(refused.value)
+
+
+@pytest.mark.django_db
+def test_approval_resumes_with_the_step_s_own_data(run_setup, settings, django_user_model):
+    """A run's ``data`` is the trigger's payload until the run finishes.
+
+    Resuming from it hands the call the input of a step that came before
+    everything, discarding what the steps in between produced — usually the
+    very thing the person was asked to approve. The call then completes with an
+    error nobody sees, so the approval looks like it worked.
+    """
+    from django.core import mail
+
+    from djangocms_automation.engine import resume_action
+
+    settings.AUTOMATION_ALLOWED_MODELS = ["auth.User"]
+    django_user_model.objects.create(username="ada", email="ada@example.com")
+
+    trigger, placeholder = run_setup
+    # A step in front, so what the AI step is given is not what the run began
+    # with — which is the only way the difference shows.
+    add_plugin(
+        placeholder=placeholder,
+        plugin_type="QueryModelAction",
+        language=settings.LANGUAGE_CODE,
+        # Filter values are expressions, so the literal is quoted.
+        config={"model": "auth.User", "filters": {"username": "'ada'"}, "fields": "email", "limit": 1},
+    )
+    ai = add_step(placeholder, settings)
+    add_tool(
+        placeholder,
+        ai,
+        settings,
+        plugin_type="MailAction",
+        tool_name="reply",
+        exposed_fields=["subject"],
+        requires_approval=True,
+        config={"recipient_email": "email", "subject": "'x'", "body": "x"},
+    )
+    SCRIPT.append(says(calls=[ToolCall(id="c1", name="reply", arguments={"subject": "Ship it"})]))
+
+    trigger.trigger_execution(data=[{"seed": 1}])
+
+    call = call_action()
+    assert call.state == WAITING
+    assert call.automation_instance.data == [{"seed": 1}], "the run still holds only the trigger's payload"
+
+    SCRIPT.append(says(text="Sent."))
+    resume_action(call.pk, get_user_model().objects.filter(is_superuser=True).first())
+
+    call.refresh_from_db()
+    result = (call.scratch or {})["tool_result"]
+    assert not result["is_error"], result["content"]
+    assert mail.outbox[-1].to == ["ada@example.com"], "the queried address, not the trigger's"
+
+
+@pytest.mark.django_db
+def test_every_row_is_checked_before_a_tool_runs(run_setup, settings):
+    """An action runs once per row, so it is validated once per row.
+
+    The model's arguments are the same each time; the bound half is not, and a
+    rule about the pair applied to row one leaves the rest unexamined.
+    """
+    from django import forms as django_forms
+
+    from djangocms_automation.tools import ToolValidationError, validate_arguments
+
+    class SameDomainForm(django_forms.Form):
+        subject = django_forms.CharField()
+        recipient = django_forms.EmailField()
+
+        def clean(self):
+            cleaned = super().clean()
+            if not str(cleaned.get("recipient", "")).endswith("@example.com"):
+                raise django_forms.ValidationError("recipients must be internal")
+            return cleaned
+
+    # Row one passes, row two does not.
+    validate_arguments(SameDomainForm, {"subject": "Hi"}, allowed=["subject"], bound={"recipient": "a@example.com"})
+    with pytest.raises(ToolValidationError, match="internal"):
+        validate_arguments(
+            SameDomainForm, {"subject": "Hi"}, allowed=["subject"], bound={"recipient": "b@elsewhere.org"}
+        )
+
+
+def test_a_submitted_field_cannot_claim_to_be_somebody():
+    """``user_id`` says who submitted the form.
+
+    A form field of that name is a value the submitter chose, so merging it
+    would let anyone claim to be anyone — in the one field an automation is
+    most likely to trust.
+    """
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parent.parent / "djangocms_automation/triggers.py").read_text()
+
+    assert 'payload["user_id"] = request.user.pk if request.user.is_authenticated else None' in source
+    assert 'if "user_id" not in payload' not in source, "assigned, never merged"

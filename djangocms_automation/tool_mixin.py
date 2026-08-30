@@ -175,22 +175,56 @@ class ToolMixin:
     # -- the contract ------------------------------------------------------
 
     def validate_tool_arguments(self, call, rows: list | None = None) -> tuple[dict, ToolResult | None]:
-        """Check what the model sent against the action's own form."""
+        """Check what the model sent against the action's own form.
+
+        Once per row, because an action runs once per row. The model's
+        arguments are the same each time but the bound half is not — an
+        expression resolves against the row in front of it — so checking only
+        the first row lets every row after it through unexamined, and an action
+        validating a relationship between the two halves would have its rule
+        applied to one row out of a hundred.
+        """
         form = self.tool_data_form()
         if form is None:
             return {}, None
-        try:
-            arguments = validate_arguments(
-                form,
-                call.arguments,
-                allowed=self.tool_inputs(),
-                literal_mappings=frozenset(getattr(self, "expression_mappings", frozenset())),
-                bound=self._bound_values(rows),
-            )
-        except ToolValidationError as exc:
-            # Handed back for the model to correct rather than failing the run.
-            return {}, ToolResult(call_id=call.id, content=str(exc), is_error=True)
+
+        exposed = self.tool_inputs()
+        mappings = frozenset(getattr(self, "expression_mappings", frozenset()))
+        arguments = {}
+        for row in self._rows_to_check(rows):
+            try:
+                arguments = validate_arguments(
+                    form,
+                    call.arguments,
+                    allowed=exposed,
+                    literal_mappings=mappings,
+                    bound=self._bound_values_for(row, rows or []),
+                )
+            except ToolValidationError as exc:
+                # Handed back for the model to correct rather than failing the
+                # run. The first row that refuses is the one reported: a model
+                # cannot act on a hundred variations of the same complaint.
+                return {}, ToolResult(call_id=call.id, content=str(exc), is_error=True)
         return arguments, None
+
+    def _rows_to_check(self, rows: list | None) -> list:
+        """Every row the action will run against, or one empty one."""
+        actual = [row for row in (rows or []) if isinstance(row, dict)]
+        return actual or [{}]
+
+    def _bound_values_for(self, row: dict, rows: list) -> dict:
+        """What the editor configured, as it resolves against a single row."""
+        from cms.plugin_pool import plugin_pool
+
+        try:
+            plugin = plugin_pool.get_plugin(self.plugin_type)
+        except KeyError:
+            return {}
+        exposed = set(self.tool_inputs())
+        configured = {name: value for name, value in (self.config or {}).items() if name not in exposed}
+        if getattr(plugin, "convert_data_form", True) is False:
+            return configured  # already literal values
+        return self._bound_for_row(configured, row, rows)
 
     def _bound_values(self, rows: list | None = None) -> dict:
         """What the editor configured, as the values the action will actually use.
@@ -217,6 +251,10 @@ class ToolMixin:
 
         rows = rows or []
         row = rows[0] if rows and isinstance(rows[0], dict) else {}
+        return self._bound_for_row(configured, row, rows)
+
+    def _bound_for_row(self, configured: dict, row: dict, rows: list) -> dict:
+        """The configured inputs as they resolve against one row."""
         try:
             resolved = self.resolve_inputs(row, rows)
         except Exception:  # noqa: BLE001 — an expression that will not resolve

@@ -801,7 +801,12 @@ def resume_action(action_id: int, user, data: dict | None = None) -> AutomationA
     if user not in action.get_users_with_permission():
         raise PermissionError("User may not interact with this action.")
 
-    rows = normalize_rows(action.automation_instance.data)
+    # What this action was given, not what the run started with. An instance's
+    # ``data`` is the trigger's payload until the run finishes, so resuming from
+    # it hands the action the input of a step that came before everything —
+    # discarding whatever the steps in between produced, which is usually the
+    # very thing the person was asked to approve.
+    rows = normalize_rows(action.input_data if action.input_data is not None else action.automation_instance.data)
     if data:
         rows = rows + [data]
 

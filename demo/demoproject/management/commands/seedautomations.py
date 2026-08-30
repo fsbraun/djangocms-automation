@@ -209,6 +209,7 @@ class Command(BaseCommand):
                         "name": {"type": "string", "description": "Who wrote in"},
                         "email": {"type": "string", "format": "email"},
                         "message": {"type": "string", "description": "What they said"},
+                        # Set from the signed-in user, never from the form.
                         "user_id": {"type": ["integer", "null"], "description": "Who submitted it"},
                     },
                     "required": ["email", "message"],
@@ -271,7 +272,7 @@ class Command(BaseCommand):
         content, created = self._automation(
             user,
             "Editorial AI review",
-            "Draft a fresh title for an article; publish it only once an editor approves.",
+            "Draft a fresh title for an article; nothing is written until an editor approves.",
         )
         if not created:
             return "Editorial AI review (exists)"
@@ -299,8 +300,8 @@ class Command(BaseCommand):
             config={
                 "model": DUMMY_MODEL,
                 "prompt": (
-                    "Retitle {{ title }} so it reads better, then publish it.\n\n"
-                    '!call publish_article {"field_mapping": {"title": "A clearer title"}}'
+                    "Retitle {{ title }} so it reads better.\n\n"
+                    '!call retitle_article {"field_mapping": {"title": "A clearer title"}}'
                 ),
             },
         )
@@ -309,18 +310,19 @@ class Command(BaseCommand):
             plugin_type="UpdateModelAction",
             language=LANGUAGE,
             target=step,
-            tool_name="publish_article",
+            tool_name="retitle_article",
             tool_description=(
-                "Rewrite an article's title and publish it. Use this once you have a title you are "
-                "happy with. It cannot be undone."
+                "Rewrite an article's title. Use this once you have a title you are happy with. It cannot be undone."
             ),
-            # The model writes the new title; which article, and the fact that
-            # it is being published, stay bound to the automation.
+            # The model writes the mapping; *which* article stays bound to the
+            # automation. Note that exposing a mapping exposes all of it — the
+            # model supplies the whole thing, so anything the editor wants
+            # decided rather than written belongs in a field of its own or a
+            # step of its own.
             exposed_fields=["field_mapping"],
             config={
                 "model": "demoproject.Article",
                 "filters": {"slug": "slug"},
-                "field_mapping": {"is_published": "'True'"},
             },
         )
         return "Editorial AI review"

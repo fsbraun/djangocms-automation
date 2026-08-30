@@ -597,8 +597,11 @@ if apps.is_installed("djangocms_form_builder"):
             # ``data`` was shadowed and every reference to it came back empty.
             submitted = cleaned_data_to_json_serializable(form.cleaned_data)
             payload = dict(submitted)
-            if "user_id" not in payload:
-                payload["user_id"] = request.user.pk if request.user.is_authenticated else None
+            # Assigned, never merged. ``user_id`` says who submitted the form,
+            # and a form field of that name is a value the submitter chose — so
+            # letting it through would let anyone claim to be anyone, in the one
+            # field an automation is most likely to trust.
+            payload["user_id"] = request.user.pk if request.user.is_authenticated else None
             for trigger in qs:
                 trigger.trigger_execution(data=[payload], start=True)
 
