@@ -59,6 +59,16 @@ class AutomationTriggerAdminForm(forms.ModelForm):
         self.fields["automation_content"].widget = forms.HiddenInput()
         self.fields["position"].widget = forms.HiddenInput()
 
+        # Config fields are declared on the trigger definition, not on the
+        # model, so nothing seeds them from the stored value. Without this the
+        # form does not merely look empty: ``clean`` rebuilds the config from
+        # what was submitted, so opening a trigger and saving it unchanged
+        # erases its settings.
+        config = getattr(self.instance, "config", None) or {}
+        for name in config:
+            if name in self.fields and name not in self.initial:
+                self.initial[name] = config[name]
+
     def clean(self):
         """Validate and prepare config data."""
         cleaned_data = super().clean()

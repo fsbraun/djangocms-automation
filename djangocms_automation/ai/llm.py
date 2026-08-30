@@ -19,6 +19,10 @@ Settings:
   ``AUTOMATION_ALLOWED_MODELS``).
 * ``AUTOMATION_LLM_DEFAULT`` — optional preselected model string.
 
+A model string beginning ``dummy/`` is answered locally by
+:mod:`djangocms_automation.ai.dummy` — no key, no network, no ``litellm`` — so
+an AI step can be built and run before a provider is chosen.
+
 Install the optional dependency with ``pip install djangocms-automation[llm]``.
 """
 
@@ -29,6 +33,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from django.conf import settings
+
+from ..tools import ToolCall
+from . import dummy
 
 __all__ = [
     "COMPLETE_FINISH_REASONS",
@@ -62,26 +69,6 @@ class LLMRateLimited(LLMError):
     def __init__(self, retry_after: int = 60, message: str = "Rate limited"):
         self.retry_after = max(int(retry_after), 1)
         super().__init__(message)
-
-
-@dataclass(frozen=True)
-class ToolCall:
-    """One tool invocation the model asked for.
-
-    Lives here rather than with the tool contract because it is a property of
-    the model's reply: the wrapper's job is to turn each provider's shape into
-    this one. ``arguments`` is whatever the model produced and is **untrusted**
-    — the tool contract validates it before anything runs.
-    """
-
-    id: str
-    name: str
-    arguments: dict[str, Any]
-    #: The model sent arguments that were not valid JSON. ``arguments`` is then
-    #: empty, which is *not* the same as the model having sent none: for a tool
-    #: whose inputs are all optional, an empty object is a valid call meaning
-    #: "use the defaults". A garbled message must not be able to mean that.
-    malformed: bool = False
 
 
 #: Reasons that mean the model stopped because it had finished. ``tool_calls``
@@ -254,6 +241,19 @@ def complete(
     allowed = get_allowed_llm_models()
     if model not in allowed:
         raise LLMError(f"Model '{model}' is not allowed for automations. Add it to the AUTOMATION_LLM_MODELS setting.")
+
+    if messages is None:
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+
+    # Answered here, before anything needs a key, a network or ``litellm``.
+    # Reached only by a step whose model string says so, and only when that
+    # string is in the allowlist like any other.
+    if dummy.is_dummy(model):
+        return dummy.answer(model, messages, tools)
+
     service = model.split("/", 1)[0]
     api_key = get_api_key(service)
     litellm = _get_litellm()
@@ -262,12 +262,6 @@ def complete(
         raise LLMToolsUnsupported(
             f"Model '{model}' does not support tool calling. Choose a model that does, or remove the tools."
         )
-
-    if messages is None:
-        messages = []
-        if system:
-            messages.append({"role": "system", "content": system})
-        messages.append({"role": "user", "content": prompt})
 
     kwargs: dict[str, Any] = {
         "model": model,

@@ -97,6 +97,28 @@ body {
             padding-block: 0.5em;
             position: relative;
         }
+        /* A tool is a modifier-shaped row: it belongs to the card it sits in
+           rather than standing beside it. What differs is only what it says. */
+        .modifier.tool {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding-inline: 8px;
+            text-align: start;
+            font-size: 90%;
+            svg {
+                flex: 0 0 auto;
+            }
+            .tool-name {
+                font-weight: bold;
+            }
+            .tool-runs {
+                color: var(--dca-gray);
+            }
+            .tool-approval {
+                margin-inline-start: auto;
+            }
+        }
         .modifier-arrow {
             &::before {
                 content: '';

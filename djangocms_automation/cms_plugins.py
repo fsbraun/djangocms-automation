@@ -13,6 +13,10 @@ from .utilities.templates import validate_template
 automation_plugins = []
 action_plugins = []
 modifier_plugins = []
+#: Plugins that offer their child actions to a model. Registered by the AI app;
+#: core needs the names only, so that an action can tell whether it is being
+#: edited as a tool.
+ai_step_plugins = []
 
 
 def register_automation_plugin(cls):
@@ -42,6 +46,17 @@ class AutomationPlugin(CMSPluginBase):
     show_add_form = False
     allowed_models = ["djangocms_automation.AutomationContent"]
     icon = None
+
+    def __str__(self):
+        """The plugin's name, resolved.
+
+        ``CMSPluginBase.__str__`` returns ``self.name`` as it is, and a plugin
+        name is a translation proxy — so Python raises ``__str__ returned
+        non-string`` for anything that stringifies a plugin. The admin change
+        form does: a fieldset with no name of its own falls back to rendering
+        the plugin, and by default a plugin's first fieldset has no name.
+        """
+        return str(self.name)
 
     def render(self, context, instance, placeholder):
         context.update(
@@ -201,6 +216,21 @@ class ActionPlugin(AutomationPlugin):
     allow_children = True
     child_classes = modifier_plugins
     data_form = None
+
+    #: Whether this action's effects can be taken back. Declared by the action's
+    #: author, next to the code that does the damage, because nobody else knows.
+    #: It sets the automatic approval gate when the action is used as a tool.
+    destructive = False
+
+    #: Whether an editor may offer this action to a model. True for everything
+    #: by default: an action is a capability, and which capabilities an agent is
+    #: given is the editor's decision rather than the author's. Set False for an
+    #: action that is meaningless or unsafe when something other than a person
+    #: chose to run it.
+    can_be_tool = True
+
+    #: Fields the wiring section adds when this action sits inside an AI step.
+    tool_fields = ("tool_name", "tool_description", "requires_approval")
     fieldsets = [
         (_("Comment"), {"classes": ("collapse",), "fields": ("comment",)}),
     ]
@@ -221,16 +251,47 @@ class ActionPlugin(AutomationPlugin):
     # template inputs.
     convert_data_form = True
 
+    #: Prefix of the companion switch rendered beside each input when this
+    #: action is wired as a tool.
+    MODEL_FILLS = "model_fills__"
+
+    def is_tool(self, request, obj=None) -> bool:
+        """Whether this action is being edited as a tool of an AI step.
+
+        Asked of the parent, because that is what makes an action a tool. At
+        add time the parent is in the query string; at change time it is on the
+        object.
+        """
+        if not self.can_be_tool:
+            return False
+        parent = getattr(obj, "parent", None)
+        if parent is None:
+            parent_id = request.GET.get("plugin_parent")
+            if not parent_id:
+                return False
+            from cms.models import CMSPlugin
+
+            parent = CMSPlugin.objects.filter(pk=parent_id).first()
+        return bool(parent and parent.plugin_type in ai_step_plugins)
+
     def get_data_form_fields(self, request, obj=None):
         """Build the dynamic config fields from the declared data_form.
 
         Values are seeded from the plugin's stored ``config``. Fields
         declared with a ``Textarea`` widget are treated as templates
         (``{{ path }}`` substitution); all others as expressions.
+
+        Inside an AI step each input also gets a switch saying whether the
+        model fills it. Flipping it on is what stops the input asking for a
+        value, because it would never use one — the switch and the requirement
+        are the same decision, and splitting them is what produces a form that
+        demands an expression in order to discard it.
         """
         if not self.data_form:
             return {}
         config = (obj.config or {}) if obj is not None else {}
+        wired = self.is_tool(request, obj)
+        exposed = set(getattr(obj, "exposed_fields", None) or []) if obj is not None else set()
         if not self.convert_data_form:
             import copy
 
@@ -248,7 +309,10 @@ class ActionPlugin(AutomationPlugin):
                 label=declared.label or f_name,
                 help_text=declared.help_text,
                 initial=config.get(f_name, f_name if not is_template else ""),
-                required=declared.required,
+                # Not required while wired: whether a value is needed depends on
+                # the switch beside it, which is not known until the form is
+                # cleaned. The form checks it there instead.
+                required=declared.required and not wired,
                 validators=[validate_template if is_template else validate_expression],
                 widget=(
                     django_forms.Textarea(attrs={"rows": 4})
@@ -256,24 +320,64 @@ class ActionPlugin(AutomationPlugin):
                     else django_forms.TextInput(attrs={"code": ""})
                 ),
             )
+            if wired:
+                fields[self.MODEL_FILLS + f_name] = django_forms.BooleanField(
+                    label=_("The model decides"),
+                    required=False,
+                    initial=f_name in exposed,
+                    help_text=_("Leave off to bind this input to an expression the model never sees."),
+                )
+        if wired:
+            fields["clean"] = _clean_wired_inputs(self)
         return fields
 
     def save_model(self, request, obj, form, change):
-        """Persist the dynamic data_form values into the config JSON field."""
+        """Persist the dynamic data_form values into the config JSON field.
+
+        An input the model fills has no configured value, so it is left out of
+        the config entirely rather than stored empty — the action would
+        otherwise try to resolve an empty expression on any run where the model
+        sent nothing.
+        """
+        exposed = []
         if self.data_form:
+            if self.is_tool(request, obj):
+                exposed = [
+                    f_name for f_name in self.data_form.base_fields if form.cleaned_data.get(self.MODEL_FILLS + f_name)
+                ]
+                obj.exposed_fields = exposed
             obj.config = {
                 f_name: form.cleaned_data.get(f_name, "")
                 for f_name in self.data_form.base_fields
-                if f_name in form.cleaned_data
+                if f_name in form.cleaned_data and f_name not in exposed
             }
         super().save_model(request, obj, form, change)
 
     def get_fieldsets(self, request, obj=None):
         """Return fieldsets including data_form fields if defined."""
         fieldsets = super().get_fieldsets(request, obj)
+        wired = self.is_tool(request, obj)
+        if wired:
+            fieldsets = [
+                (
+                    _("As a tool"),
+                    {
+                        "fields": list(self.tool_fields),
+                        "description": _(
+                            "This action sits inside an AI step, so a model may call it. What it "
+                            "is called and when to use it are the only things the model knows "
+                            "about it."
+                        ),
+                    },
+                )
+            ] + list(fieldsets)
         if self.data_form:
             data_fields = list(self.data_form.base_fields.keys())
-            fieldsets = fieldsets + [
+            if wired:
+                # Each input beside its own switch, so the decision is made
+                # where the input is.
+                data_fields = [(name, self.MODEL_FILLS + name) for name in data_fields]
+            fieldsets = list(fieldsets) + [
                 (
                     _("Inputs"),
                     {
@@ -297,6 +401,7 @@ class ActionPlugin(AutomationPlugin):
 class MailAction(ActionPlugin):
     name = _("Send Email")
     module = Module.ACTION
+    destructive = True
     icon = "bi-envelope-at"
 
     model = actions_mail.MailActionPluginModel
@@ -312,6 +417,7 @@ class MailAction(ActionPlugin):
 class CreateModelAction(ActionPlugin):
     name = _("Create Record")
     module = Module.ACTION
+    destructive = True
     icon = "bi-database-add"
 
     model = model_actions.CreateModelActionModel
@@ -323,6 +429,7 @@ class CreateModelAction(ActionPlugin):
 class UpdateModelAction(ActionPlugin):
     name = _("Update Records")
     module = Module.ACTION
+    destructive = True
     icon = "bi-database-gear"
 
     model = model_actions.UpdateModelActionModel
@@ -388,3 +495,25 @@ class DataModifier(ModifierPlugin):
     name = _("Data")
     css_class = "data"
     icon = "bi-database"
+
+
+def _clean_wired_inputs(plugin):
+    """Require a value for every input the model is *not* filling.
+
+    ``required`` cannot answer this: whether an input needs a value depends on
+    the switch beside it, which is not known when the field is built. So the
+    check moves to the form, where both are available.
+    """
+
+    def clean(self):
+        cleaned = super(type(self), self).clean()
+        for name, declared in plugin.data_form.base_fields.items():
+            if not declared.required:
+                continue
+            if cleaned.get(plugin.MODEL_FILLS + name):
+                continue
+            if not cleaned.get(name):
+                self.add_error(name, _("Enter a value, or let the model decide."))
+        return cleaned
+
+    return clean

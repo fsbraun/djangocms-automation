@@ -45,7 +45,7 @@ class UserInputActionPluginModel(BaseActionPluginModel):
         proxy = True
         app_label = "djangocms_automation"
 
-    def execute(
+    def do_work(
         self,
         action: AutomationAction,
         data: list,

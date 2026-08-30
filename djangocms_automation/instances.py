@@ -142,6 +142,18 @@ class AutomationInstance(models.Model):
         blank=True,
         verbose_name=_("Finished"),
     )
+    #: The action that started this run, when something inside another
+    #: automation did — an agent's tool call, or a sub-workflow step. It is what
+    #: the run reports back to when it finishes, and what makes the nesting
+    #: depth countable rather than unbounded.
+    parent_action = models.ForeignKey(
+        "AutomationAction",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="child_instances",
+        verbose_name=_("Started by"),
+    )
     idempotency_key = models.CharField(
         max_length=255,
         null=True,

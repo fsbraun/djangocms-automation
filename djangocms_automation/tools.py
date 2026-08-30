@@ -34,7 +34,29 @@ __all__ = [
     "validate_arguments",
 ]
 
-from .llm import ToolCall
+
+@dataclass(frozen=True)
+class ToolCall:
+    """One tool invocation a model asked for.
+
+    Lives with the contract rather than with the provider wrapper because the
+    engine acts on it: an action being called as a tool reads its arguments from
+    here, and core must not import the AI package to do that. The wrapper's job
+    is only to turn each provider's shape into this one.
+
+    ``arguments`` is whatever the model produced and is **untrusted** — the
+    contract validates it before anything runs.
+    """
+
+    id: str
+    name: str
+    arguments: dict[str, Any]
+    #: The model sent arguments that were not valid JSON. ``arguments`` is then
+    #: empty, which is *not* the same as the model having sent none: for a tool
+    #: whose inputs are all optional, an empty object is a valid call meaning
+    #: "use the defaults". A garbled message must not be able to mean that.
+    malformed: bool = False
+
 
 #: Tool names must satisfy every provider we support, so this is the
 #: intersection rather than any one provider's rule.
@@ -302,3 +324,23 @@ def validate_arguments(
         raise ToolValidationError(f"Invalid argument(s): {problems}")
 
     return {name: value for name, value in form.cleaned_data.items() if name in permitted}
+
+
+def as_literal_config(arguments: dict, mappings: frozenset) -> dict:
+    """Put a model's arguments into the vocabulary an action's config uses.
+
+    Almost all of them go across unchanged. The exception is a mapping whose
+    *values* the action resolves as expressions: each is wrapped so the resolver
+    hands it back rather than reading it as a path into the data. That is the
+    difference between a filter meaning ``ann`` and one meaning "whatever is at
+    ``ann``", which is nothing, and which looks like no match rather than like a
+    mistake.
+    """
+    from .utilities.expressions import Literal
+
+    resolved = dict(arguments)
+    for name in mappings & set(resolved):
+        entry = resolved[name]
+        if isinstance(entry, dict):
+            resolved[name] = {key: Literal(value) for key, value in entry.items()}
+    return resolved

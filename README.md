@@ -99,10 +99,10 @@ conditions so recovery can be watched rather than only trusted.
 
 - **Send Email** — one email per data row via Django's email framework.
 - **Create / Update / Query Records** — Django model CRUD, gated by the `AUTOMATION_ALLOWED_MODELS` setting.
-- **LLM Prompt** — provider-independent LLM calls via [LiteLLM](https://docs.litellm.ai/). Install with `pip install djangocms-automation[llm]` and add `"djangocms_automation.ai"` to `INSTALLED_APPS`; models via `AUTOMATION_LLM_MODELS`, API keys in the admin *Secrets* store.
+- **Ask a Model** — provider-independent LLM calls via [LiteLLM](https://docs.litellm.ai/). Install with `pip install djangocms-automation[llm]` and add `"djangocms_automation.ai"` to `INSTALLED_APPS`; models via `AUTOMATION_LLM_MODELS`, API keys in the admin *Secrets* store. On its own it answers a question; put actions inside it and it becomes an agent.
 - **Wait for User** — human-in-the-loop pause/resume from the admin.
 
-- **Agent** — an LLM that chooses and calls the tools you give it, looping until it has an answer. Each tool wraps one of the actions above, and you decide which of that action's inputs the model may fill: it can write an email's subject and body while the recipient stays bound to your expression. Every tool call is a first-class execution step — inspectable, retryable, and pausable for human approval before anything irreversible runs. Bounded by turns, tool calls, tokens and wall clock; reaching a limit fails the run rather than returning a confident half-answer.
+- **Tools are actions.** Any action placed inside an *Ask a Model* step is offered to the model, with a switch beside each of its inputs saying whether you bind it or the model fills it — so it can write an email's subject and body while the recipient stays bound to your expression. Nothing extra to write: a third-party action becomes a tool with no work by anyone. Every tool call is a first-class execution step, inspectable, retryable, and pausable for human approval before anything irreversible runs. Bounded by turns, tool calls, tokens and wall clock; reaching a limit fails the run rather than returning a confident half-answer.
 
 Flow control includes conditionals (If/Then/Else with a visual condition builder), while loops with a bounded iteration count, parallel splits with automatic joins, and timer/form/manual/code/webhook triggers.
 

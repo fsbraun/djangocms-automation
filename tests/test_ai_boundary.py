@@ -57,7 +57,7 @@ def test_the_ai_app_registers_its_own_plugin():
     """Core does not register it, so the app must — that is why ``ai`` is an app."""
     from cms.plugin_pool import plugin_pool
 
-    plugin = plugin_pool.get_plugin("LLMAction")
+    plugin = plugin_pool.get_plugin("AIStep")
     assert plugin.__module__ == "djangocms_automation.ai.cms_plugins"
 
 

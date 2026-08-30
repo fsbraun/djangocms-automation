@@ -9,7 +9,7 @@ import pytest
 from django import forms
 
 from djangocms_automation.ai.llm import ToolCall
-from djangocms_automation.ai.tools import (
+from djangocms_automation.tools import (
     ToolResult,
     ToolSpec,
     ToolValidationError,

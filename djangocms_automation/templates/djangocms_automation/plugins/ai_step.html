@@ -1,0 +1,22 @@
+{% load cms_tags i18n %}
+{% comment %}
+An AI step draws like an action, because it is one — with its tools listed
+inside its card the way an action lists its modifiers. What it may do is part of
+what it is, and reading one should not require opening anything.
+{% endcomment %}
+<div class="automation-step">
+    {% include "djangocms_automation/includes/add.html" %}
+    <div class="automation-action automation-item">
+        {% include "djangocms_automation/includes/errors.html" with errors=instance.messages %}
+        <div class="card-title">
+            <svg width="16" height="16"><use xlink:href="#bi-stars"></use></svg> {{ title }}
+        </div>
+        {% for tool in tools %}
+            <div class="modifier tool">
+                <span class="tool-name">{{ tool.tool_name|default:tool.get_plugin_class.name }}</span>
+            </div>
+        {% empty %}
+            <div class="modifier tool answers-only">{% translate "Answers only" %}</div>
+        {% endfor %}
+    </div>
+</div>

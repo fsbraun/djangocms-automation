@@ -198,3 +198,172 @@ def test_saving_outside_the_modal_still_redirects(admin_client, trigger, content
 
     assert response.status_code == 302
     assert response["Location"].endswith("/automationtrigger/")
+
+
+# --------------------------------------------------------------------------
+# Configuration has to survive a round trip through the form
+# --------------------------------------------------------------------------
+
+
+def composed_form(trigger_type, **kwargs):
+    from djangocms_automation.triggers import trigger_registry
+
+    definition = trigger_registry.get(trigger_type)
+    return type("FormWithTriggerConfig", (AutomationTriggerAdminForm, definition), {})(**kwargs)
+
+
+@pytest.mark.django_db
+def test_a_triggers_configuration_is_shown_when_editing_it(content):
+    """Opening a trigger has to show what it is configured with.
+
+    The config fields are declared on the trigger definition, not on the model,
+    so nothing seeds them from the stored value automatically. Left empty, the
+    form does not merely look wrong — ``clean`` rebuilds the config from what
+    was submitted, so opening a trigger and saving it wipes its settings.
+    """
+    trigger = AutomationTrigger.objects.create(
+        automation_content=content,
+        slot="start",
+        type="timer",
+        position=0,
+        config={"recurrence_frequency": "daily", "recurrence_interval": 3},
+    )
+
+    form = composed_form("timer", instance=trigger)
+
+    assert form["recurrence_frequency"].value() == "daily"
+    assert form["recurrence_interval"].value() == 3
+
+
+@pytest.mark.django_db
+def test_saving_a_trigger_unchanged_keeps_its_configuration(content):
+    trigger = AutomationTrigger.objects.create(
+        automation_content=content,
+        slot="start",
+        type="timer",
+        position=0,
+        config={"recurrence_frequency": "daily", "recurrence_interval": 3},
+    )
+
+    form = composed_form(
+        "timer",
+        instance=trigger,
+        data={
+            "automation_content": content.pk,
+            "type": "timer",
+            "slot": "start",
+            "position": 0,
+            # Two inputs, because the admin renders a split date/time widget.
+            "scheduled_at_0": "2026-09-01",
+            "scheduled_at_1": "09:00:00",
+            "recurrence_frequency": "daily",
+            "recurrence_interval": 3,
+        },
+    )
+    assert form.is_valid(), form.errors
+    form.save()
+
+    trigger.refresh_from_db()
+    assert trigger.config["recurrence_frequency"] == "daily"
+    assert trigger.config["recurrence_interval"] == 3
+    assert trigger.config["scheduled_at"].startswith("2026-09-01T09:00")
+
+
+@pytest.mark.django_db
+def test_a_timer_trigger_can_be_saved_at_all(content):
+    """The admin renders "Scheduled at" as two inputs, a date and a time.
+
+    A split widget hands back a two-item list, so the field reading it has to
+    be a split field. Paired with a plain ``DateTimeField`` the form raised
+    ``'list' object has no attribute 'strip'`` on submit — before validation,
+    so no timer trigger could be created or edited.
+    """
+    form = composed_form(
+        "timer",
+        data={
+            "automation_content": content.pk,
+            "type": "timer",
+            "slot": "start",
+            "position": 0,
+            "scheduled_at_0": "2026-09-01",
+            "scheduled_at_1": "09:00:00",
+        },
+    )
+
+    assert form.is_valid(), form.errors
+    trigger = form.save()
+    assert trigger.config["scheduled_at"].startswith("2026-09-01T09:00")
+
+
+# --------------------------------------------------------------------------
+# The Automation trigger declares what it accepts
+# --------------------------------------------------------------------------
+
+SCHEMA = {
+    "type": "object",
+    "properties": {"email": {"type": "string"}},
+    "required": ["email"],
+    "additionalProperties": False,
+}
+
+
+@pytest.mark.django_db
+def test_an_automation_trigger_declares_the_data_it_accepts(content):
+    """A trigger called by something else has to say what to send it.
+
+    Every other trigger type knows its payload from the outside world it
+    listens to. This one is called from inside, so the shape is whatever the
+    automation was built to expect — which only its author can say.
+    """
+    form = composed_form(
+        "code",
+        data={
+            "automation_content": content.pk,
+            "type": "code",
+            "slot": "start",
+            "position": 0,
+            "data_schema": SCHEMA,
+        },
+    )
+    assert form.is_valid(), form.errors
+    trigger = form.save()
+
+    assert trigger.config["data_schema"] == SCHEMA
+    assert trigger.data_schema == SCHEMA
+
+
+@pytest.mark.django_db
+def test_a_declared_schema_is_what_a_payload_is_checked_against(content):
+    trigger = AutomationTrigger.objects.create(
+        automation_content=content, slot="start", type="code", position=0, config={"data_schema": SCHEMA}
+    )
+
+    definition = trigger.get_definition()()
+    assert definition.validate_payload({"email": "a@example.com"}, config=trigger.config)
+    assert not definition.validate_payload({}, config=trigger.config, raise_errors=False)
+
+
+@pytest.mark.django_db
+def test_an_automation_trigger_without_a_schema_accepts_anything(content):
+    """Declaring nothing stays legal — it means "I take whatever I am given"."""
+    trigger = AutomationTrigger.objects.create(automation_content=content, slot="start", type="code", position=0)
+
+    assert trigger.data_schema == {}
+    assert trigger.get_definition()().validate_payload({"anything": 1}, config=trigger.config)
+
+
+@pytest.mark.django_db
+def test_something_that_is_not_a_schema_is_refused(content):
+    form = composed_form(
+        "code",
+        data={
+            "automation_content": content.pk,
+            "type": "code",
+            "slot": "start",
+            "position": 0,
+            "data_schema": {"type": "object", "properties": {"email": {"type": "string"}}},
+        },
+    )
+
+    assert not form.is_valid()
+    assert "additionalProperties" in str(form.errors["data_schema"])

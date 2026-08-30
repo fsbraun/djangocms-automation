@@ -21,7 +21,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-from .llm import ToolCall
+from ..tools import ToolCall
 
 __all__ = ["AgentState"]
 
@@ -60,10 +60,17 @@ class AgentState:
         return cls(**{key: value for key, value in raw.items() if key in known})
 
     def save(self, action) -> None:
-        """Write the state back, without disturbing anything else on the row."""
+        """Write the state back, without disturbing anything else on the row.
+
+        Merged rather than replaced. ``scratch`` belongs to the node, not to
+        this class: the same row also carries the tool call that made this step
+        somebody else's tool, and the rate-limit counter. Overwriting it
+        wholesale would lose both, and a step that forgets it was called as a
+        tool answers into nothing.
+        """
         from djangocms_automation.instances import AutomationAction
 
-        payload = asdict(self)
+        payload = {**(action.scratch or {}), **asdict(self)}
         AutomationAction.objects.filter(pk=action.pk).update(scratch=payload)
         action.scratch = payload
 

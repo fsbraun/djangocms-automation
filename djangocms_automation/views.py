@@ -56,7 +56,7 @@ class WebhookView(View):
                 filtered += 1
                 continue
             for row in rows:
-                if not handler.validate_payload(row, raise_errors=False):
+                if not handler.validate_payload(row, raise_errors=False, config=trigger.config):
                     return JsonResponse({"error": "Payload does not match the trigger's data schema."}, status=400)
             try:
                 trigger.trigger_execution(data=rows, start=True, idempotency_key=idempotency_key)

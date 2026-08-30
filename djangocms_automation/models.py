@@ -20,6 +20,7 @@ from .instances import (  # noqa F401
 )
 from .queue import QueuedTask  # noqa F401 — registers the durable queue model
 from .services import service_registry
+from .tool_mixin import ToolMixin
 from .triggers import trigger_registry
 from .utilities.conditions import evaluate as evaluate_condition
 
@@ -115,9 +116,27 @@ class AutomationTrigger(models.Model):
         """
         return trigger_registry.get(self.type)
 
+    @property
+    def data_schema(self) -> dict:
+        """What this trigger accepts, as a JSON schema.
+
+        Empty means it accepts anything. This is the trigger's public contract:
+        what a webhook caller must send, and what another automation — or an
+        agent calling it as a tool — has to be told before it can call this at
+        all.
+        """
+        definition = self.get_definition()
+        if definition is None:
+            return {}
+        return definition().get_data_schema(self.config)
+
     def trigger_execution(
-        self, data: dict | None = None, start: bool = True, idempotency_key: str | None = None
-    ) -> None:
+        self,
+        data: dict | None = None,
+        start: bool = True,
+        idempotency_key: str | None = None,
+        parent_action=None,
+    ) -> "AutomationInstance | None":
         """Create and optionally start an automation instance.
 
         :param data: Initial data dictionary for the automation.
@@ -127,6 +146,10 @@ class AutomationTrigger(models.Model):
             only one instance per (automation content × key) is created —
             duplicate calls become no-ops. Use this to safely retry webhook
             deliveries without double-execution.
+        :param parent_action: The action starting this run, when one is — an
+            agent's tool call. The new run reports back to it when it finishes.
+        :returns: The instance created, or ``None`` when an idempotency key
+            meant there was nothing to do.
         """
         from django.db import IntegrityError
 
@@ -163,9 +186,10 @@ class AutomationTrigger(models.Model):
                     data=data or [],
                     initial_data=data or [],
                     idempotency_key=idempotency_key,
+                    parent_action=parent_action,
                 )
             except IntegrityError:
-                return  # Race lost — another request created an instance for this key.
+                return None  # Race lost — another request created an instance for this key.
             action = AutomationAction.objects.create(
                 previous=None,
                 parent=None,
@@ -177,6 +201,7 @@ class AutomationTrigger(models.Model):
             from .engine import enqueue_action
 
             enqueue_action(action.pk, data=data)
+        return instance
 
     def __str__(self):
         type = trigger_registry.get(self.type)
@@ -266,13 +291,19 @@ class AutomationPluginModel(CMSPlugin):
         help_text=_("Optional comment about this automation step"),
     )
 
-    #: Whether resuming this node re-enters it instead of completing it.
-    #:
-    #: Resuming normally means "this step is done": the engine completes the
-    #: waiting action and carries on. A node that pauses *before* doing its
-    #: work — an agent's tool call waiting for approval — needs the opposite,
-    #: so it declares re-entry and is enqueued to run again instead.
-    resume_reenters = False
+    def resume_reenters(self, action: AutomationAction) -> bool:
+        """Whether resuming this action re-enters it instead of completing it.
+
+        Resuming normally means "this step is done": the engine completes the
+        waiting action and carries on. A node that pauses *before* doing its
+        work — a tool call waiting for approval — needs the opposite, and is
+        enqueued to run again instead.
+
+        Asked per action rather than per class, because the same action can do
+        both: *Wait for User* as a step in a flow is finished when somebody
+        resumes it, and the very same action as a tool call has not started.
+        """
+        return False
 
     def scratch_for_replay(self, scratch: dict) -> dict:
         """What a replayed action needs to carry over from the one it replaces.
@@ -817,13 +848,18 @@ class SplitPluginModel(AutomationPluginModel):
         return COMPLETED, merged
 
 
-class BaseActionPluginModel(AutomationPluginModel):
+class BaseActionPluginModel(ToolMixin, AutomationPluginModel):
     """Base model for action plugins that perform tasks.
 
     Concrete action behavior is implemented in proxy subclasses (see
     ``djangocms_automation.actions``) which override :meth:`perform`.
     Configuration entered through the plugin's ``data_form`` is persisted
     in :attr:`config` as a mapping of field name to expression/template.
+
+    Every action is also a *tool*: placed inside an AI step it can be offered
+    to a model, with the fields below saying what the model may fill and what
+    stays bound to the editor's expressions. Outside an AI step none of that
+    applies — see :mod:`djangocms_automation.tool_mixin`.
     """
 
     config = models.JSONField(
@@ -831,6 +867,42 @@ class BaseActionPluginModel(AutomationPluginModel):
         blank=True,
         verbose_name=_("Configuration"),
         help_text=_("Field values (expressions or templates) entered in the plugin form."),
+    )
+
+    # -- wiring, when this action is a tool --------------------------------
+    #
+    # On the base rather than on a separate model because every action is a
+    # possible tool: one table, one migration, and a third-party action needs
+    # no work to be usable by an agent.
+
+    tool_name = models.SlugField(
+        max_length=64,
+        blank=True,
+        verbose_name=_("Called"),
+        help_text=_("What the model calls this. Defaults to the action's own name."),
+    )
+    tool_description = models.TextField(
+        blank=True,
+        verbose_name=_("When to use it"),
+        help_text=_(
+            "The only thing telling the model to reach for this rather than something else, and "
+            "so the setting with the most influence on whether the step works. Say what it does "
+            "and when to use it — not what it is."
+        ),
+    )
+    requires_approval = models.BooleanField(
+        default=None,
+        null=True,
+        blank=True,
+        verbose_name=_("Requires approval"),
+        help_text=_("Pause for a person to approve each call before it runs."),
+    )
+    exposed_fields = models.JSONField(
+        default=list,
+        blank=True,
+        editable=False,
+        verbose_name=_("Inputs the model may fill"),
+        help_text=_("Written by the switches beside each input; not edited directly."),
     )
 
     #: Config keys holding a mapping whose *values* this action resolves as
@@ -906,7 +978,7 @@ class BaseActionPluginModel(AutomationPluginModel):
             resolved.setdefault(key, value)
         return resolved
 
-    def execute(
+    def do_work(
         self,
         action: AutomationAction,
         data: list,
@@ -914,6 +986,11 @@ class BaseActionPluginModel(AutomationPluginModel):
         plugin_dict: dict | None = None,
     ) -> tuple[str, list]:
         """Run :meth:`perform` and complete with its output.
+
+        Named ``do_work`` rather than ``execute`` because ``execute`` belongs to
+        :class:`~djangocms_automation.tool_mixin.ToolMixin`, which wraps this in
+        the phases of a tool call when a model asked for it and calls it
+        directly when a person drew it into a flow.
 
         Exceptions propagate to the engine, which records the action (and
         instance) as failed; :class:`~djangocms_automation.engine.ActionPause`

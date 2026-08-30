@@ -5,46 +5,72 @@ reason to import this package. django CMS discovers this module because ``ai``
 is an installed app in its own right.
 """
 
-from django import forms
 from django.utils.translation import gettext_lazy as _
 
-from ..cms_plugins import ActionPlugin, AutomationPlugin, action_plugins, register_automation_plugin
+from ..cms_plugins import ActionPlugin, ai_step_plugins, register_automation_plugin
 from ..constants import Module
-from . import llm_action, models
+from . import step
 
 
 @register_automation_plugin
-class LLMAction(ActionPlugin):
-    name = _("LLM Prompt")
+class AIStep(ActionPlugin):
+    """Ask a model — and let it use the actions placed inside it."""
+
+    name = _("Ask a Model")
     module = Module.AI
     icon = "bi-stars"
 
-    model = llm_action.LLMActionPluginModel
-    data_form = llm_action.LLMActionForm
+    model = step.AIStepPluginModel
+    data_form = step.AIStepForm
     convert_data_form = False
+    render_template = "djangocms_automation/plugins/ai_step.html"
 
-
-@register_automation_plugin
-class AutomationAgent(AutomationPlugin):
-    name = _("Agent")
-    module = Module.AI
-    icon = "bi-stars"
-    model = models.AgentPluginModel
-    render_template = "djangocms_automation/plugins/agent.html"
-
-    show_add_form = True
     allow_children = True
-    child_classes = ["AutomationAgentTool"]
+    #: Left unset so the computed list below is what applies. See
+    #: :meth:`get_child_class_overrides`.
+    child_classes = None
+
+    @classmethod
+    def get_child_class_overrides(cls, slot, page=None, instance=None):
+        """Actions — which inside this step are tools — and modifiers.
+
+        Computed rather than declared, because every action is a possible tool
+        and the list is whatever has registered by the time somebody opens the
+        menu, minus anything that opted out with ``can_be_tool = False``.
+
+        This hook rather than ``get_child_classes``: the latter also carries
+        django CMS's caching protocol and an ``only_uncached`` pass, which an
+        override would have to reimplement and keep in step. This one is asked a
+        smaller question — *which names are allowed* — and the base does the
+        rest.
+        """
+        from cms.plugin_pool import plugin_pool
+
+        from ..cms_plugins import action_plugins, modifier_plugins
+
+        configured = super().get_child_class_overrides(slot, page=page, instance=instance)
+        if configured:
+            # A project that pinned this plugin's children in CMS_PLACEHOLDER_CONF
+            # meant it.
+            return configured
+        return list(modifier_plugins) + [
+            name for name in action_plugins if getattr(plugin_pool.get_plugin(name), "can_be_tool", True)
+        ]
+
+    #: An AI step is an action, so it can be a tool of another AI step. The
+    #: nesting limit rather than the plugin tree is what stops that running away.
+    can_be_tool = True
 
     fieldsets = (
-        (None, {"fields": ("question", "model", "prompt", "system_prompt")}),
+        (None, {"fields": ("model", "prompt", "system_prompt")}),
+        (_("Answer"), {"classes": ("collapse",), "fields": ("output_schema",)}),
         (
             _("Limits"),
             {
                 "classes": ("collapse",),
                 "description": _(
-                    "An agent chooses its own next step, so none of its cost is knowable in "
-                    "advance. Reaching a limit fails the run rather than stopping quietly."
+                    "These bound a step that has tools. A step without tools makes one call, "
+                    "and its cost is known in advance."
                 ),
                 "fields": ("max_turns", "max_tool_calls", "max_tokens", "deadline_seconds", "llm_timeout"),
             },
@@ -54,52 +80,10 @@ class AutomationAgent(AutomationPlugin):
 
     def render(self, context, instance, placeholder):
         context = super().render(context, instance, placeholder)
-        context.update({"empty": not instance.child_plugin_instances})
+        context.update({"tools": instance.child_plugin_instances or []})
         return context
 
 
-class AgentToolForm(forms.ModelForm):
-    """Spells out what leaving the approval gate unset actually means.
-
-    Django renders a nullable boolean as Unknown/Yes/No, and "Unknown" is a bad
-    word for a security decision. The three states are: decide from what the
-    action does, always ask, never ask.
-    """
-
-    requires_approval = forms.TypedChoiceField(
-        label=_("Requires approval"),
-        required=False,
-        empty_value=None,
-        coerce=lambda value: value == "true",
-        choices=(
-            ("", _("Automatic — ask before anything irreversible")),
-            ("true", _("Always ask")),
-            ("false", _("Never ask")),
-        ),
-        help_text=_("A person sees the call, and the arguments the model chose, before it runs."),
-    )
-
-    class Meta:
-        model = models.AgentToolPluginModel
-        fields = "__all__"
-
-
-@register_automation_plugin
-class AutomationAgentTool(AutomationPlugin):
-    name = _("Agent tool")
-    module = Module.AI
-    icon = "bi-plug"
-    model = models.AgentToolPluginModel
-    form = AgentToolForm
-    render_template = "djangocms_automation/plugins/agent_tool.html"
-
-    show_add_form = True
-    require_parent = True
-    parent_classes = ["AutomationAgent"]
-    allow_children = True
-    child_classes = action_plugins
-
-    fieldsets = (
-        (None, {"fields": ("tool_name", "tool_description", "exposed_fields", "requires_approval")}),
-        (_("Comment"), {"classes": ("collapse",), "fields": ("comment",)}),
-    )
+#: Registered so that an action can tell whether it is being edited as a tool
+#: without core importing this package.
+ai_step_plugins.append("AIStep")

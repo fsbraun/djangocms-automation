@@ -42,7 +42,7 @@ The nested plugin tree is used to build control flow constructs:
 - Splits / Paths (parallel branches)
 - Joins (re-joining branches)
 - Loops (a test, and the steps it repeats)
-- Agents (a model, and the tools it may call)
+- AI steps (a model, and the actions it may call as tools)
 
 This nested structure enables both linear sequences and complex branching
 workflows.
@@ -82,11 +82,11 @@ engine counting re-entries separately from attempts (see
 would look like fifty failed attempts and exhaust a retry budget it never
 touched.
 
-Agents
-~~~~~~
+AI steps
+~~~~~~~~
 
-An agent is the same re-entrant node again, with the termination rule handed to
-a model: it goes round until the model stops asking for tools. One engine
+An AI step with tools is the same re-entrant node again, with the termination
+rule handed to a model: it goes round until the model stops asking for tools. One engine
 execution is one turn, so every tool call is a first-class ``AutomationAction``
 — recorded, retryable, and interruptible by a human before it runs.
 

@@ -419,7 +419,53 @@ def finish_instance(instance_id: int, status: str) -> bool:
 
     :returns: True if this call finished the instance.
     """
-    return transition_instance(instance_id, status, unfinished_only=True) is not None
+    instance = transition_instance(instance_id, status, unfinished_only=True)
+    if instance is None:
+        return False
+    notify_parent_action(instance, status)
+    return True
+
+
+def notify_parent_action(instance: AutomationInstance, status: str) -> bool:
+    """Wake the action that started this run, if one did.
+
+    A run started from inside another automation — an agent's tool call, a
+    sub-workflow step — leaves an action waiting on something no other wake-up
+    reaches. It is not waiting for a person, and the run is not its child
+    action, so neither the human-in-the-loop resume nor the join applies.
+
+    Done here rather than from the ``instance_finished`` signal, which is
+    deliberately best-effort: receivers are isolated so an exception in one
+    cannot disturb the transition it observes. That is right for an observer
+    and wrong for this, because a wake-up that is quietly dropped leaves the
+    caller waiting for something that already happened.
+
+    :returns: True if a waiting caller was woken by this call.
+    """
+    if instance.parent_action_id is None:
+        return False
+    caller = AutomationAction.objects.filter(pk=instance.parent_action_id, state=WAITING).first()
+    if caller is None:
+        return False
+    scratch = dict(caller.scratch or {})
+    scratch["called"] = {
+        "instance": instance.pk,
+        "status": status,
+        "data": instance.data if status == COMPLETED else None,
+    }
+    woken = transition_action(
+        caller.pk,
+        PENDING,
+        allowed_from=(WAITING,),
+        continuation=True,
+        message="Called automation finished",
+        field_updates={"scratch": scratch},
+        metadata={"woken_by_instance": instance.pk},
+    )
+    if woken is None:
+        return False
+    enqueue_action(caller.pk, data=instance.data or [])
+    return True
 
 
 def maybe_finish_instance(instance: AutomationInstance) -> None:
@@ -455,7 +501,20 @@ def _wake_if_children_done(action: AutomationAction) -> None:
 
     If all children finished while the parent was still ``RUNNING`` (their
     ``notify_parent`` found no ``WAITING`` row), re-enqueue the parent now.
+
+    The same window exists one level up. An action that started another
+    automation is not waiting for child actions but for a whole run, and that
+    run can finish before this action is marked as waiting for it — trivially
+    so with an immediate task backend, where the run happens inside the call
+    that starts it. Its ``notify_parent_action`` then finds nothing waiting.
     """
+    finished_run = (
+        AutomationInstance.objects.filter(parent_action=action, finished__isnull=False).order_by("-finished").first()
+    )
+    if finished_run is not None:
+        notify_parent_action(finished_run, finished_run.status)
+        return
+
     children = AutomationAction.objects.filter(parent=action)
     if children.exists() and not children.filter(finished__isnull=True).exists():
         woken = transition_action(
@@ -772,7 +831,7 @@ def resume_action(action_id: int, user, data: dict | None = None) -> AutomationA
     # ahead" rather than "you are done". Those re-enter: the decision is
     # recorded, the action goes back to PENDING as a continuation — not a
     # retry, it has not failed at anything — and it runs again.
-    if getattr(plugin, "resume_reenters", False):
+    if plugin.resume_reenters(action):
         with transaction.atomic():
             plugin.on_resume(action, user, data)
             woken = transition_action(

@@ -68,3 +68,28 @@ From another automation
 Triggers of type *Automation* (``code``) mark entry points intended to be
 started by other automations or custom code — call ``trigger_execution``
 as shown above.
+
+Declaring what it accepts
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Every other trigger type knows its payload from the outside world it listens
+to. This one is called from inside, so the shape is whatever the automation was
+built to expect — which only its author can say. Set **Data schema** on the
+trigger to write it down:
+
+.. code-block:: json
+
+    {
+      "type": "object",
+      "properties": {"email": {"type": "string"}},
+      "required": ["email"],
+      "additionalProperties": false
+    }
+
+Leaving it empty keeps the current behaviour: anything is accepted. Filling it
+in makes the trigger check its payload, and gives a caller something to read
+before calling — ``AutomationTrigger.data_schema`` returns it.
+
+``additionalProperties: false`` is required rather than encouraged, because
+this schema is the trigger's answer to "what may I send you", and one that
+permits anything extra does not answer it.
