@@ -16,3 +16,15 @@ class AutomationAIConfig(AppConfig):
     name = "djangocms_automation.ai"
     label = "djangocms_automation_ai"
     verbose_name = "django CMS Automation: AI"
+
+    def ready(self):
+        """Give every allowed model somewhere to keep its key.
+
+        Which provider needs a secret is decided by which models this project
+        allows, and only this app knows that. Core's secrets store keeps
+        offering whatever the service registry holds — it does not learn about
+        model strings.
+        """
+        from .llm import register_llm_services
+
+        register_llm_services()

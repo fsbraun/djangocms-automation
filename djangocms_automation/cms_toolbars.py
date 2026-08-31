@@ -24,9 +24,32 @@ class AutomationToolbar(CMSToolbar):
         # Create the main Automation menu
         menu = self.toolbar.get_or_create_menu("automation-menu", _("Automation"))
 
+        self.populate_run_item(menu, automation_content)
+
         # Create a submenu for triggers
         trigger_menu = menu.get_or_create_menu("automation-trigger-submenu", _("Triggers"))
         self.populate_trigger_menu(trigger_menu, automation_content)
+
+    def populate_run_item(self, menu, automation_content):
+        """The button for trying the thing you just built.
+
+        Every other way in needs something outside the editor — a webhook
+        delivery, a cron tick, a form submission, a shell. Which made the
+        moment right after building an automation the one moment there was no
+        way to run it.
+
+        Disabled rather than hidden when there is nothing to start: an
+        automation with no trigger has no entry point at all, and saying so
+        here is more use than an *Automation* menu that quietly lacks an item.
+        """
+        if not self.request.user.has_perm("djangocms_automation.add_automationinstance"):
+            return
+        menu.add_break("automation-run-break")
+        if not AutomationTrigger.objects.filter(automation_content=automation_content).exists():
+            menu.add_disabled_item(_("Run now…"))
+            return
+        url = reverse("admin:djangocms_automation_run_now") + f"?automation_content={automation_content.pk}"
+        menu.add_modal_item(_("Run now…"), url)
 
     def populate_trigger_menu(self, menu, automation_content):
         if not isinstance(self.toolbar.get_object(), AutomationContent):  # or not self.toolbar.edit_mode_active:

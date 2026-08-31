@@ -170,3 +170,45 @@ def test_an_unknown_tool_name_is_corrected_as_a_real_one_would_be(run_setup, set
     action = step_action()
     observations = [m for m in AgentState.load(action).messages if m.get("role") == "tool"]
     assert "echo" in observations[0]["content"]
+
+
+def test_allowing_a_model_gives_its_provider_somewhere_to_keep_a_key(settings):
+    """Two lists that must agree, with nothing keeping them in step.
+
+    A key is looked up by the provider prefix of the model string; the admin
+    offers whatever the service registry holds. A project could allow
+    ``deepseek/deepseek-chat``, find no way to store a ``deepseek`` key, and
+    learn why only when a run failed for want of one.
+    """
+    from djangocms_automation.ai.llm import register_llm_services
+    from djangocms_automation.models import APIKey
+    from djangocms_automation.services import service_registry
+
+    settings.AUTOMATION_LLM_MODELS = [("deepseek/deepseek-chat", "DeepSeek Chat")]
+    try:
+        assert register_llm_services() == ["deepseek"]
+        assert ("deepseek", "deepseek") in APIKey.get_service_choices(), "and so the admin offers it"
+    finally:
+        service_registry.unregister("deepseek")
+
+
+def test_a_provider_that_is_already_named_keeps_its_name(settings):
+    """``openai`` reads *OpenAI*, and allowing a model does not undo that."""
+    from djangocms_automation.ai.llm import register_llm_services
+    from djangocms_automation.models import APIKey
+
+    settings.AUTOMATION_LLM_MODELS = [("openai/gpt-4.1", "GPT-4.1")]
+
+    assert register_llm_services() == [], "nothing to add"
+    assert ("openai", "OpenAI") in APIKey.get_service_choices()
+
+
+def test_the_local_model_needs_no_secret(settings):
+    """There is no provider and no key, so offering a place for one misleads."""
+    from djangocms_automation.ai.llm import register_llm_services
+    from djangocms_automation.services import service_registry
+
+    settings.AUTOMATION_LLM_MODELS = [("dummy/echo", "Echo")]
+
+    assert register_llm_services() == []
+    assert service_registry.get("dummy") is None

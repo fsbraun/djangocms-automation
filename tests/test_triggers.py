@@ -42,19 +42,30 @@ class TestTriggerValidation:
         trigger = ClickTrigger()
         assert trigger.validate_payload(payload) is True
 
-    def test_click_trigger_missing_required(self):
+    def test_trigger_missing_required(self):
         payload = {
-            "element_id": "btn-login",
+            "message_id": "abc123",
+            "recipient": "user@example.com",
             # missing timestamp
         }
-        trigger = ClickTrigger()
+        trigger = MailTrigger()
         with pytest.raises(ValidationError):
             trigger.validate_payload(payload)
 
-    def test_click_trigger_missing_required_no_raise(self):
-        payload = {"element_id": "btn-login"}
-        trigger = ClickTrigger()
+    def test_trigger_missing_required_no_raise(self):
+        payload = {"message_id": "abc123"}
+        trigger = MailTrigger()
         assert trigger.validate_payload(payload, raise_errors=False) is False
+
+    def test_the_manual_trigger_requires_nothing(self):
+        """What starts one is a person choosing it, not a click on an element.
+
+        Demanding an element id and a timestamp from them would be asking for a
+        description of an event that did not happen.
+        """
+        assert ClickTrigger().validate_payload({}) is True
+        # And a caller already sending the old fields is still accepted.
+        assert ClickTrigger().validate_payload({"element_id": "btn", "timestamp": "2026-01-01T00:00:00Z"}) is True
 
     def test_mail_trigger_valid_payload(self):
         payload = {
@@ -110,9 +121,9 @@ class TestTriggerValidation:
         original_validator = triggers_mod.Draft202012Validator
         try:
             triggers_mod.Draft202012Validator = None  # force fallback
-            trigger = ClickTrigger()
+            trigger = MailTrigger()
             with pytest.raises(ValueError):
-                trigger.validate_payload({"element_id": "only"})
+                trigger.validate_payload({"message_id": "only"})
         finally:
             triggers_mod.Draft202012Validator = original_validator
 

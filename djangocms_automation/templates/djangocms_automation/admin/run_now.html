@@ -1,0 +1,20 @@
+{% extends "admin/base_site.html" %}
+{% load i18n admin_urls %}
+
+{% block content %}
+<div id="content-main">
+  <form method="post">{% csrf_token %}
+    <fieldset class="module aligned">
+      <p class="help">
+        {% blocktranslate %}Starts a real run of this automation, right now. Mail is sent,
+        records are written, and anything needing approval waits for a person — exactly as it
+        would if the trigger had fired on its own.{% endblocktranslate %}
+      </p>
+      {{ form.as_div }}
+    </fieldset>
+    <div class="submit-row">
+      <input type="submit" value="{% translate 'Run now' %}" class="default">
+    </div>
+  </form>
+</div>
+{% endblock %}

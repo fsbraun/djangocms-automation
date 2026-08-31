@@ -71,7 +71,7 @@ class AIStepForm(forms.Form):
 
     model = forms.ChoiceField(
         label=_("Model"),
-        choices=lambda: [(name, name) for name in llm.get_allowed_llm_models()],
+        choices=llm.get_llm_model_choices,
         help_text=_("One of the models this project allows."),
     )
     system_prompt = forms.CharField(

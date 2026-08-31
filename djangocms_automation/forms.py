@@ -156,3 +156,67 @@ class MailActionDataForm(forms.Form):
         required=False,
         help_text=_("Optional. Defaults to the site's DEFAULT_FROM_EMAIL."),
     )
+
+
+class RunNowForm(forms.Form):
+    """Start a run by hand, from the toolbar.
+
+    An automation that cannot be started without a webhook, a cron tick or a
+    Django shell is one nobody tries before shipping it. This is the button
+    that makes trying it the easy thing to do.
+    """
+
+    trigger = forms.ModelChoiceField(
+        queryset=AutomationTrigger.objects.none(),
+        label=_("Trigger"),
+        help_text=_("Which entry point to start from. Its data schema decides what may be sent."),
+    )
+    data = forms.JSONField(
+        label=_("Starting data"),
+        required=False,
+        initial=list,
+        widget=forms.Textarea(attrs={"rows": 8, "class": "vLargeTextField"}),
+        help_text=_(
+            "The rows the run starts with, as a JSON array of objects. "
+            "A single object is taken as one row. Leave empty to start with none."
+        ),
+    )
+
+    def __init__(self, *args, automation_content=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        triggers = AutomationTrigger.objects.filter(automation_content=automation_content).order_by("position")
+        self.fields["trigger"].queryset = triggers
+        if len(triggers) == 1:
+            # Nothing to choose. Shown anyway, so the run says what it started.
+            self.fields["trigger"].initial = triggers[0]
+
+    def clean(self):
+        cleaned = super().clean()
+        trigger = cleaned.get("trigger")
+        if trigger is None:
+            return cleaned
+
+        from .engine import normalize_rows
+
+        rows = normalize_rows(cleaned.get("data"))
+        if any(not isinstance(row, dict) for row in rows):
+            raise forms.ValidationError({"data": _("Every row must be a JSON object.")})
+
+        # The same check an inbound webhook gets. A manual run that skipped it
+        # would pass data through that the real entry point would refuse, and
+        # so would prove the automation works when it does not.
+        definition = trigger.get_definition()
+        if definition is not None:
+            handler = definition()  # the registry holds classes; the webhook view does the same
+            for position, row in enumerate(rows, start=1):
+                try:
+                    handler.validate_payload(row, config=trigger.config)
+                except Exception as exc:  # jsonschema's ValidationError, or ValueError without it
+                    raise forms.ValidationError(
+                        {
+                            "data": _("Row %(number)d does not match the trigger's schema: %(error)s")
+                            % {"number": position, "error": exc}
+                        }
+                    ) from exc
+        cleaned["rows"] = rows
+        return cleaned

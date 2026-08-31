@@ -89,3 +89,55 @@ def test_toolbar_without_change_permission_disables_trigger_items(django_user_mo
     # ...while "Add Trigger" and the changelist modal are still offered.
     labels = [str(call.args[0]) for call in trigger_menu.add_modal_item.call_args_list]
     assert "Add Trigger" in labels
+
+
+@pytest.mark.django_db
+def test_the_toolbar_offers_a_run(admin_user, automation_content):
+    """The button for trying the thing you just built."""
+    AutomationTrigger.objects.create(automation_content=automation_content, slot="start", type="click")
+    toolbar, cms_toolbar = _make_toolbar(admin_user, automation_content)
+
+    toolbar.populate()
+
+    menu = cms_toolbar.get_or_create_menu.return_value
+    labels = [str(call.args[0]) for call in menu.add_modal_item.call_args_list]
+    assert "Run now…" in labels
+    url = next(call.args[1] for call in menu.add_modal_item.call_args_list if str(call.args[0]) == "Run now…")
+    assert url.endswith(f"?automation_content={automation_content.pk}")
+
+
+@pytest.mark.django_db
+def test_an_automation_with_no_trigger_says_so_rather_than_hiding_it(admin_user, automation_content):
+    """An automation with no trigger has no entry point at all.
+
+    Saying that in the menu is more use than an *Automation* menu that quietly
+    lacks an item the editor read about somewhere.
+    """
+    toolbar, cms_toolbar = _make_toolbar(admin_user, automation_content)
+
+    toolbar.populate()
+
+    menu = cms_toolbar.get_or_create_menu.return_value
+    disabled = [str(call.args[0]) for call in menu.add_disabled_item.call_args_list]
+    assert "Run now…" in disabled
+    assert not any(str(call.args[0]) == "Run now…" for call in menu.add_modal_item.call_args_list)
+
+
+@pytest.mark.django_db
+def test_running_is_not_offered_to_someone_who_may_not_start_one(automation_content, django_user_model):
+    """Starting a run sends mail and writes records. It is not a view action."""
+    onlooker = django_user_model.objects.create_user("onlooker", is_staff=True)
+    from django.contrib.auth.models import Permission
+
+    onlooker.user_permissions.add(Permission.objects.get(codename="view_automationtrigger"))
+    onlooker = django_user_model.objects.get(pk=onlooker.pk)  # drop the permission cache
+
+    AutomationTrigger.objects.create(automation_content=automation_content, slot="start", type="click")
+    toolbar, cms_toolbar = _make_toolbar(onlooker, automation_content)
+
+    toolbar.populate()
+
+    menu = cms_toolbar.get_or_create_menu.return_value
+    offered = [str(call.args[0]) for call in menu.add_modal_item.call_args_list]
+    offered += [str(call.args[0]) for call in menu.add_disabled_item.call_args_list]
+    assert "Run now…" not in offered

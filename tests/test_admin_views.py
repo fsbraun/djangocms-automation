@@ -123,3 +123,99 @@ def test_instance_admin_displays(automation_content, rf, admin_user):
     empty = AutomationInstance.objects.create(automation_content=automation_content, data=[])
     assert admin_instance.data_display(empty) == "-"
     assert admin_instance.error_message_display(empty) == "-"
+
+
+@pytest.fixture
+def runnable(automation_content, settings, admin_user):
+    """An automation with one trigger and one action, ready to be started."""
+    settings.TASKS = {"default": {"BACKEND": "django.tasks.backends.immediate.ImmediateBackend"}}
+    trigger = AutomationTrigger.objects.create(
+        automation_content=automation_content, slot="start", type="code", position=0
+    )
+    placeholder = Placeholder.objects.get_or_create(
+        content_type=ContentType.objects.get_for_model(AutomationContent),
+        object_id=automation_content.pk,
+        slot="start",
+    )[0]
+    plugin = add_plugin(placeholder=placeholder, plugin_type="UserInputAction", language=settings.LANGUAGE_CODE)
+    model = UserInputActionPluginModel.objects.get(pk=plugin.pk)
+    model.config = {"note": "Approve {{ subject }}", "permissions": ""}
+    model.save()
+    return trigger
+
+
+def _run_url(automation_content):
+    return reverse("admin:djangocms_automation_run_now") + f"?automation_content={automation_content.pk}"
+
+
+@pytest.mark.django_db
+def test_run_now_starts_a_real_run(admin_client, runnable, automation_content):
+    """The moment right after building one is the moment to try it."""
+    response = admin_client.post(
+        _run_url(automation_content),
+        {"trigger": runnable.pk, "data": '[{"subject": "order 42"}]'},
+    )
+
+    assert response.status_code == 302
+    instance = automation_content.automationinstance_set.get()
+    assert instance.initial_data == [{"subject": "order 42"}]
+    assert AutomationAction.objects.filter(automation_instance=instance).exists(), "it actually ran"
+    assert str(instance.pk) in response.url, "and lands on the run, not back where it started"
+
+
+@pytest.mark.django_db
+def test_run_now_shows_a_form_before_running_anything(admin_client, runnable, automation_content):
+    response = admin_client.get(_run_url(automation_content))
+
+    assert response.status_code == 200
+    assert not automation_content.automationinstance_set.exists(), "GET starts nothing"
+
+
+@pytest.mark.django_db
+def test_run_now_refuses_data_the_real_entry_point_would(admin_client, runnable, automation_content):
+    """A manual run that skipped the schema check would prove nothing.
+
+    It would pass data through that the webhook or the calling automation
+    refuses, and so report that the automation works when it does not.
+    """
+    runnable.config = {
+        "data_schema": {
+            "type": "object",
+            "required": ["subject"],
+            "properties": {"subject": {"type": "string"}},
+            "additionalProperties": False,
+        }
+    }
+    runnable.save()
+
+    response = admin_client.post(
+        _run_url(automation_content),
+        {"trigger": runnable.pk, "data": '[{"nonsense": 1}]'},
+    )
+
+    assert response.status_code == 200, "redisplayed with the complaint"
+    assert not automation_content.automationinstance_set.exists()
+    assert "Row 1" in response.content.decode()
+
+
+@pytest.mark.django_db
+def test_run_now_rejects_rows_that_are_not_objects(admin_client, runnable, automation_content):
+    response = admin_client.post(_run_url(automation_content), {"trigger": runnable.pk, "data": "[1, 2]"})
+
+    assert response.status_code == 200
+    assert not automation_content.automationinstance_set.exists()
+
+
+@pytest.mark.django_db
+def test_run_now_is_refused_to_someone_who_may_only_look(client, runnable, automation_content, django_user_model):
+    """Starting a run sends mail and writes records."""
+    from django.contrib.auth.models import Permission
+
+    onlooker = django_user_model.objects.create_user("onlooker", password="x", is_staff=True)
+    onlooker.user_permissions.add(Permission.objects.get(codename="view_automationtrigger"))
+    client.force_login(onlooker)
+
+    response = client.post(_run_url(automation_content), {"trigger": runnable.pk, "data": '[{"subject": "order 42"}]'})
+
+    assert response.status_code == 403
+    assert not automation_content.automationinstance_set.exists()

@@ -2565,3 +2565,58 @@ def test_a_mapping_fields_own_validate_still_binds_a_model():
     assert validate_arguments(
         UpdateForm, {"field_mapping": {"title": "a new title"}}, allowed=["field_mapping"], literal_mappings=mappings
     ) == {"field_mapping": {"title": "a new title"}}
+
+
+@pytest.mark.django_db
+def test_a_project_can_name_its_models_for_the_people_choosing_them(settings):
+    """``anthropic/claude-opus-4-8`` is precise and says nothing useful.
+
+    What an editor is choosing is which model suits the step, and a project
+    knows things about that a version string cannot carry — which one is cheap,
+    which one is for drafting, which one costs real money.
+    """
+    from djangocms_automation.ai.llm import get_allowed_llm_models, get_llm_model_choices
+    from djangocms_automation.ai.step import AIStepForm
+
+    settings.AUTOMATION_LLM_MODELS = [
+        ("anthropic/claude-opus-4-8", "Claude Opus — best quality, costs real money"),
+        ("dummy/echo", "Echo — answers locally, no provider"),
+    ]
+
+    assert get_llm_model_choices() == [
+        ("anthropic/claude-opus-4-8", "Claude Opus — best quality, costs real money"),
+        ("dummy/echo", "Echo — answers locally, no provider"),
+    ]
+    # The allowlist is still about model strings; a label decides nothing.
+    assert get_allowed_llm_models() == ["anthropic/claude-opus-4-8", "dummy/echo"]
+
+    rendered = str(AIStepForm()["model"])
+    assert "Claude Opus — best quality" in rendered, "the editor reads the label"
+    assert 'value="anthropic/claude-opus-4-8"' in rendered, "and the provider gets the string"
+
+
+@pytest.mark.django_db
+def test_a_bare_model_string_still_works_and_labels_itself(settings):
+    """Settings written before the pair form keep working.
+
+    And a project with nothing to add to a name need not say it twice.
+    """
+    from djangocms_automation.ai.llm import get_allowed_llm_models, get_llm_model_choices
+
+    settings.AUTOMATION_LLM_MODELS = ["dummy/echo", ("openai/gpt-4.1", "GPT")]
+
+    assert get_llm_model_choices() == [("dummy/echo", "dummy/echo"), ("openai/gpt-4.1", "GPT")]
+    assert get_allowed_llm_models() == ["dummy/echo", "openai/gpt-4.1"]
+
+
+@pytest.mark.django_db
+def test_a_malformed_model_entry_says_so_at_the_setting(settings):
+    """A misconfigured allowlist should name itself, not fail somewhere later."""
+    from django.core.exceptions import ImproperlyConfigured
+
+    from djangocms_automation.ai.llm import get_llm_model_choices
+
+    settings.AUTOMATION_LLM_MODELS = [("anthropic/claude-opus-4-8", "Claude", "extra")]
+
+    with pytest.raises(ImproperlyConfigured, match="AUTOMATION_LLM_MODELS"):
+        get_llm_model_choices()

@@ -23,11 +23,25 @@ Before you start
         "djangocms_automation.ai",
     ]
 
-    AUTOMATION_LLM_MODELS = ["anthropic/claude-opus-4-8"]
+    AUTOMATION_LLM_MODELS = [
+        ("anthropic/claude-opus-4-8", "Claude Opus"),
+    ]
 
 Store the provider's API key under *Automations → Secrets*, with **Service** set
 to the part of the model string before the slash — ``anthropic`` for the model
 above.
+
+Allowing a model is what puts its provider in that dropdown, so anything
+LiteLLM supports works with no registration: allow ``deepseek/deepseek-chat``
+and ``deepseek`` becomes a Service you can store a key against. It is offered
+under its own id; for a better label, register it in your app's
+``AppConfig.ready()``:
+
+.. code-block:: python
+
+    from djangocms_automation.services import service_registry
+
+    service_registry.register("deepseek", "DeepSeek")
 
 Trying it without a provider
 ----------------------------
@@ -39,7 +53,7 @@ you can get there first:
 
 .. code-block:: python
 
-    AUTOMATION_LLM_MODELS = ["dummy/echo"]
+    AUTOMATION_LLM_MODELS = [("dummy/echo", "Echo (no provider)")]
 
 No key, no network, no ``litellm``. Pick ``dummy/echo`` as the step's model and
 it replies with the task it was given, which is enough to check that the prompt

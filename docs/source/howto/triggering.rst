@@ -5,6 +5,32 @@ Every automation has at least one **trigger**. Each trigger owns a
 placeholder (its slot) holding the flow that runs when it fires. Trigger
 types are registered in ``djangocms_automation.triggers.trigger_registry``.
 
+By hand, from the toolbar
+-------------------------
+
+*Automation → Run now…* starts a run there and then. It is the way to try an
+automation just after building it — every other entry point needs something
+outside the editor, which used to make the moment right after building one the
+one moment there was no way to run it.
+
+Choose the trigger, give it the rows to start with as a JSON array, and it
+goes. This is a *real* run and not a rehearsal: mail is sent, records are
+written, and anything needing approval waits for a person under
+*Execution Instances → Open tasks*, exactly as it would have at three in the
+morning.
+
+The rows are validated against the trigger's data schema before anything
+starts, the same check an inbound webhook gets. A manual run that skipped it
+could pass data the real entry point refuses, and so report that an automation
+works when it does not.
+
+Requires permission to add an execution instance — starting a run has effects,
+so it is not something a viewer may do. Like every run it is queued, so a
+worker has to be consuming (``python manage.py runworker``).
+
+A *Manual* trigger exists for automations whose only entry point is a person.
+It requires nothing in its payload.
+
 Programmatically
 ----------------
 

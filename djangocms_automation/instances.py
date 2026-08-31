@@ -198,15 +198,39 @@ class AutomationInstance(models.Model):
         metadata (timings, states, attempt history) survives for auditing while
         the data that flowed through the run is dropped.
 
+        ``scratch`` goes with the rest. It holds a node's working state, and for
+        an AI step that state is a conversation — the prompt built from the
+        row, what the model replied, the arguments it chose and what the tools
+        observed. Which is the run's data written out in sentences, and leaving
+        it behind would have redaction clear the fields the data arrived in
+        while the fullest copy of it stayed.
+
+        Replaying a redacted action is not possible afterwards. That was already
+        true of ``input_data`` and is the point of retention rather than a cost
+        of it.
+
         :returns: The number of instances redacted.
         """
         cutoff = now() - datetime.timedelta(days=days)
-        stale = cls.objects.filter(finished__isnull=False, updated__lt=cutoff).exclude(initial_data=[], data=[])
-        stale_ids = list(stale.values_list("pk", flat=True))
+        finished = cls.objects.filter(finished__isnull=False, updated__lt=cutoff)
+        # Instances whose own payload is gone can still have actions holding
+        # theirs — every run redacted before ``scratch`` was included here, for
+        # one, and those are the oldest conversations on the system.
+        holding = AutomationAction.objects.filter(automation_instance=models.OuterRef("pk")).exclude(
+            input_data__isnull=True, result={}, scratch={}
+        )
+        stale_ids = list(
+            finished.filter(
+                ~models.Q(initial_data=[], data=[]) | models.Exists(holding),
+            ).values_list("pk", flat=True)
+        )
         if not stale_ids:
             return 0
-        AutomationAction.objects.filter(automation_instance_id__in=stale_ids).update(input_data=None, result={})
-        return cls.objects.filter(pk__in=stale_ids).update(initial_data=[], data=[])
+        AutomationAction.objects.filter(automation_instance_id__in=stale_ids).update(
+            input_data=None, result={}, scratch={}
+        )
+        cls.objects.filter(pk__in=stale_ids).update(initial_data=[], data=[])
+        return len(stale_ids)
 
     def cancel(self, message: str = "Canceled") -> int:
         """Cancel this instance and every unfinished action within it.

@@ -93,10 +93,14 @@ Configure the models automations may use (LiteLLM model strings,
 .. code-block:: python
 
     AUTOMATION_LLM_MODELS = [
-        "anthropic/claude-opus-4-8",
-        "openai/gpt-4.1",
+        ("anthropic/claude-opus-4-8", "Claude Opus"),
+        ("openai/gpt-4.1", "GPT-4.1"),
     ]
     AUTOMATION_LLM_DEFAULT = "anthropic/claude-opus-4-8"  # optional preselect
+
+Each entry is the model string a provider is asked for and the label an editor
+picks from — the label is where a project says which model is for what. A bare
+string is still accepted and labels itself.
 
 Fields:
 

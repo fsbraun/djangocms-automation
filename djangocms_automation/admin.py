@@ -4,14 +4,16 @@ from cms.admin.utils import ChangeListActionsMixin, GrouperModelAdmin
 from django import forms
 from django.contrib import admin, messages
 from django.contrib.admin.options import IS_POPUP_VAR
+from django.core.exceptions import PermissionDenied
 from django.http import HttpResponseRedirect
+from django.shortcuts import get_object_or_404
 from django.template.response import TemplateResponse
 from django.urls import path, reverse
 from django.utils.html import format_html, mark_safe
 from django.utils.translation import gettext_lazy as _
 
 from . import engine
-from .forms import AutomationTriggerAdminForm
+from .forms import AutomationTriggerAdminForm, RunNowForm
 from .instances import (
     FAILED,
     PENDING,
@@ -483,6 +485,59 @@ class AutomationTriggerAdmin(ChangeListActionsMixin, admin.ModelAdmin):
     def change_view(self, request, object_id, form_url="", extra_context=None):
         self._mark_as_popup(request)
         return super().change_view(request, object_id, form_url, extra_context)
+
+    def get_urls(self):
+        custom = [
+            path(
+                "run/",
+                self.admin_site.admin_view(self.run_now_view),
+                name="djangocms_automation_run_now",
+            ),
+        ]
+        return custom + super().get_urls()
+
+    def run_now_view(self, request):
+        """Start a run by hand, from the toolbar.
+
+        Every other entry point needs something outside the editor — a webhook
+        delivery, a cron tick, a form submission, a Django shell. So the
+        natural moment to try an automation, just after building it, was the
+        one moment there was no way to.
+
+        Creating an instance is what this does, so the permission asked for is
+        the one for creating an instance. It is a real run against real data:
+        mail is sent, records are written, and an approval gate waits for a
+        person exactly as it would have done at three in the morning.
+        """
+        automation_content = get_object_or_404(
+            AutomationContent.admin_manager, pk=request.GET.get("automation_content") or 0
+        )
+        if not request.user.has_perm("djangocms_automation.add_automationinstance"):
+            raise PermissionDenied
+
+        form = RunNowForm(request.POST or None, automation_content=automation_content)
+        if request.method == "POST" and form.is_valid():
+            trigger = form.cleaned_data["trigger"]
+            instance = trigger.trigger_execution(data=form.cleaned_data["rows"])
+            self.message_user(
+                request,
+                _("Started %(automation)s. Watch it under Execution Instances.") % {"automation": automation_content},
+                level=messages.SUCCESS,
+            )
+            return HttpResponseRedirect(
+                reverse("admin:djangocms_automation_automationinstance_change", args=[instance.pk])
+            )
+
+        self._mark_as_popup(request)
+        context = {
+            **self.admin_site.each_context(request),
+            "title": _("Run now"),
+            "form": form,
+            "automation_content": automation_content,
+            "opts": self.model._meta,
+            "is_popup": True,
+        }
+        return TemplateResponse(request, "djangocms_automation/admin/run_now.html", context)
 
     @staticmethod
     def get_trigger(request, obj) -> tuple[forms.Form | None, bool]:

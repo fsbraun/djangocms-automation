@@ -121,6 +121,72 @@ Two notes so this does not read as more than it is:
   Python action you write (see *Writing your own action* in the
   [actions guide](docs/source/howto/actions.rst)).
 
+### Running one by hand
+
+*Automation → Run now…* in the toolbar starts a run there and then, which is
+how you try an automation just after building it. Pick the trigger, give it the
+rows to start with as a JSON array, and it goes — a real run, so mail is sent,
+records are written, and anything needing approval waits for a person under
+*Execution Instances → Open tasks*.
+
+The rows are checked against the trigger's data schema first, exactly as an
+inbound webhook's would be, so a manual run cannot prove an automation works on
+data the real entry point would refuse.
+
+It needs permission to add an execution instance, and it is queued like any
+other run: the worker has to be going (`python manage.py runworker`, or
+`runworker --once` to drain and stop).
+
+### Pointing it at a real model
+
+Everything above runs on `dummy/echo`, which answers locally. To use a real
+provider:
+
+```bash
+pip install djangocms-automation[llm]
+```
+
+```python
+INSTALLED_APPS = [..., "djangocms_automation", "djangocms_automation.ai"]
+
+# An allowlist: a step may only name a model that appears here. Each entry is
+# the model string and the label an editor picks from — a bare string also
+# works and labels itself.
+AUTOMATION_LLM_MODELS = [
+    ("anthropic/claude-opus-4-8", "Claude Opus — best quality, costs money"),
+    ("dummy/echo", "Echo — answers locally, no provider"),
+]
+AUTOMATION_LLM_DEFAULT = "anthropic/claude-opus-4-8"
+```
+
+Model strings are LiteLLM's `<provider>/<model>` — see
+[LiteLLM's provider list](https://docs.litellm.ai/docs/providers) for the exact
+name of any model it supports.
+
+**The key goes in the database, not in settings.** In the admin, under
+*Automations → Secrets*, add an API key with **Service** set to the part of the
+model string *before* the slash — `anthropic` for the example above — and leave
+it active. The package reads no environment variable and no settings value for
+this — a step without a stored key fails with a message saying so, rather than
+quietly picking one up from the environment.
+
+Allowing a model is what makes its provider appear in that dropdown, so any
+provider LiteLLM supports works without registering anything: put
+`("deepseek/deepseek-chat", "DeepSeek")` in the allowlist and `deepseek` is
+offered as a Service. To give it a nicer label than its own id, register it —
+`service_registry.register("deepseek", "DeepSeek")` from
+`djangocms_automation.services`, in your app's `AppConfig.ready()`.
+
+Then open any *Ask a Model* step and pick the model in its **Model** field. The
+seeded automations all name `dummy/echo`, so switching one over is a single
+field. In the demo project the allowlist is in `demo/demoproject/settings.py`.
+
+Two things change when a real model answers. The `!call` directives in a task
+do nothing — those are instructions to the stand-in, and a real model decides
+for itself what to call. And the run costs money, so the step's **Maximum
+tokens** and **Maximum tool calls** stop being theoretical: set them before the
+first run, not after.
+
 ### Built-in actions
 
 - **Send Email** — one email per data row via Django's email framework.

@@ -259,14 +259,21 @@ class GenericWebhookTrigger(WebhookTrigger):
 
 # Click Trigger schema: expects element metadata and optional context
 class ClickTrigger(Trigger):
+    """Started by a person, from *Automation → Run now* in the toolbar."""
+
     id = "click"
     name = _("Manual")
     description = _("Starts when a staff user selects the automation to be started")
     icon = "bi-mouse"
+    #: Nothing is required. The schema described a click on a page element,
+    #: back when that was the intended mechanism; what actually starts one of
+    #: these is a person choosing it from the toolbar, and demanding an element
+    #: id and a timestamp from them would be asking for a description of an
+    #: event that did not happen. The fields stay as optional properties, so a
+    #: caller already sending them is still accepted.
     data_schema = {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
-        "required": ["element_id", "timestamp"],
         "properties": {
             "element_id": {"type": "string", "minLength": 1},
             "timestamp": {"type": "string", "format": "date-time"},

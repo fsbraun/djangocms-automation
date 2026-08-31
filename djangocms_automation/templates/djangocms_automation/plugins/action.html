@@ -4,7 +4,7 @@
    <div class="automation-action automation-item"{% if request.toolbar.edit_mode_active and instance.comment %} data-comment="{{ instance.comment }}"{% endif %}>
         <div class="card-title">
             <svg width="16" height="16"><use xlink:href="#{{ icon|default:"bi-stars" }}"></use></svg> {{ title }}
-            {% if instance.needs_approval %}
+            {% if instance.needs_approval and False %}
             <span class="tool-approval" title="{% translate 'A person approves each call before it runs' %}">
                 <svg width="16" height="16"><use xlink:href="#bi-shield-exclamation"></use></svg>
             </span>

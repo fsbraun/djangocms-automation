@@ -13,7 +13,7 @@ Enabling it is the ordinary opt-in — put it in the allowlist:
 
 .. code-block:: python
 
-    AUTOMATION_LLM_MODELS = ["dummy/echo"]
+    AUTOMATION_LLM_MODELS = [("dummy/echo", "Echo (no provider)")]
 
 It does nothing unless a step is configured to use it, and it cannot be reached
 by a step that names a real model.

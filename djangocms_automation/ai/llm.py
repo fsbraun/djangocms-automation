@@ -14,9 +14,10 @@ looked up by the provider prefix of the model string, which aligns with the
 
 Settings:
 
-* ``AUTOMATION_LLM_MODELS`` — list of model strings offered in the LLM
-  action's model choice field (default ``[]`` — deny-all, mirroring
-  ``AUTOMATION_ALLOWED_MODELS``).
+* ``AUTOMATION_LLM_MODELS`` — the models offered in an AI step's model field,
+  as ``(model string, label)`` pairs (default ``[]`` — deny-all, mirroring
+  ``AUTOMATION_ALLOWED_MODELS``). A bare string is still accepted and labels
+  itself, so settings written before the pair form keep working.
 * ``AUTOMATION_LLM_DEFAULT`` — optional preselected model string.
 
 A model string beginning ``dummy/`` is answered locally by
@@ -33,6 +34,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from django.conf import settings
+from django.core.exceptions import ImproperlyConfigured
 
 from ..tools import ToolCall
 from . import dummy
@@ -47,6 +49,8 @@ __all__ = [
     "complete",
     "get_allowed_llm_models",
     "get_api_key",
+    "get_llm_model_choices",
+    "register_llm_services",
 ]
 
 
@@ -125,9 +129,72 @@ class LLMResult:
         return None if self.finish_reason in COMPLETE_FINISH_REASONS else _incomplete_because(self.finish_reason)
 
 
+def get_llm_model_choices() -> list[tuple[str, str]]:
+    """The models this project allows, as ``(model string, label)`` pairs.
+
+    The model string is what a provider is asked for; the label is what an
+    editor picks from. ``anthropic/claude-opus-4-8`` is precise and says
+    nothing about when to reach for it, which is the choice an editor is
+    actually making.
+
+    A bare string labels itself. Settings written before the pair form keep
+    working, and a project with nothing to add to a name need not say it twice.
+
+    :raises ImproperlyConfigured: If an entry is neither a string nor a pair.
+    """
+    choices = []
+    for entry in list(getattr(settings, "AUTOMATION_LLM_MODELS", [])):
+        if isinstance(entry, str):
+            choices.append((entry, entry))
+            continue
+        try:
+            value, label = entry
+        except (TypeError, ValueError) as exc:
+            raise ImproperlyConfigured(
+                f"AUTOMATION_LLM_MODELS entries are a model string or a (model string, label) pair. Got: {entry!r}"
+            ) from exc
+        choices.append((str(value), str(label)))
+    return choices
+
+
 def get_allowed_llm_models() -> list[str]:
     """Get the model strings automations may use."""
-    return list(getattr(settings, "AUTOMATION_LLM_MODELS", []))
+    return [value for value, _label in get_llm_model_choices()]
+
+
+def register_llm_services() -> list[str]:
+    """Make sure every allowed model has somewhere to keep its key.
+
+    A key is looked up by the provider prefix of the model string, and the
+    admin's *Service* field offers whatever the service registry holds. Those
+    are two lists that have to agree, and nothing kept them in step: a project
+    could allow ``deepseek/deepseek-chat``, find no way to store a ``deepseek``
+    key, and learn why only when a run failed.
+
+    So allowing a model is taken as saying the project uses that provider. The
+    prefix is registered under its own name — a project wanting a better label
+    than ``deepseek`` registers it itself, and an already-registered service is
+    left alone, so ``openai`` keeps reading *OpenAI*.
+
+    Called from the app's ``ready``. Settings do not change while a process
+    runs, so once is enough.
+
+    :returns: The service ids newly registered.
+    """
+    from ..services import service_registry
+
+    added = []
+    for model, _label in get_llm_model_choices():
+        if dummy.is_dummy(model):
+            continue  # answered here; there is no key and no provider
+        # Exactly what ``complete`` will ask for, however odd it looks. A
+        # registry that offered something else would be no help at all.
+        provider = model.split("/", 1)[0]
+        if not provider or service_registry.get(provider) is not None:
+            continue
+        service_registry.register(provider, provider, "Used by a model in AUTOMATION_LLM_MODELS.")
+        added.append(provider)
+    return added
 
 
 def get_api_key(service: str) -> str:

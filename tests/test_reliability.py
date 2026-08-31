@@ -2031,3 +2031,61 @@ def test_the_counters_stay_in_step_for_a_plain_recurring_timer(run_setup, settin
     trigger.refresh_from_db()
     assert trigger.config["fired_count"] == 1
     assert trigger.config["occurrence_count"] == 1, "the first firing must count once, not twice"
+
+
+@pytest.mark.django_db
+def test_redaction_takes_the_conversation_too(run_setup, settings):
+    """An AI step's scratch is the run's data written out in sentences.
+
+    The prompt built from the row, what the model replied, the arguments it
+    chose, what the tools observed. Clearing the fields the data arrived in
+    while the fullest copy of it stays is not retention.
+    """
+    trigger, placeholder = run_setup
+    action = run(trigger, placeholder, "SlowPlugin", settings)
+    AutomationAction.objects.filter(pk=action.pk).update(
+        scratch={
+            "conversation": [
+                {"role": "user", "content": "Ada Lovelace wrote in about invoice 4402."},
+                {"role": "assistant", "content": "I will look up her account."},
+            ],
+            "usage": {"input_tokens": 120},
+        }
+    )
+    instance = action.automation_instance
+    old = now() - datetime.timedelta(days=90)
+    AutomationInstance.objects.filter(pk=instance.pk).update(finished=old, updated=old)
+
+    assert AutomationInstance.redact_payloads(days=30) == 1
+
+    action.refresh_from_db()
+    assert action.scratch == {}, "the conversation goes with the payload"
+    assert action.state == COMPLETED, "and the audit trail stays"
+    assert action.re_entry_count is not None
+
+
+@pytest.mark.django_db
+def test_redaction_reaches_a_run_whose_payload_was_already_taken(run_setup, settings):
+    """The oldest conversations are on runs redacted before this covered them.
+
+    Selecting only instances that still hold their own data would step over
+    exactly those — the ones that have been sitting there longest.
+    """
+    trigger, placeholder = run_setup
+    action = run(trigger, placeholder, "SlowPlugin", settings)
+    instance = action.automation_instance
+    old = now() - datetime.timedelta(days=90)
+    AutomationInstance.objects.filter(pk=instance.pk).update(finished=old, updated=old)
+
+    # An earlier pass that knew nothing about scratch.
+    AutomationInstance.objects.filter(pk=instance.pk).update(data=[], initial_data=[])
+    AutomationAction.objects.filter(pk=action.pk).update(
+        input_data=None, result={}, scratch={"conversation": [{"role": "user", "content": "invoice 4402"}]}
+    )
+
+    assert AutomationInstance.redact_payloads(days=30) == 1
+    action.refresh_from_db()
+    assert action.scratch == {}
+
+    # And nothing is left to do on the next run.
+    assert AutomationInstance.redact_payloads(days=30) == 0
