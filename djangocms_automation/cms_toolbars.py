@@ -25,8 +25,10 @@ class AutomationToolbar(CMSToolbar):
         menu = self.toolbar.get_or_create_menu("automation-menu", _("Automation"))
 
         self.populate_run_item(menu, automation_content)
+        self.populate_runs_item(menu, automation_content)
 
         # Create a submenu for triggers
+        menu.add_break("trigger-break")
         trigger_menu = menu.get_or_create_menu("automation-trigger-submenu", _("Triggers"))
         self.populate_trigger_menu(trigger_menu, automation_content)
 
@@ -44,12 +46,32 @@ class AutomationToolbar(CMSToolbar):
         """
         if not self.request.user.has_perm("djangocms_automation.add_automationinstance"):
             return
-        menu.add_break("automation-run-break")
         if not AutomationTrigger.objects.filter(automation_content=automation_content).exists():
             menu.add_disabled_item(_("Run now…"))
             return
         url = reverse("admin:djangocms_automation_run_now") + f"?automation_content={automation_content.pk}"
         menu.add_modal_item(_("Run now…"), url)
+
+    def populate_runs_item(self, menu, automation_content):
+        """Everything this automation has done, without leaving the editor.
+
+        Opened in the sideframe rather than a modal: a list of runs is
+        something you read *against* the workflow beside it — this step failed,
+        which node is that — and a modal covers the very thing you are
+        comparing it with.
+
+        Filtered to this automation, because the unfiltered list is every run
+        of every automation on the site and the first thing anyone would do
+        with it is narrow it to the one they are looking at.
+        """
+        automation = getattr(automation_content, "automation", None)
+        if automation is None or not self.request.user.has_perm("djangocms_automation.view_automationinstance"):
+            return
+        url = (
+            reverse("admin:djangocms_automation_automationinstance_changelist")
+            + f"?automation_content__automation__id__exact={automation.pk}"
+        )
+        menu.add_sideframe_item(_("Past Runs"), url)
 
     def populate_trigger_menu(self, menu, automation_content):
         if not isinstance(self.toolbar.get_object(), AutomationContent):  # or not self.toolbar.edit_mode_active:

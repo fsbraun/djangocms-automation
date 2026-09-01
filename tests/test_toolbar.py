@@ -141,3 +141,47 @@ def test_running_is_not_offered_to_someone_who_may_not_start_one(automation_cont
     offered = [str(call.args[0]) for call in menu.add_modal_item.call_args_list]
     offered += [str(call.args[0]) for call in menu.add_disabled_item.call_args_list]
     assert "Run now…" not in offered
+
+
+@pytest.mark.django_db
+def test_the_toolbar_offers_this_automations_runs(admin_user, automation_content):
+    """Filtered to this automation: the unfiltered list is every run of every
+    automation on the site, and narrowing it is the first thing anyone would
+    do with it."""
+    toolbar, cms_toolbar = _make_toolbar(admin_user, automation_content)
+
+    toolbar.populate()
+
+    menu = cms_toolbar.get_or_create_menu.return_value
+    labels = [str(call.args[0]) for call in menu.add_sideframe_item.call_args_list]
+    assert "Past Runs" in labels
+    url = next(call.args[1] for call in menu.add_sideframe_item.call_args_list if str(call.args[0]) == "Runs")
+    assert url.endswith(f"?automation_content__automation__id__exact={automation_content.automation_id}")
+
+
+@pytest.mark.django_db
+def test_the_runs_open_beside_the_workflow_not_over_it(admin_user, automation_content):
+    """A list of runs is read *against* the workflow — this step failed, which
+    node is that — and a modal covers the thing you are comparing it with."""
+    toolbar, cms_toolbar = _make_toolbar(admin_user, automation_content)
+
+    toolbar.populate()
+
+    menu = cms_toolbar.get_or_create_menu.return_value
+    assert not any(str(call.args[0]) == "Runs" for call in menu.add_modal_item.call_args_list)
+
+
+@pytest.mark.django_db
+def test_runs_are_not_offered_to_someone_who_may_not_see_them(automation_content, django_user_model):
+    """A run carries the data that flowed through it."""
+    from django.contrib.auth.models import Permission
+
+    onlooker = django_user_model.objects.create_user("runonlooker", is_staff=True)
+    onlooker.user_permissions.add(Permission.objects.get(codename="view_automationtrigger"))
+    onlooker = django_user_model.objects.get(pk=onlooker.pk)
+
+    toolbar, cms_toolbar = _make_toolbar(onlooker, automation_content)
+    toolbar.populate()
+
+    menu = cms_toolbar.get_or_create_menu.return_value
+    assert not any(str(call.args[0]) == "Runs" for call in menu.add_sideframe_item.call_args_list)

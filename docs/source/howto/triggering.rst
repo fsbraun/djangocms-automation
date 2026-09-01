@@ -31,6 +31,10 @@ worker has to be consuming (``python manage.py runworker``).
 A *Manual* trigger exists for automations whose only entry point is a person.
 It requires nothing in its payload.
 
+*Automation → Runs* opens what this automation has done, filtered to it, in the
+sideframe — beside the workflow rather than over it, which is how a failed step
+gets matched to the node that failed.
+
 Programmatically
 ----------------
 
