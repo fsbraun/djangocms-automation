@@ -108,6 +108,14 @@ def observations(action):
     return [m for m in AgentState.load(action).messages if m.get("role") == "tool"]
 
 
+def observations_system(action):
+    """The standing instructions the step actually sent."""
+    return next(
+        (m.get("content", "") for m in AgentState.load(action).messages if m.get("role") == "system"),
+        "",
+    )
+
+
 # --------------------------------------------------------------------------
 # With no tools it is a prompt
 # --------------------------------------------------------------------------
@@ -2763,3 +2771,47 @@ def test_an_empty_answer_to_a_shape_fails_rather_than_flowing_on(run_setup, sett
     action = step_action()
     assert action.state == FAILED
     assert "empty answer for the output shape" in action.result["error"]
+
+
+@pytest.mark.django_db
+def test_the_answer_format_reaches_the_model(run_setup, settings):
+    """A description that never leaves the editor steers nothing.
+
+    The setting exists because the place this already worked — a field's
+    description in the output shape — is not somewhere anyone would think to
+    look for it.
+    """
+    trigger, placeholder = run_setup
+    add_step(placeholder, settings, system_prompt="Be brief.", answer_format="text")
+    SCRIPT.append(says(text="An answer."))
+
+    trigger.trigger_execution(data=[{"seed": 1}])
+
+    system = observations_system(step_action())
+    assert "Be brief." in system, "what the editor wrote stays the substance"
+    assert "Do not use Markdown" in system
+    assert system.index("Be brief.") < system.index("Do not use Markdown"), "the note about presentation comes last"
+
+
+@pytest.mark.django_db
+def test_no_answer_format_adds_nothing(run_setup, settings):
+    """Left alone, the step asks for nothing it was not told to ask for."""
+    trigger, placeholder = run_setup
+    add_step(placeholder, settings, system_prompt="Be brief.")
+    SCRIPT.append(says(text="An answer."))
+
+    trigger.trigger_execution(data=[{"seed": 1}])
+
+    assert observations_system(step_action()) == "Be brief."
+
+
+@pytest.mark.django_db
+def test_a_format_alone_is_the_whole_instruction(run_setup, settings):
+    """With no instructions of their own, the note is all there is to say."""
+    trigger, placeholder = run_setup
+    add_step(placeholder, settings, answer_format="html")
+    SCRIPT.append(says(text="<p>An answer.</p>"))
+
+    trigger.trigger_execution(data=[{"seed": 1}])
+
+    assert observations_system(step_action()).startswith("Write in HTML")

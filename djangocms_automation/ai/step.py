@@ -53,6 +53,45 @@ MAX_LLM_RETRIES = 5
 MAX_NESTING_DEPTH = 3
 
 
+#: How an answer should read, and the sentence that asks for it. Written to
+#: hold for a plain answer and for the string fields inside an output shape,
+#: since a step may have either.
+ANSWER_FORMATS = (
+    (
+        "text",
+        _("Plain text"),
+        "Write in plain prose. Do not use Markdown, headings, bullet lists, tables or code fences.",
+    ),
+    (
+        "markdown",
+        _("Markdown"),
+        "Write in Markdown.",
+    ),
+    (
+        "html",
+        _("HTML"),
+        "Write in HTML. Fragments only — no <html>, <head> or <body> wrapper, and no <script>.",
+    ),
+)
+
+_FORMAT_INSTRUCTIONS = {value: sentence for value, _label, sentence in ANSWER_FORMATS}
+ANSWER_FORMATS = tuple((value, label) for value, label, _sentence in ANSWER_FORMATS)
+
+
+def _instructions(system: str, config: dict) -> str | None:
+    """The editor's instructions, plus how the answer should read.
+
+    Appended rather than prepended: what the editor wrote is the substance, and
+    this is a note about presentation. A model reading the last line last is
+    the behaviour being relied on, which is also why this is steering and not a
+    guarantee.
+    """
+    sentence = _FORMAT_INSTRUCTIONS.get(str((config or {}).get("answer_format") or ""))
+    if not sentence:
+        return system or None
+    return f"{system}\n\n{sentence}".strip() if system else sentence
+
+
 def _validate_json_schema(value):
     if not value:
         return
@@ -115,6 +154,15 @@ class AIStepForm(forms.Form):
         label=_("Model"),
         choices=llm.get_llm_model_choices,
         help_text=_("One of the models this project allows."),
+    )
+    answer_format = forms.ChoiceField(
+        label=_("Answer format"),
+        required=False,
+        choices=lambda: [("", _("Leave it to the model"))] + list(ANSWER_FORMATS),
+        help_text=_(
+            "Added to the instructions. Steering, not a guarantee — unlike the output shape, "
+            "which the provider enforces."
+        ),
     )
     system_prompt = forms.CharField(
         label=_("Instructions"),
@@ -277,7 +325,7 @@ class AIStepPluginModel(BaseActionPluginModel):
             context = {**row, "data": rows}
             state.started_at = now().isoformat()
             state.start(
-                system=str(safe_render(str(config.get("system_prompt") or ""), context)) or None,
+                system=_instructions(str(safe_render(str(config.get("system_prompt") or ""), context)), config),
                 prompt=str(safe_render(str(config.get("prompt") or ""), context)),
             )
         else:

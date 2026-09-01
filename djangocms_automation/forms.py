@@ -150,6 +150,14 @@ class MailActionDataForm(forms.Form):
         widget=forms.Textarea,
         required=True,
     )
+    body_format = forms.ChoiceField(
+        label=_("Body format"),
+        required=False,
+        choices=(("", _("Plain text")), ("html", _("HTML"))),
+        help_text=_(
+            "HTML sends both: the markup for clients that render it, and a plain-text version for those that do not."
+        ),
+    )
     recipient_email = forms.EmailField(label=_("Recipient Email"), required=True)
     from_email = forms.EmailField(
         label=_("Sender Email"),

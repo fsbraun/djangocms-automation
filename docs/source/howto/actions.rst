@@ -27,9 +27,17 @@ Field                        Meaning
 ============================ ==========================================================
 Email Subject (expression)   e.g. ``"Welcome!"`` or ``subject``
 Email Body (template)        e.g. ``Hello {{ first_name }}!``
+Body format                  optional; *HTML* sends markup plus a plain-text part
 Recipient Email (expression) e.g. ``email`` or ``"info@example.com"``
 Sender Email (expression)    optional; defaults to ``DEFAULT_FROM_EMAIL``
 ============================ ==========================================================
+
+Set **Body format** to *HTML* and the message goes out with both parts: the
+markup for clients that render it, and a plain-text version derived from it for
+those that do not. Deriving it rather than asking for the body twice is
+deliberate — an editor made to write every message twice writes the second one
+badly, and a mail with no text part arrives blank for anyone whose client will
+not render markup.
 
 Each output row gains a ``_mail`` entry (``sent``, ``recipient``,
 ``error``). If **all** rows fail, the action (and the run) fails; partial
@@ -105,6 +113,8 @@ string is still accepted and labels itself.
 Fields:
 
 - **Model** — one of ``AUTOMATION_LLM_MODELS``.
+- **Answer format** (optional) — asks for plain text, Markdown or HTML.
+  Appended to the instructions; steering rather than a guarantee.
 - **System prompt** (template, optional) and **Prompt** (template).
 - **Output JSON schema** (optional) — constrains the response to valid
   JSON. A JSON *array* response becomes the new data rows; an *object*

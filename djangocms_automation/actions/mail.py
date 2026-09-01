@@ -5,11 +5,33 @@ from __future__ import annotations
 import logging
 
 from django.conf import settings
-from django.core.mail import EmailMessage
+from django.core.mail import EmailMessage, EmailMultiAlternatives
+from django.utils.html import strip_tags
 
 from ..models import BaseActionPluginModel
 
 logger = logging.getLogger(__name__)
+
+
+def _compose(*, subject: str, body: str, html: bool, from_email, recipient: str):
+    """The message to send, in one part or two.
+
+    A plain-text alternative always goes with the HTML. Some clients will not
+    render markup, some people turn it off, and a mail with no text part
+    arrives blank for them — which is worse than the markup they were avoiding.
+    It is derived from the HTML rather than asked for separately: an editor
+    made to write every message twice writes the second one badly.
+    """
+    if not html:
+        return EmailMessage(subject=subject, body=body, from_email=from_email, to=[recipient])
+    message = EmailMultiAlternatives(
+        subject=subject,
+        body=strip_tags(body),
+        from_email=from_email,
+        to=[recipient],
+    )
+    message.attach_alternative(body, "text/html")
+    return message
 
 
 class MailActionPluginModel(BaseActionPluginModel):
@@ -42,11 +64,12 @@ class MailActionPluginModel(BaseActionPluginModel):
                 recipient = inputs.get("recipient_email")
                 if not recipient:
                     raise ValueError("No recipient email resolved")
-                message = EmailMessage(
+                message = _compose(
                     subject=str(inputs.get("subject") or ""),
                     body=str(inputs.get("body") or ""),
+                    html=str(inputs.get("body_format") or "") == "html",
                     from_email=inputs.get("from_email") or settings.DEFAULT_FROM_EMAIL,
-                    to=[str(recipient)],
+                    recipient=str(recipient),
                 )
                 message.send(fail_silently=False)
                 mail_status["sent"] = True

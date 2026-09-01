@@ -202,6 +202,17 @@ model should produce. Those descriptions are part of the prompt the model sees.
 Use **Edit as JSON** for an array or a schema outside the flat-object editor;
 the original JSON is kept intact when the editor cannot represent it.
 
+**Answer format** asks for plain text, Markdown or HTML. It is appended to the
+instructions, so it applies to a plain answer and to the string fields inside an
+output shape alike. Note what it is: steering, not a guarantee. The *shape* is
+enforced by the provider, which is why the fields are safe to read downstream; a
+format is a request, and a model may still hand you headings after being asked
+for prose.
+
+*Send Email* has a matching **Body format**. Set it to HTML and the message goes
+out with both parts — the markup, and a plain-text version derived from it for
+clients that will not render markup.
+
 Every field has to be listed as required — that is what a provider enforcing a
 schema insists on. A field that need not be answered says so by allowing null
 (``{"type": ["string", "null"]}``), which the field editor writes for you when

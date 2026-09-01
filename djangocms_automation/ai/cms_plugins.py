@@ -64,7 +64,7 @@ class AIStep(ActionPlugin):
 
     fieldsets = (
         (None, {"fields": ("model", "prompt", "system_prompt")}),
-        (_("Answer"), {"classes": ("collapse",), "fields": ("output_schema",)}),
+        (_("Answer"), {"classes": ("collapse",), "fields": ("answer_format", "output_schema")}),
         (
             _("Limits"),
             {

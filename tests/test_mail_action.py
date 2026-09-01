@@ -140,3 +140,52 @@ def test_mail_action_total_failure_fails_action_and_instance(mail_setup, setting
     instance.refresh_from_db()
     assert instance.status == FAILED
     assert instance.finished is not None
+
+
+def _send(placeholder, settings, config):
+    """One Send Email step, configured and run through the engine."""
+    plugin = add_plugin(placeholder=placeholder, plugin_type="MailAction", language=settings.LANGUAGE_CODE)
+    model = MailActionPluginModel.objects.get(pk=plugin.pk)
+    model.config = config
+    model.save()
+
+
+@pytest.mark.django_db
+def test_an_html_body_arrives_in_both_forms(mail_setup, settings):
+    """A mail with no text part arrives blank for anyone whose client will not
+    render markup, which is worse than the markup they were avoiding."""
+    trigger, placeholder = mail_setup
+    _send(
+        placeholder,
+        settings,
+        {
+            "recipient_email": "'to@example.com'",
+            "subject": "'Digest'",
+            "body": "<p>Hello <b>Ada</b></p>",
+            "body_format": "'html'",
+        },
+    )
+
+    trigger.trigger_execution(data=[{"seed": 1}])
+
+    sent = mail.outbox[-1]
+    assert sent.body == "Hello Ada", "the text part, derived rather than asked for twice"
+    assert sent.alternatives[0][0] == "<p>Hello <b>Ada</b></p>"
+    assert sent.alternatives[0][1] == "text/html"
+
+
+@pytest.mark.django_db
+def test_a_plain_body_stays_one_part(mail_setup, settings):
+    """The default is unchanged: no alternative, nothing stripped."""
+    trigger, placeholder = mail_setup
+    _send(
+        placeholder,
+        settings,
+        {"recipient_email": "'to@example.com'", "subject": "'Digest'", "body": "Hello <not markup>"},
+    )
+
+    trigger.trigger_execution(data=[{"seed": 1}])
+
+    sent = mail.outbox[-1]
+    assert sent.body == "Hello <not markup>"
+    assert not getattr(sent, "alternatives", [])
