@@ -780,7 +780,6 @@ class AutomationTriggerAdmin(ChangeListActionsMixin, admin.ModelAdmin):
         "type",
         "slot",
     )
-    list_editable = ("slot",)  # Makes 'slot' editable in changelist with save button
     ordering = (
         "automation_content",
         "position",

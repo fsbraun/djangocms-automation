@@ -108,6 +108,51 @@ class AutomationTrigger(models.Model):
         verbose_name = _("Trigger")
         verbose_name_plural = _("Triggers")
         ordering = ["position"]
+        constraints = [
+            # The slot is how a trigger finds the placeholder holding its flow,
+            # so two triggers sharing one within an automation is not a naming
+            # nicety — renaming one onto the other's slot renames its
+            # placeholder too, and ``.get(slot=…)`` then raises
+            # ``MultipleObjectsReturned`` for both of them.
+            #
+            # A ``UniqueConstraint`` rather than ``unique_together`` because a
+            # ModelForm validates constraints as well as uniqueness, so this
+            # message reaches the editor instead of a database error reaching
+            # the logs.
+            models.UniqueConstraint(
+                fields=["automation_content", "slot"],
+                name="unique_trigger_slot_per_automation",
+                violation_error_message=_(
+                    "Another trigger on this automation already uses this slot. "
+                    "The slot is how a trigger finds its own flow, so no two can share one."
+                ),
+            )
+        ]
+
+    def save(self, *args, **kwargs):
+        """Save, keeping the trigger's placeholder named after it.
+
+        A trigger's ``slot`` is how it finds the placeholder holding its flow,
+        so renaming one without renaming the other leaves the plugins where
+        nothing looks for them. The workflow still shows in the editor — the
+        placeholder is intact — and every run fails with *has no placeholder
+        and so no plugins to execute*, which does not sound like "you renamed
+        something".
+
+        Here rather than in the admin form because a rename is a rename: from
+        the change view, a shell, a fixture or a data migration, the two names
+        have to move together.
+        """
+        renamed_from = None
+        if self.pk:
+            renamed_from = type(self).objects.filter(pk=self.pk).values_list("slot", flat=True).first()
+        super().save(*args, **kwargs)
+        if renamed_from and renamed_from != self.slot:
+            self.placeholders().filter(slot=renamed_from).update(slot=self.slot)
+
+    def placeholders(self):
+        """Every placeholder belonging to this trigger's automation."""
+        return Placeholder.objects.get_for_obj(self.automation_content)
 
     def get_definition(self):
         """Get the trigger type definition from the registry.

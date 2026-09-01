@@ -103,9 +103,3 @@ class AutomationToolbar(CMSToolbar):
                 else:
                     # User can see list (due to add?) but cannot change individual triggers
                     menu.add_disabled_item(label)
-
-        # Add "Triggers" entry that opens the changelist in a modal, filtered by automation_content
-        menu.add_break()
-        url = reverse("admin:djangocms_automation_automationtrigger_changelist")
-        url += f"?automation_content={automation_content.pk}"
-        menu.add_modal_item(_("Triggers"), url)

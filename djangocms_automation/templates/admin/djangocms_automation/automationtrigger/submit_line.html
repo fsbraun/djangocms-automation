@@ -1,0 +1,25 @@
+{% extends "admin/submit_line.html" %}
+{% load i18n admin_urls %}
+
+{% comment %}
+Delete, from inside the modal.
+
+Django hides the delete link in a popup — ``show_delete_link`` is
+``not is_popup and …`` — because a popup is normally a related-object lookup,
+where deleting would leave the opener holding a reference to something gone.
+A trigger opened from the toolbar is not that: the modal *is* how you edit one,
+so being unable to remove it there means going and finding it in the admin.
+
+Everything needed is already in place. Django's ``response_delete`` returns the
+popup response when ``_popup`` is in the POST, the delete confirmation carries
+that field through, and django CMS's modal has explicit handling for
+``.deletelink`` — it lifts it into the footer as a caution button.
+{% endcomment %}
+
+{% block submit-row %}
+{{ block.super }}
+{% if is_popup and has_delete_permission and change and original %}
+    {% url opts|admin_urlname:'delete' original.pk|admin_urlquote as delete_url %}
+    <a role="button" href="{{ delete_url }}?{{ is_popup_var }}=1" class="deletelink">{% translate "Delete" %}</a>
+{% endif %}
+{% endblock %}

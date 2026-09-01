@@ -4,21 +4,33 @@ body {
 }
 
 .automation-container {
-    .title {
+    .title-block {
+        position: absolute;
+        top: 76px;
+        inset-inline-start: 30px;
+        border: 1px solid var(--dca-black);
         padding-block: 10px;
-        font-weight: bold;
-        font-size: 1.5em;
+        padding-inline: 15px;
+        min-width: 100px;
+        width: 25%;
+        z-index: 2;
+        background-color: var(--dca-white);
+        .title {
+            text-transform: uppercase;
+        }
     }
     .description {
-        font-size: 90%;
+        font-size: 1em;
+        font-weight: normal;
         color: var(--dca-gray);
-        border-bottom: var(--dca-black) 1px solid;
-        margin-bottom: 20px;
     }
 }
 
 .cms-structure-mode-structure .automation-container {
     padding-inline-end: 416px;
+    .title-block {
+        width: calc(25% - 104px);
+    }
 }
 
 .automation-scrollable-container {
