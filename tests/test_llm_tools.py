@@ -5,6 +5,7 @@ need credentials — an agent's failure paths are mostly things a live provider
 will not do on demand, so they have to be scripted.
 """
 
+import json
 import types
 from unittest import mock
 
@@ -29,6 +30,12 @@ def make_fake_litellm(completion, supports_tools=True):
     fake.APIConnectionError = FakeAPIConnectionError
     fake.supports_function_calling = lambda model: supports_tools
     return fake
+
+
+def _allow_deepseek(settings):
+    """A provider that really does refuse an output shape, allowed and keyed."""
+    settings.AUTOMATION_LLM_MODELS = [("deepseek/deepseek-chat", "DeepSeek Chat")]
+    APIKey.objects.create(name="DeepSeek", service="deepseek", api_key="sk-test", is_active=True)
 
 
 def make_tool_call(name, arguments, call_id="call_1"):
@@ -298,3 +305,161 @@ def test_unparseable_tool_arguments_stay_distinguishable_from_none():
     assert garbled.malformed is True
     assert garbled.arguments == {}
     assert empty.malformed is False, "an empty object is a real, valid call"
+
+
+@pytest.mark.django_db
+def test_a_provider_refusing_an_output_shape_says_what_to_change(llm_settings, api_key):
+    """The real message from a real run, against a real provider.
+
+    DeepSeek refuses ``response_format`` with a schema, and litellm's own
+    capability data says it supports one — so this is recognised from the
+    refusal rather than predicted. What reaches the editor should name the
+    setting to change, not quote a provider's JSON at them.
+    """
+
+    def refuse(**kwargs):
+        raise ValueError(
+            'DeepseekException - {"error":{"message":"This response_format type is unavailable now",'
+            '"type":"invalid_request_error"}}'
+        )
+
+    _allow_deepseek(llm_settings)
+    fake = make_fake_litellm(refuse)
+
+    with (
+        mock.patch.object(llm, "_get_litellm", return_value=fake),
+        pytest.raises(llm.LLMOutputShapeUnsupported, match="Remove the step's Output shape"),
+    ):
+        llm.complete(model="deepseek/deepseek-chat", prompt="hi", schema={"type": "object"})
+
+
+@pytest.mark.django_db
+def test_an_unrelated_failure_is_not_blamed_on_the_output_shape(llm_settings, api_key):
+    """Sending someone to change the wrong setting is worse than saying little."""
+
+    def fail(**kwargs):
+        raise ValueError("insufficient balance")
+
+    _allow_deepseek(llm_settings)
+    fake = make_fake_litellm(fail)
+
+    with mock.patch.object(llm, "_get_litellm", return_value=fake), pytest.raises(llm.LLMError) as raised:
+        llm.complete(model="deepseek/deepseek-chat", prompt="hi", schema={"type": "object"})
+
+    assert not isinstance(raised.value, llm.LLMOutputShapeUnsupported)
+
+
+@pytest.mark.django_db
+def test_a_refusal_without_an_output_shape_is_reported_as_itself(llm_settings, api_key):
+    """No schema was sent, so no schema is the problem."""
+
+    def refuse(**kwargs):
+        raise ValueError("response_format is unavailable")
+
+    _allow_deepseek(llm_settings)
+    fake = make_fake_litellm(refuse)
+
+    with mock.patch.object(llm, "_get_litellm", return_value=fake), pytest.raises(llm.LLMError) as raised:
+        llm.complete(model="deepseek/deepseek-chat", prompt="hi")
+
+    assert not isinstance(raised.value, llm.LLMOutputShapeUnsupported)
+
+
+@pytest.mark.django_db
+def test_a_refused_output_shape_is_asked_for_as_a_tool_instead(llm_settings, api_key):
+    """DeepSeek will not take a schema as a response format. It will call a tool.
+
+    So the schema goes as a function the provider is obliged to call, and the
+    arguments it sends back are the answer — still checked by the provider,
+    which is what the rows downstream are read on.
+    """
+    _allow_deepseek(llm_settings)
+    seen = []
+
+    def provider(**kwargs):
+        seen.append(kwargs)
+        if "response_format" in kwargs:
+            raise ValueError(
+                'DeepseekException - {"error":{"message":"This response_format type is unavailable now"}}'
+            )
+        call = make_tool_call(llm.SHAPE_TOOL_NAME, '{"topic": "billing"}')
+        return make_response(tool_calls=[call], finish_reason="tool_calls")
+
+    schema = {"type": "object", "properties": {"topic": {"type": "string"}}, "required": ["topic"]}
+    with mock.patch.object(llm, "_get_litellm", return_value=make_fake_litellm(provider)):
+        result = llm.complete(model="deepseek/deepseek-chat", prompt="what is this about", schema=schema)
+
+    assert result.json == {"topic": "billing"}, "the arguments are the answer"
+    assert result.tool_calls == [], "nobody asked for a tool, so none is handed back"
+    # The same reply a provider with native support would have sent, so the
+    # transcript reads the same either way rather than looking like silence.
+    assert json.loads(result.text) == {"topic": "billing"}
+    assert result.finish_reason == "stop", "it answered; a cut-short reply is a different thing"
+
+    asked = seen[1]
+    assert "response_format" not in asked
+    assert asked["tools"][0]["function"]["parameters"] == schema, "the same schema, carried differently"
+    assert asked["tool_choice"]["function"]["name"] == llm.SHAPE_TOOL_NAME, "obliged, not invited"
+
+
+@pytest.mark.django_db
+def test_the_second_way_is_tried_first_next_time(llm_settings, api_key):
+    """A refusal is a fact about the provider, so it is remembered.
+
+    Paying for the same rejected call on every run would be a slow way of
+    learning something already known.
+    """
+    _allow_deepseek(llm_settings)
+    attempts = []
+
+    def provider(**kwargs):
+        attempts.append("native" if "response_format" in kwargs else "tool")
+        if "response_format" in kwargs:
+            raise ValueError("response_format type is unavailable now")
+        return make_response(tool_calls=[make_tool_call(llm.SHAPE_TOOL_NAME, "{}")], finish_reason="tool_calls")
+
+    schema = {"type": "object", "properties": {}, "required": []}
+    with mock.patch.object(llm, "_get_litellm", return_value=make_fake_litellm(provider)):
+        llm.complete(model="deepseek/deepseek-chat", prompt="hi", schema=schema)
+        llm.complete(model="deepseek/deepseek-chat", prompt="hi", schema=schema)
+
+    assert attempts == ["native", "tool", "tool"], "refused once, then asked the right way"
+
+
+@pytest.mark.django_db
+def test_a_provider_that_can_do_neither_says_so_once(llm_settings, api_key):
+    """No response format and no tools leaves nothing to try."""
+    _allow_deepseek(llm_settings)
+
+    def provider(**kwargs):
+        if "response_format" in kwargs:
+            raise ValueError("response_format type is unavailable now")
+        raise ValueError("this model does not support tools")
+
+    with (
+        mock.patch.object(llm, "_get_litellm", return_value=make_fake_litellm(provider)),
+        pytest.raises(llm.LLMOutputShapeUnsupported, match="as a response format or as a tool"),
+    ):
+        llm.complete(model="deepseek/deepseek-chat", prompt="hi", schema={"type": "object"})
+
+
+@pytest.mark.django_db
+def test_a_step_with_real_tools_is_left_alone(llm_settings, api_key):
+    """A step offering tools ignores its output shape by design.
+
+    Retrying its refusal as a forced tool call would replace the tools the
+    editor chose with one of our own.
+    """
+    _allow_deepseek(llm_settings)
+
+    def provider(**kwargs):
+        raise ValueError("response_format type is unavailable now")
+
+    with (
+        mock.patch.object(llm, "_get_litellm", return_value=make_fake_litellm(provider)),
+        pytest.raises(llm.LLMError) as raised,
+    ):
+        llm.complete(model="deepseek/deepseek-chat", prompt="hi", schema={"type": "object"}, tools=[WEATHER_TOOL])
+
+    assert not isinstance(raised.value, llm.LLMOutputShapeUnsupported)
+    assert "deepseek/deepseek-chat" not in llm._SHAPE_NEEDS_A_TOOL

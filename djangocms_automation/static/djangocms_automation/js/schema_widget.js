@@ -46,11 +46,27 @@
 
         const requiredNames = new Set(required);
         const rows = [];
-        for (const [name, definition] of Object.entries(properties)) {
+        for (const [name, declared] of Object.entries(properties)) {
+            let definition = declared;
             if (name === '' || name.includes('\n') || name.includes('\r')) {
                 return null;
             }
-            if (!isObject(definition) || typeof definition.type !== 'string') {
+            if (!isObject(definition)) {
+                return null;
+            }
+            // ``["string", "null"]`` is how an optional field is written, so
+            // the table reads it as one: same type, box unticked. Anything
+            // else in the union is beyond what the table can show.
+            let optional = false;
+            if (Array.isArray(definition.type)) {
+                const [first, ...rest] = definition.type;
+                if (typeof first !== 'string' || rest.length !== 1 || rest[0] !== 'null') {
+                    return null;
+                }
+                optional = true;
+                definition = { ...definition, type: first };
+            }
+            if (typeof definition.type !== 'string') {
                 return null;
             }
             if (Object.hasOwn(definition, 'description') && typeof definition.description !== 'string') {
@@ -78,6 +94,15 @@
                     type = 'email';
                 }
                 if (Object.hasOwn(definition, 'enum')) {
+                    if (Array.isArray(definition.enum) && optional) {
+                        // The null that goes with the type union is not a
+                        // choice anyone typed, so it is not shown as one.
+                        const trimmed = definition.enum.filter(choice => choice !== null);
+                        if (trimmed.length === definition.enum.length) {
+                            return null;  // optional, yet no null among the choices
+                        }
+                        definition = { ...definition, enum: trimmed };
+                    }
                     if (
                         !Array.isArray(definition.enum) ||
                         definition.enum.length === 0 ||
@@ -106,7 +131,7 @@
             rows.push({
                 name,
                 type,
-                required: requiredNames.has(name),
+                required: requiredNames.has(name) && !optional,
                 description: definition.description || '',
                 descriptionPresent: Object.hasOwn(definition, 'description'),
                 choices,
@@ -135,19 +160,25 @@
                 if (!row.name) {
                     return;
                 }
+                // A provider enforcing a schema insists that every field is
+                // listed as required, so "not required" cannot be said by
+                // leaving one out. It is said by allowing null instead, which
+                // is the same statement and one every provider accepts.
+                const base = row.type === 'string_array' ? 'array' : row.type === 'email' ? 'string' : row.type;
+                const type = row.required ? base : [base, 'null'];
                 let definition;
                 if (row.type === 'string_array') {
-                    definition = { type: 'array', items: { type: 'string' } };
+                    definition = { type, items: { type: 'string' } };
                 } else if (row.type === 'email') {
-                    definition = { type: 'string', format: 'email' };
+                    definition = { type, format: 'email' };
                 } else {
-                    definition = { type: row.type };
+                    definition = { type };
                 }
                 if (row.descriptionPresent || row.description !== '') {
                     definition.description = row.description;
                 }
                 if (row.type === 'string' && (row.enumPresent || row.choices.length)) {
-                    definition.enum = row.choices.slice();
+                    definition.enum = row.required ? row.choices.slice() : [...row.choices, null];
                 }
                 // Assignment to a key named "__proto__" mutates a normal
                 // object's prototype instead of creating a JSON property.
@@ -160,10 +191,13 @@
             });
         }
 
-        const checked = new Set(state.rows.filter(row => row.required && row.name).map(row => row.name));
-        const required = state.requiredOrder.filter(name => checked.has(name));
+        // Every named field, in the order they were first seen. What the
+        // checkbox decides is whether the field may be null, not whether it
+        // appears here.
+        const present = new Set(state.rows.filter(row => row.name).map(row => row.name));
+        const required = state.requiredOrder.filter(name => present.has(name));
         state.rows.forEach(row => {
-            if (row.required && row.name && !required.includes(row.name)) {
+            if (row.name && !required.includes(row.name)) {
                 required.push(row.name);
             }
         });

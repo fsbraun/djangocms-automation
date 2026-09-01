@@ -25,7 +25,7 @@ from djangocms_automation.tools import ToolCall
 SCRIPT: list = []
 
 
-def says(text="", calls=(), usage=None, finish_reason=None, json=None):
+def says(text="", calls=(), usage=None, finish_reason=None, json=None, reasoning=""):
     return LLMResult(
         text=text,
         json=json,
@@ -33,6 +33,7 @@ def says(text="", calls=(), usage=None, finish_reason=None, json=None):
         usage=usage or {"input_tokens": 10, "output_tokens": 5},
         tool_calls=list(calls),
         finish_reason=finish_reason or ("tool_calls" if calls else "stop"),
+        reasoning=reasoning,
     )
 
 
@@ -2620,3 +2621,145 @@ def test_a_malformed_model_entry_says_so_at_the_setting(settings):
 
     with pytest.raises(ImproperlyConfigured, match="AUTOMATION_LLM_MODELS"):
         get_llm_model_choices()
+
+
+def test_a_field_left_out_of_required_is_refused_with_the_way_to_say_it():
+    """Structured output is enforced by the provider, not checked here.
+
+    Which is what makes the rows downstream trustworthy — and means a schema
+    the provider refuses is a run that dies at the first call, long after the
+    editor pressed save. A provider enforcing a schema insists that every
+    field appear in ``required``; optional is said by allowing null.
+    """
+    from django import forms as django_forms
+
+    from djangocms_automation.ai.step import _validate_json_schema
+
+    with pytest.raises(django_forms.ValidationError, match="company"):
+        _validate_json_schema(
+            {
+                "type": "object",
+                "properties": {"score": {"type": "string"}, "company": {"type": "string"}},
+                "required": ["score"],
+                "additionalProperties": False,
+            }
+        )
+
+    # The way to say it, accepted.
+    _validate_json_schema(
+        {
+            "type": "object",
+            "properties": {"score": {"type": "string"}, "company": {"type": ["string", "null"]}},
+            "required": ["score", "company"],
+            "additionalProperties": False,
+        }
+    )
+
+
+def test_the_rules_reach_a_nested_object_too():
+    """*Edit as JSON* accepts nesting the field editor cannot show.
+
+    A nested object breaks the request exactly as the top one does.
+    """
+    from django import forms as django_forms
+
+    from djangocms_automation.ai.step import _validate_json_schema
+
+    def nested(inner):
+        return {
+            "type": "object",
+            "properties": {"customer": inner},
+            "required": ["customer"],
+            "additionalProperties": False,
+        }
+
+    with pytest.raises(django_forms.ValidationError, match="customer"):
+        _validate_json_schema(
+            nested(
+                {
+                    "type": "object",
+                    "properties": {"name": {"type": "string"}, "vat": {"type": "string"}},
+                    "required": ["name"],
+                    "additionalProperties": False,
+                }
+            )
+        )
+
+    with pytest.raises(django_forms.ValidationError, match="additionalProperties"):
+        _validate_json_schema(nested({"type": "object", "properties": {}, "required": []}))
+
+
+@pytest.mark.django_db
+def test_a_model_that_says_nothing_fails_the_step(run_setup, settings):
+    """An empty answer is not an answer.
+
+    The provider called the reply complete, so nothing upstream objects, and
+    an empty string would travel on as though it were one — into a mail body,
+    a title, a condition — leaving a blank where somebody looks later and no
+    record of why.
+    """
+    trigger, placeholder = run_setup
+    add_step(placeholder, settings)
+    SCRIPT.append(says(text=""))
+
+    trigger.trigger_execution(data=[{"seed": 1}])
+
+    action = step_action()
+    assert action.state == FAILED
+    assert "without saying anything" in action.result["error"]
+    assert "finish reason: stop" in action.result["error"], "the fact that explains it"
+    assert action.message == action.result["error"], "and it survives as the message an operator reads"
+
+
+@pytest.mark.django_db
+def test_a_model_that_thought_until_it_ran_out_says_which(run_setup, settings):
+    """Two silences that need different answers.
+
+    A model with nothing to say is a prompt problem. One that spent its whole
+    budget thinking is a budget problem, and the failure should not leave
+    somebody guessing which they have.
+    """
+    trigger, placeholder = run_setup
+    add_step(placeholder, settings)
+    SCRIPT.append(says(text="", reasoning="thinking at great length about it"))
+
+    trigger.trigger_execution(data=[{"seed": 1}])
+
+    assert "spent what it had on reasoning" in step_action().result["error"]
+    assert "Maximum tokens" in step_action().result["error"], "and what to do about it"
+
+
+def test_an_output_shape_with_no_fields_is_refused():
+    """It permits exactly one answer, and it is the empty one.
+
+    A model replying "{}" to such a shape is not being unhelpful — that is the
+    only thing it is allowed to say, and it pays tokens to discover so on every
+    run.
+    """
+    from django import forms as django_forms
+
+    from djangocms_automation.ai.step import _validate_json_schema
+
+    with pytest.raises(django_forms.ValidationError, match="at least one field"):
+        _validate_json_schema({"type": "object", "properties": {}, "required": [], "additionalProperties": False})
+
+    with pytest.raises(django_forms.ValidationError, match="at least one field"):
+        _validate_json_schema({"type": "object", "additionalProperties": False})
+
+
+@pytest.mark.django_db
+def test_an_empty_answer_to_a_shape_fails_rather_than_flowing_on(run_setup, settings):
+    """Answering the shape and saying nothing in it is still saying nothing.
+
+    Reading those rows downstream finds every field missing, one step further
+    on and with nothing left explaining why.
+    """
+    trigger, placeholder = run_setup
+    add_step(placeholder, settings)
+    SCRIPT.append(says(json={}))
+
+    trigger.trigger_execution(data=[{"seed": 1}])
+
+    action = step_action()
+    assert action.state == FAILED
+    assert "empty answer for the output shape" in action.result["error"]

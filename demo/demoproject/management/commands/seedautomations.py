@@ -385,7 +385,10 @@ class Command(BaseCommand):
                         # left out of the answer is gone by the time it renders.
                         "company": {"type": "string"},
                     },
-                    "required": ["score", "email"],
+                    # Every field, because a provider enforcing a schema insists
+                    # on it. A field that need not be answered says so by
+                    # allowing null, not by being left out of this list.
+                    "required": ["score", "email", "company"],
                     "additionalProperties": False,
                 },
             },

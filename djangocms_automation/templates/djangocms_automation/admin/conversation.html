@@ -1,0 +1,50 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block extrastyle %}{{ block.super }}
+<style>
+  .automation-turnstats { color: var(--body-quiet-color); margin-bottom: 1.5rem; }
+  .automation-message { border-inline-start: 3px solid var(--border-color); padding: .5rem 0 .5rem 1rem; margin-bottom: 1rem; }
+  .automation-message[data-role="user"] { border-inline-start-color: var(--primary); }
+  .automation-message[data-role="assistant"] { border-inline-start-color: var(--object-tools-bg, #888); }
+  .automation-message[data-role="tool"] { border-inline-start-color: var(--breadcrumbs-bg, #ccc); }
+  .automation-role { font-weight: 600; text-transform: uppercase; font-size: .75rem; letter-spacing: .05em; color: var(--body-quiet-color); }
+  /* Model output and tool results are arbitrary text: it wraps here rather
+     than stretching the page, and it is escaped by the template. */
+  .automation-said { white-space: pre-wrap; overflow-wrap: anywhere; margin: .25rem 0 0; }
+  .automation-call { margin-top: .5rem; }
+  .automation-call pre { background: var(--darkened-bg); padding: .5rem; overflow-x: auto; margin: .25rem 0 0; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div id="content-main">
+  <p class="automation-turnstats">
+    {% blocktranslate with turns=turn calls=tool_calls %}{{ turns }} turn(s), {{ calls }} tool call(s){% endblocktranslate %}
+    {% if usage %} &middot;
+      {% blocktranslate with input=usage.input_tokens output=usage.output_tokens %}{{ input }} tokens in, {{ output }} out{% endblocktranslate %}
+    {% endif %}
+  </p>
+
+  {% for message in messages_ %}
+  <div class="automation-message" data-role="{{ message.role }}">
+    <div class="automation-role">
+      {% if message.role == "user" %}{% translate "Asked" %}
+      {% elif message.role == "assistant" %}{% translate "Answered" %}
+      {% elif message.role == "tool" %}{% translate "Tool returned" %}
+      {% elif message.role == "system" %}{% translate "Instructions" %}
+      {% else %}{{ message.role }}{% endif %}
+    </div>
+    {% if message.content %}<p class="automation-said">{{ message.content }}</p>{% endif %}
+    {% for call in message.calls %}
+    <div class="automation-call">
+      <div class="automation-role">{% blocktranslate with name=call.name %}Asked to run {{ name }}{% endblocktranslate %}</div>
+      <pre>{{ call.arguments }}</pre>
+    </div>
+    {% endfor %}
+  </div>
+  {% empty %}
+  <p>{% translate "This step held no conversation. Only an Ask a Model step keeps one." %}</p>
+  {% endfor %}
+</div>
+{% endblock %}

@@ -41,7 +41,9 @@ from . import dummy
 
 __all__ = [
     "COMPLETE_FINISH_REASONS",
+    "SHAPE_TOOL_NAME",
     "LLMError",
+    "LLMOutputShapeUnsupported",
     "LLMRateLimited",
     "LLMResult",
     "LLMToolsUnsupported",
@@ -64,6 +66,24 @@ class LLMToolsUnsupported(LLMError):
     Raised rather than dropping the tools and completing anyway: an agent whose
     tools were silently ignored produces confident prose instead of doing the
     work, which is far harder to diagnose than a configuration error.
+    """
+
+
+class LLMOutputShapeUnsupported(LLMError):
+    """The configured model will not constrain its answer to a schema.
+
+    Raised rather than asking again without the constraint. A step with an
+    **Output shape** is trusted downstream: the provider enforced the schema,
+    so the rows are read by field without being checked again here. Dropping
+    the constraint and completing anyway would send prose-shaped rows into
+    steps that expect fields, and the failure would surface somewhere else
+    entirely — as a missing key in a later action, or as an email with a blank
+    in it.
+
+    Providers disagree about this and their advertised capabilities are not
+    reliable: litellm reports DeepSeek as supporting a response schema, and
+    DeepSeek refuses one. So it is recognised from the refusal rather than
+    predicted.
     """
 
 
@@ -104,6 +124,11 @@ class LLMResult:
     tool_calls: list[ToolCall] = field(default_factory=list)
     #: Why the model stopped - ``"tool_calls"``, ``"stop"``, ``"length"``, ...
     finish_reason: str = ""
+    #: A reasoning model's thinking, when the provider sends it separately.
+    #: Never the answer — it is the working, not the result — and kept only so
+    #: that a reply with nothing in it can say whether the model was silent or
+    #: merely spent everything it had before answering.
+    reasoning: str = ""
 
     @property
     def wants_tools(self) -> bool:
@@ -263,6 +288,76 @@ def _supports_tools(litellm, model: str) -> bool:
         return True
 
 
+#: The name the schema is given when it has to travel as a tool. Never shown
+#: to an editor and never chosen by a model — it is offered as the only tool
+#: and the provider is told to call it.
+SHAPE_TOOL_NAME = "provide_answer"
+
+#: Models seen to refuse an output schema, so the next call asks the other way
+#: round first. Per process and deliberately not persisted: it is a fact about
+#: a provider today, and a wrong entry costs one extra round trip, once.
+_SHAPE_NEEDS_A_TOOL: set[str] = set()
+
+
+def _shape_as_tool(kwargs: dict, schema: dict) -> dict:
+    """The same request, with the output schema carried as a forced tool call.
+
+    A provider that refuses ``response_format`` will generally accept the very
+    same schema as a function it must call, and then check the arguments
+    against it — so the answer is still constrained by the provider rather than
+    by a hopeful re-read here. That distinction is the whole reason a step with
+    an **Output shape** may be read field by field downstream.
+    """
+    asked = {name: value for name, value in kwargs.items() if name != "response_format"}
+    asked["tools"] = [
+        {
+            "type": "function",
+            "function": {
+                "name": SHAPE_TOOL_NAME,
+                "description": "Provide the answer in the required shape. Call this exactly once.",
+                "parameters": schema,
+            },
+        }
+    ]
+    asked["tool_choice"] = {"type": "function", "function": {"name": SHAPE_TOOL_NAME}}
+    return asked
+
+
+def _answer_from_tool(tool_calls: list, model: str) -> Any:
+    """Read the answer out of the call the provider was obliged to make."""
+    call = next((one for one in tool_calls if one.name == SHAPE_TOOL_NAME), None)
+    if call is None:
+        raise LLMOutputShapeUnsupported(
+            f"Model '{model}' was asked for its answer as a tool call and did not make one. "
+            f"Remove the step's Output shape, or choose a model that supports one."
+        )
+    if call.malformed:
+        raise LLMError("Model returned invalid JSON for the requested schema.")
+    return call.arguments
+
+
+def _usage_from(response) -> dict:
+    raw = getattr(response, "usage", None)
+    if raw is None:
+        return {}
+    return {
+        "input_tokens": getattr(raw, "prompt_tokens", None),
+        "output_tokens": getattr(raw, "completion_tokens", None),
+    }
+
+
+def _refused_the_shape(exc: Exception) -> bool:
+    """Whether a provider error is about the response format we asked for.
+
+    Matched on the text, because the providers that refuse do so with an
+    ordinary bad-request error and nothing structured to key off. Narrow on
+    purpose: a false positive here would relabel an unrelated failure as a
+    configuration problem and send someone to change the wrong setting.
+    """
+    said = str(exc).lower()
+    return "response_format" in said or "response format" in said
+
+
 def complete(
     *,
     model: str,
@@ -299,6 +394,7 @@ def complete(
         holds its worker — and its action's lease — until something else gives
         up, so an agent should always set it.
     :raises LLMToolsUnsupported: If tools are given to a model that cannot use them.
+    :raises LLMOutputShapeUnsupported: If the provider refuses the output schema.
     :raises LLMRateLimited: On provider rate limits (retry later).
     :raises LLMError: On any other provider/configuration error.
     """
@@ -348,6 +444,10 @@ def complete(
     if timeout is not None:
         kwargs["timeout"] = timeout
 
+    shape_as_tool = bool(schema) and not tools and model in _SHAPE_NEEDS_A_TOOL
+    if shape_as_tool:
+        kwargs = _shape_as_tool(kwargs, schema)
+
     try:
         response = litellm.completion(**kwargs)
     except litellm.RateLimitError as exc:
@@ -362,7 +462,25 @@ def complete(
     except litellm.APIConnectionError as exc:
         raise LLMError(f"Network error calling '{service}': {exc}") from exc
     except Exception as exc:  # litellm maps provider errors to OpenAI-style exceptions
-        raise LLMError(f"LLM error from '{service}': {exc}") from exc
+        if not (schema and not tools and not shape_as_tool and _refused_the_shape(exc)):
+            raise LLMError(f"LLM error from '{service}': {exc}") from exc
+
+        # Asked the other way. A provider that will not take a schema as an
+        # output format will usually take the same schema as a tool it is
+        # obliged to call, and then the arguments it sends *are* the answer —
+        # still checked by the provider, which is the property the rows
+        # downstream are read on. It is what litellm does for the providers it
+        # wires this into, and DeepSeek is not one of them.
+        _SHAPE_NEEDS_A_TOOL.add(model)  # so the next call asks the right way first
+        shape_as_tool = True
+        try:
+            response = litellm.completion(**_shape_as_tool(kwargs, schema))
+        except Exception as second:
+            raise LLMOutputShapeUnsupported(
+                f"Model '{model}' will not constrain its answer to an output shape, "
+                f"as a response format or as a tool. Remove the step's Output shape, "
+                f"or choose a model that supports one. The provider said: {second}"
+            ) from second
 
     choice = response.choices[0]
     message = choice.message
@@ -370,6 +488,27 @@ def complete(
     tool_calls = _tool_calls_from(message)
 
     parsed = None
+    if shape_as_tool:
+        # The answer came back as arguments. Reported as an answer, not as a
+        # tool call: nobody asked for a tool, and a caller handed one would try
+        # to run it.
+        parsed = _answer_from_tool(tool_calls, model)
+        # Written out as text as well, because that is what an answer under a
+        # schema looks like on every other provider: the JSON *is* the reply's
+        # content. Leaving it empty here made the two routes disagree, and the
+        # transcript of a perfectly good answer read as though the model had
+        # said nothing at all.
+        text, tool_calls = json.dumps(parsed, ensure_ascii=False), []
+        return LLMResult(
+            text=text,
+            json=parsed,
+            model=getattr(response, "model", model),
+            usage=_usage_from(response),
+            tool_calls=[],
+            # It answered. Reporting the provider's "tool_calls" here would
+            # read as a reply cut short on the turn it was complete.
+            finish_reason="stop",
+        )
     # A reply that asks for tools carries no answer to parse, even under a schema.
     if schema and not tool_calls:
         try:
@@ -377,18 +516,12 @@ def complete(
         except json.JSONDecodeError as exc:
             raise LLMError(f"Model returned invalid JSON for the requested schema: {exc}") from exc
 
-    usage = {}
-    raw_usage = getattr(response, "usage", None)
-    if raw_usage is not None:
-        usage = {
-            "input_tokens": getattr(raw_usage, "prompt_tokens", None),
-            "output_tokens": getattr(raw_usage, "completion_tokens", None),
-        }
     return LLMResult(
         text=text,
         json=parsed,
         model=getattr(response, "model", model),
-        usage=usage,
+        usage=_usage_from(response),
         tool_calls=tool_calls,
         finish_reason=str(getattr(choice, "finish_reason", "") or ""),
+        reasoning=str(getattr(message, "reasoning_content", None) or ""),
     )

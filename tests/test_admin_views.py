@@ -219,3 +219,96 @@ def test_run_now_is_refused_to_someone_who_may_only_look(client, runnable, autom
 
     assert response.status_code == 403
     assert not automation_content.automationinstance_set.exists()
+
+
+@pytest.fixture
+def talked(automation_content):
+    """An action carrying a conversation, as an AI step leaves one behind."""
+    instance = AutomationInstance.objects.create(automation_content=automation_content, data=[{}])
+    return AutomationAction.objects.create(
+        automation_instance=instance,
+        plugin_ptr=uuid.uuid4(),
+        state=COMPLETED,
+        scratch={
+            "turn": 2,
+            "tool_calls": 1,
+            "usage": {"input_tokens": 120, "output_tokens": 30},
+            "messages": [
+                {"role": "user", "content": "Who wrote in about invoice 4402?"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "c1",
+                            "type": "function",
+                            "function": {"name": "find_customer", "arguments": '{"email": "ada@example.com"}'},
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "c1", "content": "Ada Lovelace"},
+                {"role": "assistant", "content": "Ada Lovelace wrote in."},
+            ],
+        },
+    )
+
+
+def _conversation_url(action):
+    return reverse("admin:djangocms_automation_conversation", args=[action.pk])
+
+
+@pytest.mark.django_db
+def test_the_conversation_panel_shows_what_was_asked_and_answered(admin_client, talked):
+    """A run that went wrong is usually a prompt that read differently than it
+    looked, or an answer nobody saw. Both were reachable only from a shell."""
+    body = admin_client.get(_conversation_url(talked)).content.decode()
+
+    assert "Who wrote in about invoice 4402?" in body
+    assert "Ada Lovelace wrote in." in body
+    assert "find_customer" in body, "including what it reached for"
+    assert "2 turn(s), 1 tool call(s)" in body
+    assert "120" in body and "30" in body, "and what it cost"
+
+
+@pytest.mark.django_db
+def test_a_models_words_are_printed_not_run(admin_client, talked):
+    """Model output is not trusted text.
+
+    An inbound email can steer what a model says, so a reply reaching an
+    admin page unescaped would let whoever wrote that email run script in the
+    browser of whoever reads the run.
+    """
+    talked.scratch = {
+        **talked.scratch,
+        "messages": [{"role": "assistant", "content": "<script>alert('x')</script>"}],
+    }
+    talked.save()
+
+    body = admin_client.get(_conversation_url(talked)).content.decode()
+
+    assert "<script>alert" not in body
+    assert "&lt;script&gt;" in body, "shown as the text it is"
+
+
+@pytest.mark.django_db
+def test_an_action_that_never_spoke_says_so(admin_client, automation_content):
+    instance = AutomationInstance.objects.create(automation_content=automation_content, data=[{}])
+    silent = AutomationAction.objects.create(
+        automation_instance=instance, plugin_ptr=uuid.uuid4(), state=COMPLETED, scratch={}
+    )
+
+    body = admin_client.get(_conversation_url(silent)).content.decode()
+
+    assert "held no conversation" in body
+
+
+@pytest.mark.django_db
+def test_a_conversation_is_not_readable_without_permission_to_see_the_run(client, talked, django_user_model):
+    """It is the run's data in its most complete form."""
+    from django.contrib.auth.models import Permission
+
+    onlooker = django_user_model.objects.create_user("onlooker", password="x", is_staff=True)
+    onlooker.user_permissions.add(Permission.objects.get(codename="view_automationtrigger"))
+    client.force_login(onlooker)
+
+    assert client.get(_conversation_url(talked)).status_code == 403

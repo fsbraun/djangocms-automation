@@ -202,9 +202,25 @@ model should produce. Those descriptions are part of the prompt the model sees.
 Use **Edit as JSON** for an array or a schema outside the flat-object editor;
 the original JSON is kept intact when the editor cannot represent it.
 
-A step that has tools ignores it and says so in the editor. Constraining the
-answer and offering tools on the same turn is provider-specific, and behaving
-differently per provider is worse than declining.
+Every field has to be listed as required — that is what a provider enforcing a
+schema insists on. A field that need not be answered says so by allowing null
+(``{"type": ["string", "null"]}``), which the field editor writes for you when
+you untick **Required**.
+
+Not every provider will take a schema as an output format: DeepSeek refuses one
+outright, and its own advertised capabilities say otherwise, so there is no
+asking in advance. When one refuses, the schema is sent again as a tool the
+model is obliged to call, and the arguments it sends back are the answer. The
+provider still checks them against the schema, which is what makes the fields
+safe to read downstream — this is a different route to the same guarantee, not
+a relaxation of it. The refusal is remembered for the rest of the process, so
+it costs one extra call once. A provider that can do neither fails the step and
+says so.
+
+A step that has tools ignores the output shape and says so in the editor.
+Constraining the answer and offering tools on the same turn is
+provider-specific, and behaving differently per provider is worse than
+declining.
 
 Reading back what happened
 --------------------------
@@ -213,7 +229,15 @@ Every tool call is its own execution step, so a run reads like any other
 automation. Under *Execution Instances* you see the step and one child action
 per tool call, each with the arguments it was given and what it returned — a
 tool call *is* an action row, so there is nothing new to learn about reading it.
-The conversation, turn count and token usage are kept on the step's action.
+
+The conversation itself is on the step's action, behind the **Conversation**
+link in that list: what the step asked, what the model said back, what it
+reached for and what came back, with the turn count and token usage at the top.
+It is where to look when a run went wrong for a reason the states do not show —
+usually a prompt that read differently than it looked, or an answer nobody saw.
+
+It disappears when retention runs. The conversation is the run's data written
+out in sentences, so it is cleared with the rest.
 
 If a run fails, it appears in *Dead letters* like anything else and can be
 replayed. A replayed call is the same call, and asks for approval again.

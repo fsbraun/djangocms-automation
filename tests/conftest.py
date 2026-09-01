@@ -34,3 +34,18 @@ def assert_html_in_response():
         )
 
     return assert_html
+
+
+@pytest.fixture(autouse=True)
+def _forget_which_providers_refused_a_schema():
+    """What one test learned about a provider is not the next test's business.
+
+    ``llm`` remembers a model that refused an output schema so the next call
+    asks the other way round first. Kept across tests it would silently skip
+    the first attempt somewhere that was checking for it.
+    """
+    from djangocms_automation.ai.llm import _SHAPE_NEEDS_A_TOOL
+
+    _SHAPE_NEEDS_A_TOOL.clear()
+    yield
+    _SHAPE_NEEDS_A_TOOL.clear()

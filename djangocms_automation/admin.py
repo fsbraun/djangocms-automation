@@ -71,9 +71,9 @@ class AutomationActionInline(admin.TabularInline):
         "requires_interaction",
         "interaction_user",
         "interaction_group",
+        "conversation",
         "created",
         "started",
-        "heartbeat_at",
         "finished",
     )
     readonly_fields = (
@@ -82,12 +82,29 @@ class AutomationActionInline(admin.TabularInline):
         "re_entry_count",
         "dead_lettered",
         "message",
+        "conversation",
         "created",
         "started",
-        "heartbeat_at",
         "finished",
     )
     can_delete = False
+
+    @admin.display(description=_("Conversation"))
+    def conversation(self, obj):
+        """A way in to what a model was asked and what it said back.
+
+        Only for a step that held a conversation. Every action carries a
+        ``scratch``; only an AI step keeps messages in it, and a column of
+        dashes down every other row would be noise.
+        """
+        if not obj.pk or not isinstance(obj.scratch, dict) or not obj.scratch.get("messages"):
+            return "—"
+        turns = obj.scratch.get("turn") or 0
+        return format_html(
+            '<a href="{}">{}</a>',
+            reverse("admin:djangocms_automation_conversation", args=[obj.pk]),
+            _("Read (%(turns)d turn(s))") % {"turns": turns},
+        )
 
 
 @admin.register(AutomationInstance)
@@ -166,6 +183,11 @@ class AutomationInstanceAdmin(admin.ModelAdmin):
                 self.admin_site.admin_view(self.resume_action_view),
                 name="djangocms_automation_resume_action",
             ),
+            path(
+                "conversation/<int:action_id>/",
+                self.admin_site.admin_view(self.conversation_view),
+                name="djangocms_automation_conversation",
+            ),
         ]
         return custom + super().get_urls()
 
@@ -180,6 +202,34 @@ class AutomationInstanceAdmin(admin.ModelAdmin):
         }
         return TemplateResponse(request, "djangocms_automation/admin/open_tasks.html", context)
 
+    def conversation_view(self, request, action_id):
+        """What a model was asked and what it said back, turn by turn.
+
+        A run that went wrong is usually a prompt that read differently than it
+        looked, or an answer nobody saw. Both are here and nowhere else — the
+        conversation lives in the action's ``scratch``, which no admin page
+        renders, so reading it has meant a Django shell.
+
+        Read-only, and gated on being able to view a run at all: this is the
+        run's data in its most complete form, including whatever a person put
+        into the trigger.
+        """
+        if not request.user.has_perm("djangocms_automation.view_automationinstance"):
+            raise PermissionDenied
+        action = get_object_or_404(AutomationAction, pk=action_id)
+        scratch = action.scratch if isinstance(action.scratch, dict) else {}
+        context = {
+            **self.admin_site.each_context(request),
+            "title": _("Conversation"),
+            "action": action,
+            "messages_": [_readable(message) for message in scratch.get("messages") or []],
+            "turn": scratch.get("turn") or 0,
+            "tool_calls": scratch.get("tool_calls") or 0,
+            "usage": scratch.get("usage") or {},
+            "opts": self.model._meta,
+        }
+        return TemplateResponse(request, "djangocms_automation/admin/conversation.html", context)
+
     def resume_action_view(self, request, action_id):
         """Resume a waiting action for the current user."""
         redirect_url = reverse("admin:djangocms_automation_open_tasks")
@@ -192,6 +242,30 @@ class AutomationInstanceAdmin(admin.ModelAdmin):
         else:
             self.message_user(request, _("Task resumed."), level=messages.SUCCESS)
         return HttpResponseRedirect(redirect_url)
+
+
+def _readable(message: dict) -> dict:
+    """One stored message, in the shape the template reads.
+
+    The arguments a model sent are a JSON string on the wire. Re-indented here
+    because the point of the page is reading them, and a single line of dense
+    JSON is the thing that sends people back to the shell.
+    """
+    calls = []
+    for call in message.get("tool_calls") or []:
+        function = call.get("function") or {}
+        raw = function.get("arguments")
+        try:
+            arguments = json.dumps(json.loads(raw), indent=2, ensure_ascii=False)
+        except (TypeError, ValueError):
+            arguments = str(raw)
+        calls.append({"name": function.get("name", ""), "arguments": arguments})
+    return {
+        "role": message.get("role", ""),
+        "content": message.get("content") or "",
+        "tool_call_id": message.get("tool_call_id") or "",
+        "calls": calls,
+    }
 
 
 @admin.register(DeadLetter)

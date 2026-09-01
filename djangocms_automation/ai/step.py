@@ -62,8 +62,50 @@ def _validate_json_schema(value):
         raise forms.ValidationError(_("Invalid JSON: %(error)s") % {"error": exc}) from exc
     if not isinstance(parsed, dict):
         raise forms.ValidationError(_("The schema must be a JSON object."))
-    if parsed.get("type") == "object" and parsed.get("additionalProperties") is not False:
-        raise forms.ValidationError(_('Object schemas must set "additionalProperties": false.'))
+    _check_object(parsed)
+
+
+def _check_object(schema, path=""):
+    """What a provider will accept as a constrained answer.
+
+    Two rules, both from the same place. Structured output is enforced by the
+    provider rather than checked here — that is what makes the rows downstream
+    trustworthy — so a schema it refuses is a run that fails at the first call,
+    long after the editor pressed save.
+
+    Recursive, because *Edit as JSON* accepts nesting that the field editor
+    cannot show, and a nested object breaks the request exactly as the top one
+    does.
+    """
+    if not isinstance(schema, dict) or schema.get("type") != "object":
+        return
+    where = _(" at %(path)s") % {"path": path} if path else ""
+    if schema.get("additionalProperties") is not False:
+        raise forms.ValidationError(
+            _('Object schemas must set "additionalProperties": false%(where)s.') % {"where": where}
+        )
+    properties = schema.get("properties") or {}
+    if not properties:
+        # An object with no fields permits exactly one answer, and it is the
+        # empty one. The model is not being vague when it replies "{}" — that
+        # is the only thing the shape allows it to say, and it will spend
+        # tokens discovering so on every run.
+        raise forms.ValidationError(
+            _("An output shape needs at least one field%(where)s. An object with none allows only an empty answer.")
+            % {"where": where}
+        )
+    missing = [name for name in properties if name not in (schema.get("required") or [])]
+    if missing:
+        raise forms.ValidationError(
+            _(
+                'Every field must be listed in "required"%(where)s — missing: %(missing)s. '
+                "A field that need not be answered is written as an optional one instead, by "
+                'allowing null: {"type": ["string", "null"]}.'
+            )
+            % {"where": where, "missing": ", ".join(sorted(missing))}
+        )
+    for name, definition in properties.items():
+        _check_object(definition, f"{path}.{name}" if path else name)
 
 
 class AIStepForm(forms.Form):
@@ -308,10 +350,12 @@ class AIStepPluginModel(BaseActionPluginModel):
             # something plausible and wrong, which a tool then runs.
             if reply.incomplete:
                 state.save(action)
+                # Same reason as below: only ``error`` survives the engine.
                 return FAILED, {
-                    "error": f"The model's reply is incomplete: {reply.incomplete}.",
-                    "finish_reason": reply.finish_reason,
-                    "turns": state.turn,
+                    "error": (
+                        f"The model's reply is incomplete: {reply.incomplete}. "
+                        f"(finish reason: {reply.finish_reason or 'none given'}, after {state.turn} turn(s))"
+                    )
                 }
 
             # Every call the model asked for is answered, whether or not it
@@ -353,7 +397,42 @@ class AIStepPluginModel(BaseActionPluginModel):
         state.save(action)
         if reply.json is not None:
             rows = reply.json if isinstance(reply.json, list) else [reply.json]
-            return COMPLETED, [row if isinstance(row, dict) else {"value": row} for row in rows]
+            rows = [row if isinstance(row, dict) else {"value": row} for row in rows]
+            if not any(rows):
+                # It answered the shape and said nothing in it. Reading the
+                # rows downstream would find every field missing, one step
+                # further on and with nothing left explaining why.
+                return FAILED, {
+                    "error": (
+                        f"The model returned an empty answer for the output shape, after {state.turn} turn(s). "
+                        f"Check that the shape has the fields the answer should carry."
+                    )
+                }
+            return COMPLETED, rows
+        if not reply.text.strip():
+            # Nothing was said. The provider called it a complete reply, so
+            # nothing upstream objected, and an empty string would travel on
+            # as though it were an answer — into a mail body, a title, a
+            # condition — leaving a blank where somebody looks later and no
+            # record of why. A step that has nothing to hand on has failed.
+            #
+            # Everything an operator needs goes in this one sentence, because
+            # only ``error`` survives: the engine keeps it as the action's
+            # message and drops the rest of the payload.
+            because = (
+                # The two silences need different answers. A model with
+                # nothing to say is a prompt problem; one that spent its whole
+                # budget thinking is a budget problem.
+                " It spent what it had on reasoning, so raising Maximum tokens may be what it needs."
+                if reply.reasoning
+                else ""
+            )
+            return FAILED, {
+                "error": (
+                    f"The model finished without saying anything, after {state.turn} turn(s) "
+                    f"(finish reason: {reply.finish_reason or 'none given'}).{because}"
+                )
+            }
         return COMPLETED, [{"text": reply.text, "model": reply.model, "turns": state.turn, "usage": state.usage}]
 
     def _timeout(self, config, budget, state) -> int:
