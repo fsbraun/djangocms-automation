@@ -1,0 +1,38 @@
+{% load i18n %}
+{% comment %}
+The trail for a panel hanging off a run, in whichever shape the installed admin
+uses.
+
+Django 6.1 replaced the breadcrumb ``<div>`` of ``&rsaquo;``-separated links
+with an ordered list, which is what a trail actually is and what a screen
+reader can announce. The ``<nav>`` around it lives in ``admin/base.html``
+outside this block, so only the list belongs here.
+
+Takes ``leaf`` — the current page's name — and reads ``instance`` and
+``action`` from the surrounding context.
+{% endcomment %}
+{% url 'admin:index' as index_url %}
+{% url 'admin:app_list' app_label=opts.app_label as app_url %}
+{% url 'admin:djangocms_automation_automationinstance_changelist' as runs_url %}
+{% url 'admin:djangocms_automation_automationinstance_change' action.automation_instance_id as run_url %}
+{% comment %}
+The run names itself. Spelling out "Run 25" from the row id here would be a
+second name for the thing the rest of the admin calls something else.
+{% endcomment %}
+{% if modern_breadcrumbs %}
+<ol class="breadcrumbs">
+  <li><a href="{{ index_url }}">{% translate "Home" %}</a></li>
+  <li><a href="{{ app_url }}">{{ opts.app_config.verbose_name }}</a></li>
+  <li><a href="{{ runs_url }}">{{ opts.verbose_name_plural|capfirst }}</a></li>
+  <li><a href="{{ run_url }}">{{ instance|truncatewords:"18" }}</a></li>
+  <li aria-current="page">{{ leaf }}</li>
+</ol>
+{% else %}
+<div class="breadcrumbs">
+  <a href="{{ index_url }}">{% translate "Home" %}</a>
+  &rsaquo; <a href="{{ app_url }}">{{ opts.app_config.verbose_name }}</a>
+  &rsaquo; <a href="{{ runs_url }}">{{ opts.verbose_name_plural|capfirst }}</a>
+  &rsaquo; <a href="{{ run_url }}">{{ instance|truncatewords:"18" }}</a>
+  &rsaquo; {{ leaf }}
+</div>
+{% endif %}

@@ -35,6 +35,14 @@ optional-dependencies.llm = [
   # wrapper's contract test before moving, not a claim that 1.110 breaks.
   "litellm>=1.98,<1.110",
 ]
+# Rendering a model's Markdown in the admin. Both halves are required: the
+# renderer turns the text into HTML, and the sanitiser is what makes showing it
+# safe. A model's answer can be steered by whatever arrived in the trigger, so
+# it is never marked safe unrendered and never rendered unsanitised.
+optional-dependencies.markdown = [
+  "markdown>=3.6",
+  "nh3>=0.2",
+]
 optional-dependencies.test = [
   "coverage",
   "pytest",

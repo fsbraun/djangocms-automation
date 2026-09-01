@@ -2815,3 +2815,53 @@ def test_a_format_alone_is_the_whole_instruction(run_setup, settings):
     trigger.trigger_execution(data=[{"seed": 1}])
 
     assert observations_system(step_action()).startswith("Write in HTML")
+
+
+@pytest.mark.django_db
+def test_the_answer_format_is_recorded_with_the_conversation(run_setup, settings):
+    """A plugin is editable and a transcript is not.
+
+    Reading the format back off the step would mean switching it to Markdown
+    next week changed how last week's answer is read.
+    """
+    trigger, placeholder = run_setup
+    add_step(placeholder, settings, answer_format="markdown")
+    SCRIPT.append(says(text="## Heading"))
+
+    trigger.trigger_execution(data=[{"seed": 1}])
+
+    action = step_action()
+    assert action.scratch["answer_format"] == "markdown"
+
+    from djangocms_automation.admin import _answer_format
+
+    assert _answer_format(action) == "markdown"
+
+    # The step is changed afterwards; the run still says what it asked for.
+    from cms.plugin_pool import plugin_pool
+
+    step = plugin_pool.get_plugin("AIStep").model.objects.get(uuid=action.plugin_ptr)
+    step.config = {**step.config, "answer_format": "html"}
+    step.save()
+
+    action.refresh_from_db()
+    assert _answer_format(action) == "markdown", "the transcript is read as it was written"
+
+
+@pytest.mark.django_db
+def test_a_run_recorded_before_this_falls_back_to_the_step(run_setup, settings):
+    """Old runs kept no format, and the step is the only clue left."""
+    from djangocms_automation.admin import _answer_format
+    from djangocms_automation.instances import AutomationAction
+
+    trigger, placeholder = run_setup
+    add_step(placeholder, settings, answer_format="markdown")
+    SCRIPT.append(says(text="## Heading"))
+    trigger.trigger_execution(data=[{"seed": 1}])
+
+    action = step_action()
+    scratch = {key: value for key, value in action.scratch.items() if key != "answer_format"}
+    AutomationAction.objects.filter(pk=action.pk).update(scratch=scratch)
+    action.refresh_from_db()
+
+    assert _answer_format(action) == "markdown", "read from the step, for want of anything better"

@@ -1,24 +1,20 @@
 {% extends "admin/base_site.html" %}
-{% load i18n %}
+{% load i18n static %}
 
 {% block extrastyle %}{{ block.super }}
-<style>
-  .automation-turnstats { color: var(--body-quiet-color); margin-bottom: 1.5rem; }
-  .automation-message { border-inline-start: 3px solid var(--border-color); padding: .5rem 0 .5rem 1rem; margin-bottom: 1rem; }
-  .automation-message[data-role="user"] { border-inline-start-color: var(--primary); }
-  .automation-message[data-role="assistant"] { border-inline-start-color: var(--object-tools-bg, #888); }
-  .automation-message[data-role="tool"] { border-inline-start-color: var(--breadcrumbs-bg, #ccc); }
-  .automation-role { font-weight: 600; text-transform: uppercase; font-size: .75rem; letter-spacing: .05em; color: var(--body-quiet-color); }
-  /* Model output and tool results are arbitrary text: it wraps here rather
-     than stretching the page, and it is escaped by the template. */
-  .automation-said { white-space: pre-wrap; overflow-wrap: anywhere; margin: .25rem 0 0; }
-  .automation-call { margin-top: .5rem; }
-  .automation-call pre { background: var(--darkened-bg); padding: .5rem; overflow-x: auto; margin: .25rem 0 0; }
-</style>
+<link rel="stylesheet" href="{% static 'djangocms_automation/css/admin_panels.css' %}">
 {% endblock %}
+
+{% block breadcrumbs %}{% translate "Conversation" as leaf %}{% include "djangocms_automation/admin/_breadcrumbs.html" %}{% endblock %}
 
 {% block content %}
 <div id="content-main">
+  {% include "djangocms_automation/admin/_about_action.html" %}
+  {% if markdown_missing %}
+  <p class="automation-note">
+    {% blocktranslate %}This step asked for Markdown. It is shown as text because the renderer is not installed — <code>pip install djangocms-automation[markdown]</code>.{% endblocktranslate %}
+  </p>
+  {% endif %}
   <p class="automation-turnstats">
     {% blocktranslate with turns=turn calls=tool_calls %}{{ turns }} turn(s), {{ calls }} tool call(s){% endblocktranslate %}
     {% if usage %} &middot;
@@ -28,6 +24,18 @@
 
   {% for message in messages_ %}
   <div class="automation-message" data-role="{{ message.role }}">
+    {% if message.pairs %}
+    {% for pair in message.pairs %}
+    <div class="automation-field">
+      <div class="automation-role">{{ pair.key }}</div>
+      {% if pair.html %}
+      <div class="automation-said-html">{{ pair.html }}</div>
+      {% else %}
+      <p class="automation-said"><code>{{ pair.text }}</code></p>
+      {% endif %}
+    </div>
+    {% endfor %}
+    {% else %}
     <div class="automation-role">
       {% if message.role == "user" %}{% translate "Asked" %}
       {% elif message.role == "assistant" %}{% translate "Answered" %}
@@ -35,7 +43,12 @@
       {% elif message.role == "system" %}{% translate "Instructions" %}
       {% else %}{{ message.role }}{% endif %}
     </div>
-    {% if message.content %}<p class="automation-said">{{ message.content }}</p>{% endif %}
+    {% if message.html %}
+    <div class="automation-said-html">{{ message.html }}</div>
+    {% elif message.content %}
+    <p class="automation-said">{{ message.content }}</p>
+    {% endif %}
+    {% endif %}
     {% for call in message.calls %}
     <div class="automation-call">
       <div class="automation-role">{% blocktranslate with name=call.name %}Asked to run {{ name }}{% endblocktranslate %}</div>
@@ -46,5 +59,11 @@
   {% empty %}
   <p>{% translate "This step held no conversation. Only an Ask a Model step keeps one." %}</p>
   {% endfor %}
+
+  <div class="submit-row">
+    <a role="button" href="{% url 'admin:djangocms_automation_automationinstance_change' action.automation_instance_id %}" class="closelink">
+      {% translate "Back to the run" %}
+    </a>
+  </div>
 </div>
 {% endblock %}

@@ -167,8 +167,26 @@ class AutomationInstance(models.Model):
     )
 
     def save(self, *args, **kwargs):
-        self.key = self.get_key()
-        return super().save(*args, **kwargs)
+        """Save, giving a new run its key once the row has an id.
+
+        The key used to be recomputed on every save, before the insert. Two
+        things followed, both of which defeat the point of a unique reference:
+
+        * A run created and not saved again kept ``sha1("<automation>-None")``,
+          which is the same string for *every* such run of that automation. A
+          hash meant to name one run named all of them.
+        * The key changed on the next save, once the id existed — so a
+          reference copied out of the admin early stopped matching the run it
+          came from.
+
+        Now it is written once, after the row exists, and never rewritten.
+        """
+        creating = not self.pk
+        super().save(*args, **kwargs)
+        if creating or not self.key:
+            key = self.get_key()
+            type(self).objects.filter(pk=self.pk).update(key=key)
+            self.key = key
 
     def get_key(self) -> str:
         """Generate a unique SHA1 hash key for this instance.
@@ -259,7 +277,23 @@ class AutomationInstance(models.Model):
         return canceled
 
     def __str__(self):
-        return f"<AutomationInstance for {self.automation_content.automation.name} ({self.id})>"
+        """What a run is called wherever one is shown.
+
+        ``Run 20735f5b18ab — Editorial AI review``: the hash identifies it and
+        the name says what it was doing, which is the pair somebody needs in a
+        changelist, a breadcrumb or a select. The angle-bracket form this used
+        to return was a ``__repr__`` wearing the wrong name — informative in a
+        shell and noise in a page.
+        """
+        automation = getattr(getattr(self, "automation_content", None), "automation", None)
+        name = getattr(automation, "name", "") or ""
+        # The hash, not the row id: a run is referred to from outside this
+        # database — a log line, a ticket, a message to a colleague — where two
+        # deployments will happily disagree about run 17. Shortened the way a
+        # commit is, and to the same length the changelist shows, so the two
+        # can be matched by eye.
+        run = _("Run %(hash)s") % {"hash": self.key[:12]} if self.key else _("Unsaved run")
+        return f"{run} — {name}" if name else str(run)
 
     class Meta:
         verbose_name = _("Execution Instance")
@@ -536,11 +570,50 @@ class AutomationAction(models.Model):
             users |= User.objects.filter(is_superuser=True)
         return users
 
+    def step_name(self, plugins: dict | None = None) -> str:
+        """The step this action ran, in the words the editor sees.
+
+        The plugin tree is the only thing that knows: an action stores the
+        node's uuid and nothing about what that node is.
+
+        :param plugins: A prebuilt plugin map, for a caller naming many actions
+            at once — a table of rows would otherwise walk the tree per line.
+        :returns: The plugin's name, or ``""`` if the node is gone. A workflow
+            edited since the run is not a reason to raise from ``__str__``.
+        """
+        if plugins is None and self._step_name_cache is not None:
+            return self._step_name_cache
+        from .engine import build_plugin_map
+
+        try:
+            if plugins is None:
+                plugins = build_plugin_map(self.automation_instance.automation_content_id)
+            plugin = plugins.get(self.plugin_ptr)
+            name = str(getattr(plugin.get_plugin_class(), "name", "") or "") if plugin else ""
+        except Exception:  # noqa: BLE001 — naming a step is not worth raising for
+            name = ""
+        self._step_name_cache = name
+        return name
+
+    _step_name_cache = None
+
     def __str__(self):
-        return f"<ATM {self.plugin_ptr} {self.message} ({self.id})>"
+        """What this action is called wherever one is shown.
+
+        ``Send Email (f3b39215-…)``: the name says what the step does and the
+        uuid says which node it was, because a run with three *Send Email*
+        steps in it is entirely ordinary.
+
+        The old form put the plugin uuid, the failure message and the row id in
+        angle brackets — a ``__repr__`` under the wrong name, which then turned
+        up in pages and in error text where only the first of those helped.
+        """
+        name = self.step_name() or _("Unknown step")
+        return f"{name} ({self.plugin_ptr})"
 
     def __repr__(self):
-        return self.__str__()
+        """The diagnostic form, which is what angle brackets are for."""
+        return f"<AutomationAction {self.plugin_ptr} {self.state} {self.message} ({self.id})>"
 
 
 class AutomationActionEvent(models.Model):

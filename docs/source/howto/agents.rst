@@ -241,6 +241,18 @@ automation. Under *Execution Instances* you see the step and one child action
 per tool call, each with the arguments it was given and what it returned — a
 tool call *is* an action row, so there is nothing new to learn about reading it.
 
+An answer under an output shape is shown as its fields rather than as a line of
+JSON, and a Markdown answer is rendered — through a sanitiser, and only for
+Markdown. Install the extra for that:
+
+.. code-block:: bash
+
+    pip install djangocms-automation[markdown]
+
+Without it the answer stays readable as text. HTML that a model was *asked* for
+is deliberately shown as markup, not rendered: an editor who asked for HTML
+wants to read what the model wrote.
+
 The conversation itself is on the step's action, behind the **Conversation**
 link in that list: what the step asked, what the model said back, what it
 reached for and what came back, with the turn count and token usage at the top.

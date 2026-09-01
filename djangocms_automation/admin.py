@@ -1,7 +1,9 @@
 import json
 
+import django
 from cms.admin.utils import ChangeListActionsMixin, GrouperModelAdmin
 from django import forms
+from django.conf import settings
 from django.contrib import admin, messages
 from django.contrib.admin.options import IS_POPUP_VAR
 from django.core.exceptions import PermissionDenied
@@ -89,6 +91,19 @@ class AutomationActionInline(admin.TabularInline):
     )
     can_delete = False
 
+    def get_fields(self, request, obj=None):
+        """Drop the conversation column when this run held none.
+
+        Asked of the *run* rather than of the installed apps: a project without
+        the AI app never has one, and a project with it still runs plenty of
+        automations that do not involve a model. Either way an always-empty
+        column is a column that teaches the reader to ignore that part of the
+        row.
+        """
+        fields = list(super().get_fields(request, obj))
+        talked = obj is not None and obj.automationaction_set.filter(scratch__has_key="messages").exists()
+        return fields if talked else [name for name in fields if name != "conversation"]
+
     @admin.display(description=_("History"))
     def history(self, obj):
         """Every state this action moved through, and what it cost to get there."""
@@ -120,10 +135,57 @@ class AutomationActionInline(admin.TabularInline):
 
 @admin.register(AutomationInstance)
 class AutomationInstanceAdmin(admin.ModelAdmin):
-    list_display = ("id", "automation_content__automation", "status", "is_success", "created", "updated")
+    list_display = ("id", "reference", "automation", "status", "is_success", "created", "updated")
+    # Both open the run. Django links only the first column by default, which
+    # would leave the hash as the one thing on the row you cannot click.
+    list_display_links = ("id", "reference")
     list_filter = ("status", "automation_content__automation", "created")
     search_fields = ("key", "automation_content__automation__name")
     actions = ("cancel_instances",)
+
+    class Media:
+        css = {"all": ("djangocms_automation/css/admin_panels.css",)}
+
+    @admin.display(description=_("Automation"), ordering="automation_content__automation__name")
+    def automation(self, obj):
+        """Which automation this run belongs to.
+
+        A method rather than ``automation_content__automation`` in
+        ``list_display``: Django resolves the path far enough to label the
+        column and then fetches it with ``getattr(instance, "automation")``,
+        which an instance has no such attribute for. The changelist raised
+        ``AttributeError`` on every request.
+        """
+        content = getattr(obj, "automation_content", None)
+        automation = getattr(content, "automation", None)
+        return getattr(automation, "name", "") or "—"
+
+    @admin.display(description=_("Hash"), ordering="key")
+    def reference(self, obj):
+        """The run's own name, as something to carry elsewhere.
+
+        Beside the id rather than instead of it. The id is what people say
+        out loud and what the URL carries; the hash is what survives leaving
+        this database — a log line, a support ticket, a message to a colleague
+        — where two deployments will happily disagree about run 17.
+
+        Shortened the way a commit is: enough to recognise and to search for,
+        with the whole of it on the run's own page.
+        """
+        if not obj.key:
+            return format_html('<span class="automation-hash">#{}</span>', obj.pk)
+        return format_html('<span class="automation-hash" title="{}">{}</span>', obj.key, obj.key[:12])
+
+    @admin.display(description=_("Unique hash"))
+    def hash(self, obj):
+        """The whole hash, where there is room for it.
+
+        Selectable rather than truncated: the reason to open this page for the
+        hash is to copy it somewhere, and half a hash is no use for that.
+        """
+        if not obj.key:
+            return "—"
+        return format_html('<span class="automation-hash">{}</span>', obj.key)
 
     @admin.action(description=_("Cancel selected executions"), permissions=["change"])
     def cancel_instances(self, request, queryset):
@@ -135,12 +197,25 @@ class AutomationInstanceAdmin(admin.ModelAdmin):
             level=messages.SUCCESS if canceled else messages.INFO,
         )
 
-    readonly_fields = ("key", "created", "updated", "data_display", "error_message_display")
+    readonly_fields = ("hash", "automation", "created", "updated", "data_display", "error_message_display")
     inlines = [AutomationActionInline]
     fieldsets = (
-        (None, {"fields": ("key", ("created", "updated"))}),
-        (_("Data"), {"fields": ("data_display",)}),
-        (_("Error Messages"), {"fields": ("error_message_display",)}),
+        (None, {"fields": (("hash", "automation"), ("created", "updated"))}),
+        # Closed until asked for: a run's payload is the longest thing on the
+        # page and the least often the reason for opening it.
+        #
+        # The class is ``collapse`` and only that — ``AdminField.is_collapsible``
+        # tests ``"collapse" in self.classes``, so ``collapsed`` and
+        # ``collapsable`` name nothing and the fieldset stays open. Django
+        # renders it as ``<details>``, which costs no JavaScript and opens
+        # itself when a field inside has an error.
+        (
+            _("Input data and results"),
+            {
+                "fields": ("data_display", "error_message_display"),
+                "classes": ("collapse",),
+            },
+        ),
     )
 
     @admin.display(description=_("Initial data"))
@@ -228,12 +303,26 @@ class AutomationInstanceAdmin(admin.ModelAdmin):
         """
         if not request.user.has_perm("djangocms_automation.view_automationinstance"):
             raise PermissionDenied
-        action = get_object_or_404(AutomationAction, pk=action_id)
+        action = get_object_or_404(AutomationAction.objects.select_related("automation_instance"), pk=action_id)
+        events = list(action.events.order_by("created", "pk"))
+        # How long each state lasted, rather than only when it began. "Ran for
+        # four minutes" and "sat in the queue for four minutes" are the same
+        # two timestamps and completely different problems, and reading them
+        # off a column of clock times is work a page can do for you.
+        previous = None
+        for event in events:
+            event.since = _span(event.created - previous.created) if previous else ""
+            previous = event
         context = {
             **self.admin_site.each_context(request),
             "title": _("History"),
             "action": action,
-            "events": action.events.order_by("created", "pk"),
+            **_about(action),
+            "events": events,
+            # The two spans worth separating: waiting to start, and running.
+            "queued_for": _span(action.started - action.created) if action.started else "",
+            "ran_for": _span(action.finished - action.started) if action.finished and action.started else "",
+            "parent": action.parent,
             "opts": self.model._meta,
         }
         return TemplateResponse(request, "djangocms_automation/admin/action_history.html", context)
@@ -254,14 +343,26 @@ class AutomationInstanceAdmin(admin.ModelAdmin):
             raise PermissionDenied
         action = get_object_or_404(AutomationAction, pk=action_id)
         scratch = action.scratch if isinstance(action.scratch, dict) else {}
+        answer_format = _answer_format(action)
         context = {
             **self.admin_site.each_context(request),
             "title": _("Conversation"),
             "action": action,
-            "messages_": [_readable(message) for message in scratch.get("messages") or []],
+            **_about(action),
+            "messages_": [_readable(message, answer_format) for message in scratch.get("messages") or []],
             "turn": scratch.get("turn") or 0,
             "tool_calls": scratch.get("tool_calls") or 0,
             "usage": scratch.get("usage") or {},
+            # Markdown asked for and not rendered has two causes that look the
+            # same on the page: the extra is missing, or the step no longer
+            # says Markdown. Only the first is worth a notice, and only once.
+            #
+            # Gated here rather than on ``DEBUG`` in the template, because the
+            # template has no such variable: the debug context processor sets
+            # ``debug``, lowercase, and only when the client address is in
+            # ``INTERNAL_IPS`` — which most projects never set. A condition on
+            # ``DEBUG`` in a template is quietly always false.
+            "markdown_missing": (settings.DEBUG and answer_format == "markdown" and not _can_render_markdown()),
             "opts": self.model._meta,
         }
         return TemplateResponse(request, "djangocms_automation/admin/conversation.html", context)
@@ -280,7 +381,153 @@ class AutomationInstanceAdmin(admin.ModelAdmin):
         return HttpResponseRedirect(redirect_url)
 
 
-def _readable(message: dict) -> dict:
+def _span(delta) -> str:
+    """A duration at the precision a person reads it in.
+
+    ``0:00:00.006830`` is technically the answer and practically a puzzle. The
+    interesting comparisons here are between milliseconds and minutes, so the
+    unit changes with the magnitude and everything below it is dropped.
+    """
+    if delta is None:
+        return ""
+    seconds = delta.total_seconds()
+    if seconds < 1:
+        return f"{seconds * 1000:.0f} ms"
+    if seconds < 60:
+        return f"{seconds:.1f} s"
+    if seconds < 3600:
+        minutes, rest = divmod(int(seconds), 60)
+        return f"{minutes} min {rest} s"
+    hours, rest = divmod(int(seconds), 3600)
+    return f"{hours} h {rest // 60} min"
+
+
+def _about(action) -> dict:
+    """Which automation, which run, which step.
+
+    A page that opens on a conversation or a list of state changes is missing
+    the thing a reader needs first: what this belongs to. Someone arrives here
+    from a link, a bookmark or a colleague, and "which of our automations is
+    this" should not be a click away.
+    """
+    instance = action.automation_instance
+    content = getattr(instance, "automation_content", None)
+    return {
+        # Django 6.1 replaced the breadcrumb <div> with an ordered list. The
+        # panels follow whichever the installed admin uses, so they sit in the
+        # bar the same way every other page does on both.
+        "modern_breadcrumbs": django.VERSION >= (6, 1),
+        "step": _step_name(action),
+        "automation": getattr(content, "automation", None),
+        "instance": instance,
+    }
+
+
+def _answer_format(action) -> str:
+    """What the step asked the model to write in *when it ran*.
+
+    Read from the run's own state, because that is the only place it is a
+    fact. A plugin is editable and a transcript is not: switching a step to
+    Markdown next week must not change how last week's answer is read back.
+
+    The plugin is consulted only for a run recorded before this was kept —
+    there the current setting is the sole remaining clue, and a plain answer
+    rendered as Markdown is a paragraph either way.
+    """
+    scratch = action.scratch if isinstance(action.scratch, dict) else {}
+    if "answer_format" in scratch:
+        return str(scratch.get("answer_format") or "")
+    try:
+        plugins = engine.build_plugin_map(action.automation_instance.automation_content_id)
+        plugin = plugins.get(action.plugin_ptr)
+        return str((getattr(plugin, "config", None) or {}).get("answer_format") or "")
+    except Exception:  # noqa: BLE001 — an unreadable tree only means plainer output
+        return ""
+
+
+def _step_name(action, plugins=None) -> str:
+    """Which step this is, in the words the editor sees.
+
+    A page about one action that never says which action is a page about a
+    UUID. The plugin tree is the only thing that knows, so it is asked; a
+    plugin deleted since the run is not a reason to fail the page.
+
+    :param plugins: A prebuilt plugin map, for a caller naming many actions at
+        once. Building it per row would put a tree walk behind every line of
+        the table.
+    """
+    name = action.step_name(plugins)
+    if not name:
+        return ""
+    try:
+        plugin = (plugins or engine.build_plugin_map(action.automation_instance.automation_content_id)).get(
+            action.plugin_ptr
+        )
+        label = str(getattr(plugin, "comment", "") or "")
+    except Exception:  # noqa: BLE001 — a missing comment is not worth failing a page for
+        label = ""
+    return f"{name} — {label}" if label else name
+
+
+def _rendered(text: str, answer_format: str):
+    """A model's words, prepared for a page, or ``None`` to show them as text.
+
+    Only Markdown is turned into HTML, and only through a sanitiser. HTML that
+    a model was *asked* for is deliberately not rendered: an editor who wants
+    HTML wants to read what the model wrote, and showing it as a page instead
+    would both hide the markup they are checking and hand a model's output
+    straight to the browser.
+
+    Nothing is marked safe that has not been through ``nh3``. A model's answer
+    can be steered by whatever arrived in the trigger — an inbound email, a
+    form — so this is untrusted text in the ordinary sense, on a page that
+    someone with admin rights is reading.
+    """
+    if answer_format != "markdown" or not text.strip():
+        return None
+    if not _can_render_markdown():
+        # Without both halves it stays text. Escaped and readable beats
+        # rendered and unsanitised — and the page says why, because "my
+        # Markdown is showing as text" has two causes that look identical.
+        return None
+    import markdown
+    import nh3
+
+    return mark_safe(nh3.clean(markdown.markdown(text, extensions=["fenced_code", "tables"])))
+
+
+def _can_render_markdown() -> bool:
+    """Whether both halves of the Markdown extra are installed."""
+    try:
+        import markdown  # noqa: F401
+        import nh3  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def _pairs(text: str, answer_format: str):
+    """A flat JSON answer as the fields it is, or ``None`` if it is not one.
+
+    A step with an output shape answers with an object, and the whole point of
+    the shape is that it has named fields. Printing that back as a line of JSON
+    makes the reader parse what the schema already separated.
+    """
+    try:
+        parsed = json.loads(text)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(parsed, dict) or not parsed:
+        return None
+    if any(isinstance(value, (dict, list)) for value in parsed.values()):
+        return None  # not flat; the JSON is the clearer rendering of a nested answer
+    return [
+        {"key": key, "text": "" if value is None else str(value), "html": _rendered(str(value), answer_format)}
+        for key, value in parsed.items()
+    ]
+
+
+def _readable(message: dict, answer_format: str = "") -> dict:
     """One stored message, in the shape the template reads.
 
     The arguments a model sent are a JSON string on the wire. Re-indented here
@@ -296,9 +543,13 @@ def _readable(message: dict) -> dict:
         except (TypeError, ValueError):
             arguments = str(raw)
         calls.append({"name": function.get("name", ""), "arguments": arguments})
+    content = message.get("content") or ""
     return {
         "role": message.get("role", ""),
-        "content": message.get("content") or "",
+        "content": content,
+        # An answer under a shape reads as its fields; anything else as itself.
+        "pairs": _pairs(content, answer_format) if message.get("role") == "assistant" else None,
+        "html": _rendered(content, answer_format) if message.get("role") == "assistant" else None,
         "tool_call_id": message.get("tool_call_id") or "",
         "calls": calls,
     }

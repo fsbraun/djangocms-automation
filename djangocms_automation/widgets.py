@@ -37,6 +37,7 @@ class TriggerSelectWidget(forms.Select):
 
     class Media:
         js = ("djangocms_automation/js/trigger_select.js",)
+        css = {"all": ("djangocms_automation/css/admin_panels.css",)}
 
     def __init__(self, attrs=None, choices: Iterable = ()):  # choices ignored, taken from registry
         super().__init__(attrs, choices=self._build_choices())
@@ -76,12 +77,16 @@ class TriggerSelectWidget(forms.Select):
             schema_json = "{}"
             desc_html = _("No trigger selected.")
 
-        info_block = f'<div id="trigger-description" style="margin-top:0.75rem; padding:0.5rem; background:#var(--hairline-color); border-left:3px solid #0066cc; font-size:14px;">{desc_html}</div>'
+        # Classes rather than style attributes: a site running a Content
+        # Security Policy without unsafe-inline drops the latter, and the
+        # colours here were hard-coded besides — they now follow the admin
+        # theme, dark mode included.
+        info_block = f'<div id="trigger-description" class="automation-trigger-description">{desc_html}</div>'
         if schema_json != "{}":
             info_block += (
-                '<details id="trigger-schema-details" style="margin-top:0.5rem;">'
-                f'<summary style="cursor:pointer; font-weight:500;">{_("Schema details for input data")}</summary>'
-                f'<pre id="trigger-schema" style="margin-top:0.5rem; background:#f8f9fa; border:1px solid #ddd; padding:0.5rem; max-height:24rem; overflow:auto; font-size:12px;">{escape(schema_json)}</pre>'
+                '<details id="trigger-schema-details" class="automation-trigger-schema">'
+                f"<summary>{_('Schema details for input data')}</summary>"
+                f'<pre id="trigger-schema">{escape(schema_json)}</pre>'
                 "</details>"
             )
 

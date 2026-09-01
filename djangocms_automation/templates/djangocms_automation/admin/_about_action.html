@@ -1,0 +1,10 @@
+{% load i18n %}
+<h2>{{ instance }}{% if step %}: {{ step }}{% endif %}</h2>
+<p class="automation-about">
+  {% if instance.status %}{{ instance.status }} &middot; {% endif %}
+  {% if instance.created %}{% blocktranslate with when=instance.created %}started {{ when }}{% endblocktranslate %} &middot; {% endif %}
+  <a href="{% url 'admin:djangocms_automation_automationinstance_change' action.automation_instance_id %}">{% translate "the run" %}</a>
+  {% if automation %}
+  &middot; <a href="{% url 'admin:djangocms_automation_automation_change' automation.pk %}">{% translate "the automation" %}</a>
+  {% endif %}
+</p>

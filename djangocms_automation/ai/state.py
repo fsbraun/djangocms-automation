@@ -44,6 +44,11 @@ class AgentState:
     usage: dict[str, int] = field(default_factory=dict)
     #: When the run began, ISO-8601, for the wall-clock budget.
     started_at: str = ""
+    #: What the step asked the model to write in, as it stood when it ran.
+    #: Kept here rather than read back off the plugin, because the plugin is
+    #: editable and a transcript is not: a step switched to Markdown next week
+    #: would otherwise change how last week's answer is read.
+    answer_format: str = ""
     #: Calls the model has asked for that have not been dispatched yet.
     pending: list[dict] = field(default_factory=list)
     #: Calls already turned into actions. A woken agent must not spawn a tool

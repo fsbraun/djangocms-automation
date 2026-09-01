@@ -43,19 +43,29 @@ def test_automation_instance_key_and_str(automation_content):
         initial_data={"foo": 1},
         data={"bar": 2},
     )
-    # key is computed on save; first save happens before id exists
-    assert inst.key
-    expected_initial = __import__("hashlib").sha1(f"{automation_content.automation_id}-{None}".encode()).hexdigest()
-    assert inst.key == expected_initial
-    # On subsequent save, key updates to include real id
+    # The key names *this* run, from the moment it exists.
+    expected = __import__("hashlib").sha1(f"{automation_content.automation_id}-{inst.id}".encode()).hexdigest()
+    assert inst.key == expected
+    inst.refresh_from_db()
+    assert inst.key == expected, "written to the row, not only to the instance in hand"
+
+    # And it does not move afterwards. It used to: the key was recomputed on
+    # every save, so a reference copied out of the admin early stopped matching.
+    inst.status = inst.status
     inst.save()
     inst.refresh_from_db()
-    expected_after = __import__("hashlib").sha1(f"{automation_content.automation_id}-{inst.id}".encode()).hexdigest()
-    assert inst.key == expected_after
-    # __str__ contains automation name and id
+    assert inst.key == expected
+
+    # Nor does it collide. It used to: a run never saved a second time kept
+    # sha1("<automation>-None"), the same string for every such run.
+    second = AutomationInstance.objects.create(automation_content=automation_content, data=[])
+    assert second.key != inst.key
+    # A run is named for a person reading a page, not for a shell.
     s = str(inst)
-    assert automation_content.automation.name in s
-    assert f"({inst.id})" in s
+    # The hash rather than the row id: a run is referred to from outside this
+    # database, where two deployments disagree about run 17.
+    assert s == f"Run {inst.key[:12]} — {automation_content.automation.name}"
+    assert not s.startswith("<"), "a __str__ is not a __repr__"
 
 
 @pytest.mark.django_db

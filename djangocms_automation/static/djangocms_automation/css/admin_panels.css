@@ -1,0 +1,142 @@
+/* The conversation, history and open-task panels in the admin.
+ *
+ * A file rather than a <style> block so a site can run a Content Security
+ * Policy without unsafe-inline. Everything here is loaded through the admin's
+ * extrastyle block or a widget's Media, both of which emit a <link>.
+ */
+
+/* -- what a page is about, above whatever it shows --------------------- */
+
+.automation-about,
+.automation-turnstats {
+    color: var(--body-quiet-color);
+    margin-bottom: 1.5rem;
+}
+
+/* -- a conversation ---------------------------------------------------- */
+
+.automation-message {
+    border-inline-start: 3px solid var(--border-color);
+    padding: .5rem 0 .5rem 1rem;
+    margin-bottom: 1rem;
+}
+
+.automation-message[data-role="user"] { border-inline-start-color: var(--primary); }
+.automation-message[data-role="assistant"] { border-inline-start-color: var(--close-button-bg); }
+.automation-message[data-role="tool"] { border-inline-start-color: var(--border-color); }
+
+.automation-role {
+    font-weight: 600;
+    text-transform: uppercase;
+    font-size: .75rem;
+    letter-spacing: .05em;
+    color: var(--body-quiet-color);
+}
+
+/* Model output and tool results are arbitrary text: it wraps here rather than
+ * stretching the page. Escaping is the template's job, not this file's. */
+.automation-said {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    margin: .25rem 0 0;
+}
+
+.automation-call { margin-top: .5rem; }
+
+.automation-call pre {
+    background: var(--darkened-bg);
+    padding: .5rem;
+    overflow-x: auto;
+    margin: .25rem 0 0;
+}
+
+/* -- an answer under an output shape ----------------------------------- */
+
+/* One field per block, announced the way a turn is. A table was more structure
+ * than a handful of short fields needs, and read as data rather than as the
+ * answer somebody is here to read. */
+.automation-field + .automation-field { margin-top: .75rem; }
+
+/* Rendered Markdown, kept from running away with the page. */
+.automation-said-html { overflow-wrap: anywhere; }
+
+.automation-said-html :is(h1, h2, h3, h4) {
+    font-size: 1rem;
+    margin: .75rem 0 .25rem;
+}
+
+.automation-said-html pre {
+    background: var(--darkened-bg);
+    padding: .5rem;
+    overflow-x: auto;
+}
+
+.automation-said-html table { border-collapse: collapse; }
+
+.automation-said-html :is(th, td) {
+    border: 1px solid var(--border-color);
+    padding: .25rem .5rem;
+}
+
+/* -- open tasks -------------------------------------------------------- */
+
+/* A call whose operation changed while it waited. It is asking a second time,
+ * and the reason has to be visible before somebody resumes out of habit. */
+.automation-approval-changed {
+    color: var(--error-fg);
+    font-weight: 600;
+}
+
+.automation-bound-group {
+    text-align: start;
+    padding-top: .5rem;
+    color: var(--body-quiet-color);
+    font-weight: 600;
+}
+
+/* -- the trigger picker ------------------------------------------------ */
+
+/* These were style attributes built into the widget's HTML, which a strict
+ * Content Security Policy blocks as surely as a <style> block. One of them
+ * also read `background:#var(--hairline-color)` — a stray `#` that made the
+ * declaration invalid, so the block had never had the background it looked
+ * like it had. */
+.automation-trigger-description {
+    margin-top: .75rem;
+    padding: .5rem;
+    background: var(--darkened-bg);
+    border-inline-start: 3px solid var(--primary);
+    font-size: .875rem;
+}
+
+.automation-trigger-schema { margin-top: .5rem; }
+
+.automation-trigger-schema summary {
+    cursor: pointer;
+    font-weight: 500;
+}
+
+.automation-trigger-schema pre {
+    margin-top: .5rem;
+    background: var(--darkened-bg);
+    border: 1px solid var(--border-color);
+    padding: .5rem;
+    max-height: 24rem;
+    overflow: auto;
+    font-size: .75rem;
+}
+
+/* A page saying why it is not doing something you asked for. */
+.automation-note {
+    background: var(--darkened-bg);
+    border-inline-start: 3px solid var(--primary);
+    padding: .5rem .75rem;
+    margin-bottom: 1rem;
+}
+
+/* A run's own name. Monospaced so a hash can be compared at a glance, and
+ * selectable in full even where it is shown short. */
+.automation-hash {
+    font-family: var(--font-family-monospace, ui-monospace, monospace);
+    font-size: .875em;
+}

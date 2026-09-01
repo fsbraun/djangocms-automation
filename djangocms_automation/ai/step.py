@@ -324,6 +324,8 @@ class AIStepPluginModel(BaseActionPluginModel):
             row = rows[0] if rows and isinstance(rows[0], dict) else {}
             context = {**row, "data": rows}
             state.started_at = now().isoformat()
+            # Recorded with the conversation, not looked up beside it later.
+            state.answer_format = str(config.get("answer_format") or "")
             state.start(
                 system=_instructions(str(safe_render(str(config.get("system_prompt") or ""), context)), config),
                 prompt=str(safe_render(str(config.get("prompt") or ""), context)),
