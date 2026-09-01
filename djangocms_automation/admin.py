@@ -19,9 +19,7 @@ from .instances import (
     PENDING,
     RUNNING,
     AutomationAction,
-    AutomationActionEvent,
     AutomationInstance,
-    AutomationInstanceEvent,
     DeadLetter,
     SchedulerLock,
 )
@@ -71,6 +69,7 @@ class AutomationActionInline(admin.TabularInline):
         "requires_interaction",
         "interaction_user",
         "interaction_group",
+        "history",
         "conversation",
         "created",
         "started",
@@ -82,12 +81,24 @@ class AutomationActionInline(admin.TabularInline):
         "re_entry_count",
         "dead_lettered",
         "message",
+        "history",
         "conversation",
         "created",
         "started",
         "finished",
     )
     can_delete = False
+
+    @admin.display(description=_("History"))
+    def history(self, obj):
+        """Every state this action moved through, and what it cost to get there."""
+        if not obj.pk:
+            return "—"
+        return format_html(
+            '<a href="{}">{}</a>',
+            reverse("admin:djangocms_automation_action_history", args=[obj.pk]),
+            _("%(count)d step(s)") % {"count": obj.events.count()},
+        )
 
     @admin.display(description=_("Conversation"))
     def conversation(self, obj):
@@ -188,6 +199,11 @@ class AutomationInstanceAdmin(admin.ModelAdmin):
                 self.admin_site.admin_view(self.conversation_view),
                 name="djangocms_automation_conversation",
             ),
+            path(
+                "history/<int:action_id>/",
+                self.admin_site.admin_view(self.action_history_view),
+                name="djangocms_automation_action_history",
+            ),
         ]
         return custom + super().get_urls()
 
@@ -201,6 +217,26 @@ class AutomationInstanceAdmin(admin.ModelAdmin):
             "opts": self.model._meta,
         }
         return TemplateResponse(request, "djangocms_automation/admin/open_tasks.html", context)
+
+    def action_history_view(self, request, action_id):
+        """Every state one action moved through, in order.
+
+        This used to be a changelist over every event in the database, which
+        answered a question nobody asks — "show me all the actions that ever
+        failed, across every run". What people want is the history of the run
+        in front of them, so it lives on the action instead.
+        """
+        if not request.user.has_perm("djangocms_automation.view_automationinstance"):
+            raise PermissionDenied
+        action = get_object_or_404(AutomationAction, pk=action_id)
+        context = {
+            **self.admin_site.each_context(request),
+            "title": _("History"),
+            "action": action,
+            "events": action.events.order_by("created", "pk"),
+            "opts": self.model._meta,
+        }
+        return TemplateResponse(request, "djangocms_automation/admin/action_history.html", context)
 
     def conversation_view(self, request, action_id):
         """What a model was asked and what it said back, turn by turn.
@@ -387,7 +423,16 @@ class QueuedTaskAdmin(admin.ModelAdmin):
 
 @admin.register(SchedulerLock)
 class SchedulerLockAdmin(admin.ModelAdmin):
-    """Visibility into which scheduler holds the tick, for debugging."""
+    """Visibility into which scheduler holds the tick, for debugging.
+
+    Hidden from the index: it is one row of internal machinery, and a menu
+    entry for a singleton earns its place only when something has gone wrong.
+    The page is still there for whoever is debugging a stuck scheduler and
+    knows to go looking.
+    """
+
+    def get_model_perms(self, request):  # Hides from admin index/app list
+        return {}
 
     list_display = ("name", "holder", "locked_until")
     readonly_fields = ("name", "holder", "locked_until")
@@ -396,53 +441,17 @@ class SchedulerLockAdmin(admin.ModelAdmin):
         return False
 
 
-@admin.register(AutomationInstanceEvent)
-class AutomationInstanceEventAdmin(admin.ModelAdmin):
-    """How a run as a whole moved: started, finished, canceled, or reopened.
-
-    The counterpart to *Action events*. Read-only for the same reason: the value
-    of a history is that it cannot be edited.
-    """
-
-    list_display = ("instance", "from_status", "to_status", "created")
-    list_filter = ("from_status", "to_status", "created")
-    search_fields = ("instance__id", "instance__key")
-    readonly_fields = ("instance", "from_status", "to_status", "metadata", "created")
-
-    def has_add_permission(self, request):
-        return False
-
-    def has_change_permission(self, request, obj=None):
-        return False
-
-    def has_delete_permission(self, request, obj=None):
-        # An audit log you can delete from is not an audit log.
-        return False
-
-
-@admin.register(AutomationActionEvent)
-class AutomationActionEventAdmin(admin.ModelAdmin):
-    list_display = ("action", "from_state", "to_state", "attempt", "created")
-    list_filter = ("from_state", "to_state", "created")
-    search_fields = ("action__id", "action__automation_instance__key")
-    readonly_fields = (
-        "action",
-        "from_state",
-        "to_state",
-        "attempt",
-        "lease_id",
-        "metadata",
-        "created",
-    )
-
-    def has_add_permission(self, request):
-        return False
-
-    def has_change_permission(self, request, obj=None):
-        return False
-
-    def has_delete_permission(self, request, obj=None):
-        return False
+# Neither event model has an admin of its own any more.
+#
+# A run's own transitions — started, finished, canceled — are already the
+# instance's ``status``, ``created`` and ``finished``, so a second place to read
+# them said nothing new, and said nothing at all for a run still in flight.
+#
+# An action's transitions are worth keeping, but not as a changelist: nobody
+# looks for "every action that ever failed, across every run". They look at one
+# run. So they are a panel on the action instead, beside its conversation. The
+# events themselves are still recorded exactly as before — this changed where
+# they are read, not whether they exist.
 
 
 class APIKeyAdminForm(forms.ModelForm):

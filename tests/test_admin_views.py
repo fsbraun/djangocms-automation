@@ -312,3 +312,53 @@ def test_a_conversation_is_not_readable_without_permission_to_see_the_run(client
     client.force_login(onlooker)
 
     assert client.get(_conversation_url(talked)).status_code == 403
+
+
+@pytest.mark.django_db
+def test_an_actions_history_is_read_where_the_run_is(admin_client, waiting_action):
+    """Not as a changelist over every event in the database.
+
+    That answered a question nobody asks — every action that ever failed,
+    across every run. What people want is the history of the run in front of
+    them.
+    """
+    url = reverse("admin:djangocms_automation_action_history", args=[waiting_action.pk])
+    body = admin_client.get(url).content.decode()
+
+    assert "PENDING" in body and "RUNNING" in body, "the transitions it made"
+    assert "attempt" in body.lower()
+
+
+@pytest.mark.django_db
+def test_a_history_is_not_readable_without_permission_to_see_the_run(client, waiting_action, django_user_model):
+    from django.contrib.auth.models import Permission
+
+    onlooker = django_user_model.objects.create_user("historyonlooker", password="x", is_staff=True)
+    onlooker.user_permissions.add(Permission.objects.get(codename="view_automationtrigger"))
+    client.force_login(onlooker)
+
+    url = reverse("admin:djangocms_automation_action_history", args=[waiting_action.pk])
+    assert client.get(url).status_code == 403
+
+
+@pytest.mark.django_db
+def test_the_menu_offers_only_what_someone_would_go_looking_for(admin_user, rf):
+    """Eight entries, five of them internals, is a menu nobody reads.
+
+    The events are still recorded; this is about what the index offers.
+    """
+    from django.contrib import admin as django_admin
+
+    request = rf.get("/admin/")
+    request.user = admin_user
+    listed = {
+        str(model["name"])
+        for app in django_admin.site.get_app_list(request)
+        if "automation" in app["app_label"]
+        for model in app["models"]
+    }
+
+    assert {"Automations", "Execution Instances", "Dead letters", "Secrets"} <= listed
+    assert "Instance events" not in listed, "the instance row already says this"
+    assert "Action events" not in listed, "read per action instead"
+    assert "Scheduler locks" not in listed, "one row of machinery"

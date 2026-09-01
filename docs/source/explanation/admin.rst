@@ -61,8 +61,9 @@ rather than a missing row.
 Why the record cannot be edited
 -------------------------------
 
-**Action events** is an append-only log of every state transition: which attempt,
-which lease, what the engine was doing and why. It has no add or change form.
+Every state transition is written to an append-only log: which attempt, which
+lease, what the engine was doing and why. Nothing in the admin can add to it or
+edit it.
 
 This is not caution for its own sake. The log's only value is as evidence. When a
 run behaves strangely, the question is almost always "what actually happened, in
@@ -70,12 +71,18 @@ what order" — and an answer you could have edited is not an answer. The moment
 the history is mutable, it stops being able to settle an argument about what the
 system did. So the engine writes it and nothing else may.
 
-**Instance events** is the same log one level up: how the run as a whole moved.
-Started, finished, canceled — and reopened, which is the interesting one, because
-replaying a failed action is the only thing that takes a run back out of a
-terminal status. Until that log existed, a run's own status changes were only
-inferable from its actions, and a reopened run was indistinguishable from one
-that had simply never finished. It is read-only for the same reason.
+It is read through the run rather than as a list of its own. Each action on an
+instance has a **History** link showing the states it moved through, its
+attempts, and what each transition recorded. A changelist over every event in
+the database answered a question nobody asks — *every action that ever failed,
+across every run* — while the question people actually have is about the run in
+front of them.
+
+A run's own transitions have no page at all. Started, finished, canceled: the
+instance already carries its status and its timestamps, so a second place to
+read them said nothing new, and a run still in flight had nothing to show there.
+The events are still recorded, and remain the way a reopened run is told apart
+from one that never finished.
 
 **Execution Instances** is the same data seen from the other end: one row per run,
 with its actions inline. It *does* have add and change forms, because it is an
@@ -121,7 +128,7 @@ letters is a proxy: same table, different question. Execution Instances asks
 The consequence is worth knowing. Because it is the same row, deleting a dead
 letter deletes the action, and the transition events cascade with it. Tidying the
 dead-letter queue by deleting from it silently removes that run's history from
-Action events too. This is the strongest argument for withholding the ``delete``
+The event log too. This is the strongest argument for withholding the ``delete``
 permission on these entries: the design intends them to be read-only, and only
 Django's default permission set makes deletion available at all.
 
@@ -153,7 +160,7 @@ to keep in mind when replaying something old.
 Why the machinery is visible at all
 -----------------------------------
 
-Most applications hide their queue. **Queued tasks** and **Scheduler locks** are
+Most applications hide their queue. **Queued tasks** is
 exposed because of how automations fail in practice.
 
 When an automation misbehaves, it usually does something wrong — and the run
@@ -163,12 +170,16 @@ fine, simply frozen. There are only a few causes, and none of them are visible i
 the workflow itself. Either no worker is draining the queue, or no scheduler is
 firing timers and reviving retries, or a scheduler died holding the lock.
 
-Making those two things visible turns an invisible problem into an obvious one. A
-growing pile of ``READY`` tasks means work is arriving faster than it is being
-drained, or nothing is draining it. A lock held long past its expiry means a
-scheduler died mid-tick. Neither requires action most of the time — the next tick
-reclaims an expired lock, and a restarted worker drains a backlog — but both
-answer "is the machinery alive?" in one glance.
+Making that visible turns an invisible problem into an obvious one. A growing
+pile of ``READY`` tasks means work is arriving faster than it is being drained,
+or nothing is draining it. It rarely requires action — a restarted worker drains
+a backlog — but it answers "is the machinery alive?" in one glance.
+
+**Scheduler locks** answers the other half of that question: a lock held long
+past its expiry means a scheduler died mid-tick. It is not in the menu, because
+it is one row that matters on the few days something is stuck, and a permanent
+entry for it would be one more thing to scroll past on all the others. The page
+is there for whoever goes looking.
 
 The same reasoning explains why deleting a queued task is more dangerous than it
 looks. A row in ``READY`` *is* the pending work: delete it and the action it
