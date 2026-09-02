@@ -271,6 +271,9 @@ def test_the_menu_opens_with_the_automations_own_properties(admin_user, automati
     menu = cms_toolbar.get_or_create_menu.return_value
     call = next(call for call in menu.add_modal_item.call_args_list if str(call.args[0]) == "Automation properties…")
     assert str(automation_content.automation_id) in call.args[1]
+    # Which version's content the grouper form should show. Without it the
+    # change view falls back to the latest, which need not be this one.
+    assert f"cms_content={automation_content.pk}" in call.args[1]
     # First by being added first: the menu keeps insertion order, and this is
     # the first thing populate() adds.
     assert menu.add_modal_item.call_args_list[0] is call

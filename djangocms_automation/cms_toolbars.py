@@ -1,3 +1,4 @@
+from cms.admin.utils import GrouperModelAdmin
 from cms.toolbar_base import CMSToolbar
 from cms.toolbar_pool import toolbar_pool
 from django.urls import reverse
@@ -45,7 +46,14 @@ class AutomationToolbar(CMSToolbar):
         if automation is None:
             return
         if self.request.user.has_perm("djangocms_automation.change_automation"):
-            url = reverse("admin:djangocms_automation_automation_change", args=[automation.pk])
+            # ``cms_content`` names which version's content the grouper form
+            # should show. Without it the change view falls back to the latest,
+            # so opening the properties of the version being edited could hand
+            # back somebody else's draft.
+            url = (
+                reverse("admin:djangocms_automation_automation_change", args=[automation.pk])
+                + f"?{GrouperModelAdmin.content_pk_url_param}={automation_content.pk}"
+            )
             menu.add_modal_item(_("Automation properties…"), url)
         else:
             # Listed and not clickable, like everything else here somebody may
