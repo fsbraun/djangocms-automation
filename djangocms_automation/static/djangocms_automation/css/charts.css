@@ -95,6 +95,14 @@ body {
             transform: translate(-50%, -50%);
             z-index: 10;
         }
+        > b {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 10;
+
+        }
         .automation-title {
             position: absolute;
             width: max-content;
