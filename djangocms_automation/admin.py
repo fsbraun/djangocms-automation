@@ -819,6 +819,31 @@ class AutomationTriggerAdmin(ChangeListActionsMixin, admin.ModelAdmin):
         self._mark_as_popup(request)
         return super().change_view(request, object_id, form_url, extra_context)
 
+    def get_deleted_objects(self, objs, request):
+        """Say that the flow goes with the trigger.
+
+        Django lists what a delete cascades to by following foreign keys, and a
+        trigger's placeholder is not one — it is found by slot. So the
+        confirmation page named the trigger and nothing else, while removing
+        every plugin the automation had. Deleting a workflow should not be
+        something you discover afterwards.
+        """
+        deleted, model_count, perms_needed, protected = super().get_deleted_objects(objs, request)
+        for trigger in objs:
+            placeholder = trigger.placeholder()
+            if placeholder is None:
+                continue
+            plugins = placeholder.get_plugins()
+            deleted.append(
+                format_html(
+                    "{}: {}",
+                    _("Flow held by this trigger"),
+                    _("%(count)d step(s)") % {"count": plugins.count()},
+                )
+            )
+            model_count[_("workflow steps")] = model_count.get(_("workflow steps"), 0) + plugins.count()
+        return deleted, model_count, perms_needed, protected
+
     def get_urls(self):
         custom = [
             path(

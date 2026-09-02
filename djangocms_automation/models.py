@@ -3,6 +3,7 @@ import uuid
 from cms.models import CMSPlugin, Placeholder
 from cms.models.fields import PlaceholderRelationField
 from django.db import models, transaction
+from django.dispatch import receiver
 from django.utils.translation import gettext_lazy as _
 
 from .instances import (  # noqa F401
@@ -153,6 +154,10 @@ class AutomationTrigger(models.Model):
     def placeholders(self):
         """Every placeholder belonging to this trigger's automation."""
         return Placeholder.objects.get_for_obj(self.automation_content)
+
+    def placeholder(self):
+        """The one holding this trigger's flow, if it still exists."""
+        return self.placeholders().filter(slot=self.slot).first()
 
     def get_definition(self):
         """Get the trigger type definition from the registry.
@@ -1055,3 +1060,28 @@ class BaseActionPluginModel(ToolMixin, AutomationPluginModel):
         :returns: The outgoing data rows.
         """
         return rows
+
+
+@receiver(models.signals.post_delete, sender=AutomationTrigger)
+def _remove_the_flow_with_its_trigger(sender, instance, **kwargs):
+    """Delete the placeholder a deleted trigger was holding its flow in.
+
+    A placeholder is found by slot, so a trigger's removal leaves one nothing
+    can name: invisible in the editor, still holding every plugin, and quietly
+    reclaimed by the next trigger that takes the same name — somebody else's
+    flow reappearing under a new entry point.
+
+    A receiver rather than a ``delete`` override because that method is not
+    called for ``queryset.delete()``, which is how the admin's bulk action
+    removes things, nor for a cascade from the automation itself.
+
+    Best-effort: the trigger is already gone by the time this runs, and failing
+    to tidy up after it is not a reason to fail the delete. An orphaned
+    placeholder is visible in the editor; a half-deleted trigger is not.
+    """
+    try:
+        placeholder = Placeholder.objects.get_for_obj(instance.automation_content).filter(slot=instance.slot).first()
+    except Exception:  # noqa: BLE001 — the automation may be going too
+        return
+    if placeholder is not None:
+        placeholder.delete()

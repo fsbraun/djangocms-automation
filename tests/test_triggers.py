@@ -318,3 +318,85 @@ class TestOneSlotPerTrigger:
         second.slot = first.slot
         with pytest.raises(IntegrityError), transaction.atomic():
             second.save()
+
+
+@pytest.mark.django_db
+class TestDeletingATrigger:
+    """A trigger's flow lives in a placeholder found by slot."""
+
+    @pytest.fixture
+    def trigger(self, admin_user):
+        from cms.api import add_plugin
+        from cms.models import Placeholder
+        from django.contrib.contenttypes.models import ContentType
+
+        from djangocms_automation.models import Automation, AutomationContent, AutomationTrigger
+
+        automation = Automation.objects.create(name="Deleting", is_active=True)
+        content = AutomationContent.objects.with_user(admin_user).create(automation=automation, description="Deleting")
+        trigger = AutomationTrigger.objects.create(automation_content=content, slot="start", type="click")
+        placeholder = Placeholder.objects.get_or_create(
+            content_type=ContentType.objects.get_for_model(AutomationContent),
+            object_id=content.pk,
+            slot="start",
+        )[0]
+        add_plugin(placeholder=placeholder, plugin_type="UserInputAction", language="en")
+        return trigger
+
+    def test_the_flow_goes_with_it(self, trigger):
+        """An orphaned placeholder is invisible in the editor, still holds
+        every plugin, and is quietly reclaimed by the next trigger that takes
+        the same name — somebody else's flow under a new entry point."""
+        from cms.models import CMSPlugin
+
+        placeholder = trigger.placeholder()
+        assert placeholder is not None
+
+        trigger.delete()
+
+        assert trigger.placeholders().filter(slot="start").first() is None
+        assert not CMSPlugin.objects.filter(placeholder_id=placeholder.pk).exists()
+
+    def test_a_bulk_delete_takes_it_too(self, trigger):
+        """``queryset.delete()`` never calls ``Model.delete``, and that is how
+        the admin's own bulk action removes things."""
+        from djangocms_automation.models import AutomationTrigger
+
+        placeholders = trigger.placeholders()
+
+        AutomationTrigger.objects.filter(pk=trigger.pk).delete()
+
+        assert placeholders.filter(slot="start").first() is None
+
+    def test_another_triggers_flow_is_left_alone(self, trigger):
+        """Only the slot that was this trigger's."""
+        from cms.models import Placeholder
+        from django.contrib.contenttypes.models import ContentType
+
+        from djangocms_automation.models import AutomationContent, AutomationTrigger
+
+        other = AutomationTrigger.objects.create(
+            automation_content=trigger.automation_content, slot="second", type="code"
+        )
+        Placeholder.objects.get_or_create(
+            content_type=ContentType.objects.get_for_model(AutomationContent),
+            object_id=trigger.automation_content.pk,
+            slot="second",
+        )
+
+        trigger.delete()
+
+        assert other.placeholders().filter(slot="second").exists()
+
+    def test_the_confirmation_says_the_flow_is_going(self, admin_client, trigger):
+        """Django lists what a delete cascades to by following foreign keys,
+        and a placeholder found by slot is not one. Deleting a workflow should
+        not be something you discover afterwards."""
+        from django.urls import reverse
+
+        body = admin_client.get(
+            reverse("admin:djangocms_automation_automationtrigger_delete", args=[trigger.pk])
+        ).content.decode()
+
+        assert "Flow held by this trigger" in body
+        assert "1 step(s)" in body
