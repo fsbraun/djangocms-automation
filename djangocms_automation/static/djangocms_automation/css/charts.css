@@ -19,10 +19,20 @@ body {
             text-transform: uppercase;
         }
     }
+    .title {
+        font-size: 1em;
+        font-weight: normal;
+        &:last-child {
+            margin-bottom: 0;
+        }
+    }
     .description {
         font-size: 1em;
         font-weight: normal;
         color: var(--dca-gray);
+        p:last-child {
+            margin-bottom: 0;
+        }
     }
 }
 

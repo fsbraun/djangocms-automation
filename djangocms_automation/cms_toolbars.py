@@ -24,13 +24,35 @@ class AutomationToolbar(CMSToolbar):
         # Create the main Automation menu
         menu = self.toolbar.get_or_create_menu("automation-menu", _("Automation"))
 
+        self.populate_properties_item(menu, automation_content)
         self.populate_run_item(menu, automation_content)
         self.populate_runs_item(menu, automation_content)
 
         # Create a submenu for triggers
         menu.add_break("trigger-break")
         trigger_menu = menu.get_or_create_menu("automation-trigger-submenu", _("Triggers"))
-        self.populate_trigger_menu(trigger_menu, automation_content)
+        # A published version's flows cannot be touched, and a trigger is a
+        # name for a flow — so the list is still worth reading, and none of it
+        # is clickable. The same is true of somebody who may look and not
+        # change, which is why one flag answers both.
+        self.populate_trigger_menu(
+            trigger_menu, automation_content, automation_content.placeholder_editable(self.request)
+        )
+
+    def populate_properties_item(self, menu, automation_content):
+        """What the automation *is*, above what it does."""
+        automation = getattr(automation_content, "automation", None)
+        if automation is None:
+            return
+        if self.request.user.has_perm("djangocms_automation.change_automation"):
+            url = reverse("admin:djangocms_automation_automation_change", args=[automation.pk])
+            menu.add_modal_item(_("Automation properties…"), url)
+        else:
+            # Listed and not clickable, like everything else here somebody may
+            # not do. That an automation *has* properties is not a secret; what
+            # the permission gates is changing them.
+            menu.add_link_item(_("Automation properties…"), url="", disabled=True)
+        menu.add_break()
 
     def populate_run_item(self, menu, automation_content):
         """The button for trying the thing you just built.
@@ -47,7 +69,10 @@ class AutomationToolbar(CMSToolbar):
         if not self.request.user.has_perm("djangocms_automation.add_automationinstance"):
             return
         if not AutomationTrigger.objects.filter(automation_content=automation_content).exists():
-            menu.add_disabled_item(_("Run now…"))
+            # ``disabled=True`` on a real item: django CMS has no
+            # ``add_disabled_item`` — every ``add_*_item`` takes the flag
+            # instead, and the item renders greyed out.
+            menu.add_link_item(_("Run now…"), url="", disabled=True)
             return
         url = reverse("admin:djangocms_automation_run_now") + f"?automation_content={automation_content.pk}"
         menu.add_modal_item(_("Run now…"), url)
@@ -73,7 +98,15 @@ class AutomationToolbar(CMSToolbar):
         )
         menu.add_sideframe_item(_("Past Runs"), url)
 
-    def populate_trigger_menu(self, menu, automation_content):
+    def populate_trigger_menu(self, menu, automation_content, editable=True):
+        """The triggers, and whether any of them can be opened.
+
+        :param editable: Whether this version's flows accept changes. False
+            leaves every entry in place and none of them clickable — what
+            triggers an automation has is worth reading on a published version
+            too, and an entry that disappears reads as a bug rather than as a
+            state you leave by making a new version.
+        """
         if not isinstance(self.toolbar.get_object(), AutomationContent):  # or not self.toolbar.edit_mode_active:
             return
         user = self.request.user
@@ -85,7 +118,10 @@ class AutomationToolbar(CMSToolbar):
                 reverse("admin:djangocms_automation_automationtrigger_add")
                 + f"?automation_content={self.toolbar.get_object().pk}"
             )
-            menu.add_modal_item(_("Add Trigger"), url)
+            if editable:
+                menu.add_modal_item(_("Add Trigger"), url)
+            else:
+                menu.add_link_item(_("Add Trigger"), url="", disabled=True)
 
         # List all triggers with modal edit (or disabled if lacking change perm)
         triggers = (
@@ -97,9 +133,11 @@ class AutomationToolbar(CMSToolbar):
             menu.add_break(_("All Triggers"))
             for trigger in triggers:
                 label = str(trigger)
-                if can_change:
+                if can_change and editable:
                     url = reverse("admin:djangocms_automation_automationtrigger_change", args=[trigger.pk])
                     menu.add_modal_item(label, url)
                 else:
-                    # User can see list (due to add?) but cannot change individual triggers
-                    menu.add_disabled_item(label)
+                    # Listed and not clickable: for somebody who may see
+                    # triggers and not change them, and for anybody at all once
+                    # the version is published.
+                    menu.add_link_item(label, url="", disabled=True)

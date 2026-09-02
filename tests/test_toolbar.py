@@ -24,10 +24,22 @@ def automation_content(automation, admin_user):
 
 
 def _make_toolbar(user, obj):
+    """A toolbar whose menus refuse methods django CMS does not have.
+
+    ``spec=`` is the whole point. A bare ``MagicMock`` answers to any name, so
+    a call to an invented method — ``add_disabled_item``, say — passes every
+    test and raises ``AttributeError`` the first time somebody opens the
+    editor. With a spec the mock knows the real API.
+    """
+    from cms.toolbar.items import Menu, SubMenu
+
     request = RequestFactory().get("/")
     request.user = user
     cms_toolbar = mock.MagicMock()
     cms_toolbar.get_object.return_value = obj
+    menu = mock.MagicMock(spec=Menu)
+    menu.get_or_create_menu.return_value = mock.MagicMock(spec=SubMenu)
+    cms_toolbar.get_or_create_menu.return_value = menu
     return AutomationToolbar(request, cms_toolbar, is_current_app=True, app_path=None), cms_toolbar
 
 
@@ -70,7 +82,9 @@ def test_toolbar_requires_view_permission(django_user_model, automation_content)
 
 
 @pytest.mark.django_db
-def test_toolbar_without_change_permission_disables_trigger_items(django_user_model, automation_content):
+def test_a_viewer_sees_the_triggers_and_can_open_none_of_them(django_user_model, automation_content):
+    """What triggers an automation has is worth reading even when you cannot
+    change them — so the list stays and every entry in it is disabled."""
     from django.contrib.auth.models import Permission
 
     AutomationTrigger.objects.create(automation_content=automation_content, slot="start", type="click")
@@ -84,13 +98,11 @@ def test_toolbar_without_change_permission_disables_trigger_items(django_user_mo
 
     toolbar.populate()
 
-    menu = cms_toolbar.get_or_create_menu.return_value
-    trigger_menu = menu.get_or_create_menu.return_value
-    # The trigger entry is disabled (no change permission)...
-    trigger_menu.add_disabled_item.assert_called_once()
-    # ...while "Add Trigger" and the changelist modal are still offered.
-    labels = [str(call.args[0]) for call in trigger_menu.add_modal_item.call_args_list]
-    assert "Add Trigger" in labels
+    trigger_menu = cms_toolbar.get_or_create_menu.return_value.get_or_create_menu.return_value
+    listed = [str(call.args[0]) for call in trigger_menu.add_link_item.call_args_list]
+    assert any("Start" in label for label in listed), "the trigger is still listed"
+    assert all(call.kwargs.get("disabled") for call in trigger_menu.add_link_item.call_args_list)
+    assert trigger_menu.add_modal_item.call_args_list == [], "and nothing opens"
 
 
 @pytest.mark.django_db
@@ -120,7 +132,7 @@ def test_an_automation_with_no_trigger_says_so_rather_than_hiding_it(admin_user,
     toolbar.populate()
 
     menu = cms_toolbar.get_or_create_menu.return_value
-    disabled = [str(call.args[0]) for call in menu.add_disabled_item.call_args_list]
+    disabled = [str(call.args[0]) for call in menu.add_link_item.call_args_list if call.kwargs.get("disabled")]
     assert "Run now…" in disabled
     assert not any(str(call.args[0]) == "Run now…" for call in menu.add_modal_item.call_args_list)
 
@@ -141,7 +153,7 @@ def test_running_is_not_offered_to_someone_who_may_not_start_one(automation_cont
 
     menu = cms_toolbar.get_or_create_menu.return_value
     offered = [str(call.args[0]) for call in menu.add_modal_item.call_args_list]
-    offered += [str(call.args[0]) for call in menu.add_disabled_item.call_args_list]
+    offered += [str(call.args[0]) for call in menu.add_link_item.call_args_list]
     assert "Run now…" not in offered
 
 
@@ -227,3 +239,58 @@ def test_a_direct_visit_still_gets_djangos_own_delete(admin_client, automation_c
 
     assert body.count('class="deletelink"') == 1, "one delete link, Django's own"
     assert "?_popup=1" not in body
+
+
+@pytest.mark.django_db
+def test_a_published_version_lists_its_triggers_without_opening_them(admin_user, automation_content, monkeypatch):
+    """The same treatment for a locked version as for a viewer: one flag
+    answers both, because both mean the flows cannot be touched."""
+    AutomationTrigger.objects.create(automation_content=automation_content, slot="start", type="click")
+    field = automation_content._meta.get_field("placeholders")
+    monkeypatch.setattr(field, "_checks", [lambda placeholder, user: False])
+
+    toolbar, cms_toolbar = _make_toolbar(admin_user, automation_content)
+    toolbar.populate()
+
+    trigger_menu = cms_toolbar.get_or_create_menu.return_value.get_or_create_menu.return_value
+    listed = [str(call.args[0]) for call in trigger_menu.add_link_item.call_args_list]
+    assert any("Start" in label for label in listed)
+    assert "Add Trigger" in listed, "listed, and not offering to add one"
+    assert all(call.kwargs.get("disabled") for call in trigger_menu.add_link_item.call_args_list)
+    assert trigger_menu.add_modal_item.call_args_list == []
+
+
+@pytest.mark.django_db
+def test_the_menu_opens_with_the_automations_own_properties(admin_user, automation_content):
+    """Its name and whether it runs at all belong to the automation, not to a
+    version — so they sit above everything a version does."""
+    toolbar, cms_toolbar = _make_toolbar(admin_user, automation_content)
+
+    toolbar.populate()
+
+    menu = cms_toolbar.get_or_create_menu.return_value
+    call = next(call for call in menu.add_modal_item.call_args_list if str(call.args[0]) == "Automation properties…")
+    assert str(automation_content.automation_id) in call.args[1]
+    # First by being added first: the menu keeps insertion order, and this is
+    # the first thing populate() adds.
+    assert menu.add_modal_item.call_args_list[0] is call
+
+
+@pytest.mark.django_db
+def test_properties_are_listed_but_closed_without_permission(automation_content, django_user_model):
+    """That an automation has properties is not a secret; changing them is
+    what needs the permission."""
+    from django.contrib.auth.models import Permission
+
+    onlooker = django_user_model.objects.create_user("propsonlooker", is_staff=True)
+    onlooker.user_permissions.add(Permission.objects.get(codename="view_automationtrigger"))
+    onlooker = django_user_model.objects.get(pk=onlooker.pk)
+
+    toolbar, cms_toolbar = _make_toolbar(onlooker, automation_content)
+    toolbar.populate()
+
+    menu = cms_toolbar.get_or_create_menu.return_value
+    assert "Automation properties…" not in [str(call.args[0]) for call in menu.add_modal_item.call_args_list]
+    closed = next(call for call in menu.add_link_item.call_args_list if str(call.args[0]) == "Automation properties…")
+    assert closed.kwargs.get("disabled") is True
+    assert menu.add_link_item.call_args_list[0] is closed, "still first"

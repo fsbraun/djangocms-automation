@@ -400,3 +400,230 @@ class TestDeletingATrigger:
 
         assert "Flow held by this trigger" in body
         assert "1 step(s)" in body
+
+
+@pytest.mark.django_db
+class TestATriggerIsAsEditableAsItsFlow:
+    """A trigger names a flow, so it is exactly as editable as the flow."""
+
+    @pytest.fixture
+    def content(self, admin_user):
+        from djangocms_automation.models import Automation, AutomationContent
+
+        automation = Automation.objects.create(name="Gated", is_active=True)
+        return AutomationContent.objects.with_user(admin_user).create(automation=automation, description="Gated")
+
+    def test_a_draft_may_be_changed(self, content, admin_user, rf):
+        from djangocms_automation.models import AutomationTrigger
+
+        trigger = AutomationTrigger.objects.create(automation_content=content, slot="start", type="click")
+        request = rf.get("/")
+        request.user = admin_user
+
+        assert content.placeholder_editable(request) is True
+        assert trigger.placeholder_editable(request) is True
+
+    def test_a_locked_version_may_not(self, content, admin_user, rf, monkeypatch):
+        """Versioning answers this by adding a check to the placeholder field.
+
+        Patched here rather than published for real: what matters is that the
+        answer is *taken from* that check rather than decided locally.
+        """
+        from djangocms_automation.models import AutomationTrigger
+
+        trigger = AutomationTrigger.objects.create(automation_content=content, slot="start", type="click")
+        field = content._meta.get_field("placeholders")
+        # ``checks`` chains the class-level defaults with the field's own, and
+        # is read-only; the field's own list is the one to add to.
+        monkeypatch.setattr(field, "_checks", [lambda placeholder, user: False])
+
+        request = rf.get("/")
+        request.user = admin_user
+
+        assert content.placeholder_editable(request) is False
+        assert trigger.placeholder_editable(request) is False
+
+    def test_asking_does_not_go_looking_for_a_placeholder(self, content, admin_user, rf):
+        """The checks read nothing off a placeholder but ``source``, so the one
+        they are asked through is never saved and never fetched.
+
+        Asserted as "no placeholder query" rather than "no queries at all":
+        resolving the content type costs one the first time in a process, and
+        that is cached rather than avoidable."""
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        request = rf.get("/")
+        request.user = admin_user
+
+        with CaptureQueriesContext(connection) as queries:
+            content.placeholder_editable(request)
+
+        touched = [q["sql"] for q in queries if "cms_placeholder" in q["sql"]]
+        assert touched == [], f"a placeholder was fetched after all: {touched}"
+
+    def test_the_admin_refuses_what_the_flow_refuses(self, content, admin_user, rf, monkeypatch):
+        from django.contrib import admin as django_admin
+
+        from djangocms_automation.admin import AutomationTriggerAdmin
+        from djangocms_automation.models import AutomationTrigger
+
+        trigger = AutomationTrigger.objects.create(automation_content=content, slot="start", type="click")
+        site = AutomationTriggerAdmin(AutomationTrigger, django_admin.site)
+        request = rf.get("/")
+        request.user = admin_user
+
+        assert site.has_change_permission(request, trigger) is True
+
+        field = content._meta.get_field("placeholders")
+        monkeypatch.setattr(field, "_checks", [lambda placeholder, user: False])
+
+        assert site.has_change_permission(request, trigger) is False
+        assert site.has_delete_permission(request, trigger) is False
+
+    def test_adding_is_refused_too(self, content, admin_user, rf, monkeypatch):
+        """The add view has no object, so the automation comes from the query
+        parameter the editor's *Add Trigger* link carries."""
+        from django.contrib import admin as django_admin
+
+        from djangocms_automation.admin import AutomationTriggerAdmin
+        from djangocms_automation.models import AutomationTrigger
+
+        site = AutomationTriggerAdmin(AutomationTrigger, django_admin.site)
+        request = rf.get("/", {"automation_content": content.pk})
+        request.user = admin_user
+
+        assert site.has_add_permission(request) is True
+
+        field = content._meta.get_field("placeholders")
+        monkeypatch.setattr(field, "_checks", [lambda placeholder, user: False])
+
+        assert site.has_add_permission(request) is False
+
+
+def test_the_checks_are_reached_through_meta_not_the_attribute():
+    """``self.placeholders`` is the descriptor's related manager, not the field.
+
+    Worth pinning: the attribute reads like the field and answers to nothing
+    the field answers to, so reaching for it looks right and fails.
+    """
+    from cms.models.fields import PlaceholderRelationField
+
+    from djangocms_automation.models import AutomationContent
+
+    field = AutomationContent._meta.get_field("placeholders")
+    assert isinstance(field, PlaceholderRelationField)
+    assert hasattr(field, "run_checks")
+    assert not hasattr(AutomationContent.placeholders, "run_checks"), "the descriptor is not the field"
+
+
+@pytest.mark.django_db
+class TestCopyingAVersion:
+    """A new version needs its own flows *and* its own way in."""
+
+    @pytest.fixture
+    def content(self, admin_user):
+        from cms.api import add_plugin
+        from cms.models import Placeholder
+        from django.contrib.contenttypes.models import ContentType
+
+        from djangocms_automation.models import Automation, AutomationContent, AutomationTrigger
+
+        automation = Automation.objects.create(name="Copying", is_active=True)
+        content = AutomationContent.objects.with_user(admin_user).create(automation=automation, description="Copying")
+        AutomationTrigger.objects.create(
+            automation_content=content, slot="start", type="click", config={"note": "keep me"}, position=0
+        )
+        AutomationTrigger.objects.create(automation_content=content, slot="second", type="code", position=1)
+        placeholder = Placeholder.objects.get_or_create(
+            content_type=ContentType.objects.get_for_model(AutomationContent),
+            object_id=content.pk,
+            slot="start",
+        )[0]
+        add_plugin(placeholder=placeholder, plugin_type="UserInputAction", language="en")
+        return content
+
+    def test_the_triggers_come_too(self, content):
+        """``default_copy`` follows placeholder relations and CMS extensions.
+
+        Triggers are a reverse foreign key and it cannot know about them, so a
+        new draft would carry every plugin and no way in — the workflow visible
+        in the editor and nothing able to start it.
+        """
+        copy = content.copy()
+
+        assert copy.pk != content.pk
+        assert sorted(copy.triggers.values_list("slot", "type")) == [("second", "code"), ("start", "click")]
+        assert copy.triggers.get(slot="start").config == {"note": "keep me"}
+
+    def test_the_copied_trigger_finds_the_copied_flow(self, content):
+        """A trigger finds its flow by slot, so copying the placeholders under
+        the same names is what makes this work at all."""
+        from cms.models import CMSPlugin
+
+        copy = content.copy()
+
+        placeholder = copy.triggers.get(slot="start").placeholder()
+        assert placeholder is not None
+        assert placeholder.pk != content.triggers.get(slot="start").placeholder().pk, "its own, not shared"
+        assert CMSPlugin.objects.filter(placeholder=placeholder).count() == 1
+
+    def test_the_original_keeps_its_own(self, content):
+        content.copy()
+
+        assert content.triggers.count() == 2
+        assert content.triggers.get(slot="start").placeholder() is not None
+
+
+def test_copying_needs_nothing_from_versioning():
+    """The copy is ours, so only the registration knows versioning exists.
+
+    Written out rather than wrapping ``default_copy``: everything it does is
+    django CMS or Django, and an import here would put a hard dependency in the
+    middle of the model layer.
+    """
+    import inspect
+
+    from djangocms_automation import models
+
+    source = inspect.getsource(models)
+    imports = [
+        line
+        for line in source.splitlines()
+        if "djangocms_versioning" in line and line.strip().startswith(("import", "from"))
+    ]
+    assert imports == [], f"models.py should not import versioning: {imports}"
+
+
+def test_the_editability_check_stays_out_of_versionings_way():
+    """``is_editable`` is not a free name on a versioned content model.
+
+    djangocms-versioning patches its own onto the class —
+    ``is_editable(content_obj, request)`` — so a method of ours with that name
+    and a ``user`` argument would replace it and be called with the wrong
+    thing. Ours says what it asks about instead.
+    """
+    from djangocms_automation.models import AutomationContent, AutomationTrigger
+
+    for model in (AutomationContent, AutomationTrigger):
+        assert "placeholder_editable" in model.__dict__, f"{model.__name__} lost the method"
+
+    injected = AutomationContent.__dict__.get("is_editable")
+    if injected is not None:
+        assert injected.__module__ != "djangocms_automation.models", "that name is versioning's, not ours"
+
+
+@pytest.mark.django_db
+def test_editability_is_asked_with_a_request(admin_user, rf):
+    """The signature django CMS uses everywhere else for the same question.
+
+    The checks underneath want a user, but a caller holding a request should
+    not have to remember which of the two this one asks for.
+    """
+    import inspect
+
+    from djangocms_automation.models import AutomationContent, AutomationTrigger
+
+    for model in (AutomationContent, AutomationTrigger):
+        parameters = list(inspect.signature(model.placeholder_editable).parameters)
+        assert parameters == ["self", "request"], f"{model.__name__}: {parameters}"

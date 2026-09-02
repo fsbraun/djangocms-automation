@@ -471,8 +471,13 @@ class ActionPlugin(AutomationPlugin):
             # of opening it, and the sections around it — what it is called as
             # a tool, and the comment — are about the step rather than its
             # settings.
+            #
+            # Second only when there is something above it worth being first.
+            # A plain action has one section, the comment, and putting the
+            # inputs below it opens the form on a collapsed note about the step
+            # with the settings underneath.
             fieldsets.insert(
-                1,
+                1 if len(fieldsets) >= 2 else 0,
                 (
                     _("Inputs"),
                     {

@@ -4,6 +4,7 @@ from cms.models import CMSPlugin, Placeholder
 from cms.models.fields import PlaceholderRelationField
 from django.db import models, transaction
 from django.dispatch import receiver
+from django.http import HttpRequest
 from django.utils.translation import gettext_lazy as _
 
 from .instances import (  # noqa F401
@@ -36,9 +37,93 @@ class AutomationContent(models.Model):
     automation = models.ForeignKey(
         "djangocms_automation.Automation", related_name="contents", on_delete=models.CASCADE
     )
-    description = models.TextField()
+    description = models.TextField(
+        blank=True,
+    )
 
     placeholders = PlaceholderRelationField()
+
+    def copy(self):
+        """A new version of this automation: its flows and its entry points.
+
+        Given to versioning as the content model's copy function. Written here
+        rather than wrapping ``djangocms_versioning.default_copy`` so that
+        nothing outside ``cms_config`` imports versioning at all — everything
+        below is django CMS or Django, and the one versioning-specific thing,
+        its ``_original_manager``, is reached by name and falls back when it is
+        not there.
+
+        Three parts, and all three are needed:
+
+        * the content's own fields, minus the primary key;
+        * the placeholders, with their plugins — the flows;
+        * the triggers — the ways in. A copy without them carries every plugin
+          and nothing able to start it.
+
+        A trigger finds its flow by slot, so copying the placeholders under
+        their own names is what makes the copied triggers point at the copied
+        flows rather than at nothing.
+        """
+        model = type(self)
+        fields = {
+            field.name: getattr(self, field.name) for field in model._meta.fields if field.name != model._meta.pk.name
+        }
+        # Versioning swaps the default manager for one that creates a Version
+        # alongside the row, which is not wanted here: versioning is calling
+        # *us*, and will make the Version itself.
+        manager = getattr(model, "_original_manager", model._base_manager)
+        copy = manager.create(**fields)
+
+        placeholders = [_copy_placeholder(placeholder, copy) for placeholder in self.placeholders.all()]
+        copy.placeholders.add(*placeholders)
+
+        AutomationTrigger.objects.bulk_create(
+            [
+                AutomationTrigger(
+                    automation_content=copy,
+                    slot=trigger.slot,
+                    type=trigger.type,
+                    config=trigger.config,
+                    position=trigger.position,
+                )
+                for trigger in self.triggers.all()
+            ]
+        )
+        return copy
+
+    def placeholder_editable(self, request: HttpRequest) -> bool:
+        """Whether this version's flows may still be changed.
+
+        Takes a request, like every other editability question in django CMS —
+        the checks below want a user, but a caller that has a request should
+        not have to remember which of the two this one asks for.
+
+        Not called ``is_editable``: djangocms-versioning patches a method of
+        that name onto versioned content models, and ours would replace it.
+
+        django CMS decides this with ``check_source`` and
+        ``has_change_permission`` together, and versioning adds its own check
+        to the first — a published version answers no.
+
+        Both are asked of a placeholder, but neither reads anything off one
+        except ``source``: versioning's checks look up the version of the
+        content, and the permission check asks the content's model. So the
+        question is put through a placeholder that is never saved and never
+        fetched, and the answer costs no query of its own.
+
+        Every placeholder here hangs off this same content and would give the
+        same answer, which is why one that does not exist serves as well as one
+        that does.
+
+        The checks live on the *field*, which is reached through ``_meta``:
+        ``self.placeholders`` is the related manager the descriptor returns,
+        and has no ``run_checks``.
+        """
+        field = self._meta.get_field("placeholders")
+        asking = Placeholder(slot="")
+        asking.source = self
+        user = request.user
+        return field.run_checks(asking, user) and asking.has_change_permission(user)
 
     def get_title(self) -> str:
         """Get the automation's name.
@@ -76,11 +161,37 @@ class AutomationContent(models.Model):
         return list(self.triggers.values_list("slot", flat=True))
 
 
+def _copy_placeholder(original: Placeholder, source) -> Placeholder:
+    """One placeholder and its plugins, hung off a new source.
+
+    ``source`` is the generic relation and is set last on purpose: it writes
+    ``content_type`` and ``object_id``, which would otherwise still point at
+    the version being copied from.
+    """
+    fields = {
+        field.name: getattr(original, field.name)
+        for field in Placeholder._meta.fields
+        if field.name not in (Placeholder._meta.pk.name, "source")
+    }
+    if original.source:
+        fields["source"] = source
+    copy = Placeholder.objects.create(**fields)
+    original.copy_plugins(copy)
+    return copy
+
+
 class Automation(models.Model):
     """Top-level automation workflow definition."""
 
-    name = models.CharField(max_length=255)
-    is_active = models.BooleanField(default=True)
+    name = models.CharField(max_length=255, verbose_name=_("Name"))
+    is_active = models.BooleanField(
+        default=True,
+        verbose_name=_("Active"),
+        help_text=_(
+            "Inactive automations keep their workflow and their history but do not start: "
+            "timers skip them and their triggers do nothing."
+        ),
+    )
 
     def __str__(self):
         return self.name
@@ -150,6 +261,15 @@ class AutomationTrigger(models.Model):
         super().save(*args, **kwargs)
         if renamed_from and renamed_from != self.slot:
             self.placeholders().filter(slot=renamed_from).update(slot=self.slot)
+
+    def placeholder_editable(self, request) -> bool:
+        """Whether this trigger may be changed.
+
+        A trigger is a name for a flow, so it is exactly as editable as the
+        flow: renaming or deleting one on a published version would move
+        plugins nobody is allowed to touch.
+        """
+        return self.automation_content.placeholder_editable(request)
 
     def placeholders(self):
         """Every placeholder belonging to this trigger's automation."""

@@ -4,26 +4,36 @@ from .models import AutomationContent
 from .views import AutomationView
 
 
-class StoriesCMSConfig(CMSAppConfig):
+class AutomationCMSConfig(CMSAppConfig):
+    """What django CMS needs to know about this app.
+
+    Versioning is reached through the CMS contract rather than by importing it.
+    ``get_contract`` asks the registered extension apps for the class exported
+    under a name — versioning publishes ``("djangocms_versioning",
+    VersionableItem)`` — so this module needs no import of a package that is
+    not a dependency, and simply builds no versionables when it is absent.
+    """
+
     cms_enabled = True
     cms_toolbar_enabled_models = [(AutomationContent, AutomationView.as_view(), "automation")]
     djangocms_versioning_enabled = True
-    if djangocms_versioning_enabled:
-        from djangocms_versioning import __version__ as djangocms_versioning_version
-        from djangocms_versioning.datastructures import VersionableItem, default_copy
-        from packaging.version import Version as PackageVersion
 
-        if PackageVersion(djangocms_versioning_version) < PackageVersion("2.4"):  # pragma: no cover
-            raise ImportError(
-                "djangocms_versioning >= 2.4.0 is required for djangocms_stories to work properly."
-                " Please upgrade djangocms_versioning."
-            )
-
-        versioning = [
-            VersionableItem(
+    def __init__(self, app):
+        super().__init__(app)
+        versionable_item = self.get_contract("djangocms_versioning")
+        if versionable_item is None:
+            # Versioning is not installed. Nothing to register, and nothing to
+            # raise about: an automation without versions is a working
+            # automation.
+            self.djangocms_versioning_enabled = False
+            self.versioning = []
+            return
+        self.versioning = [
+            versionable_item(
                 content_model=AutomationContent,
                 grouper_field_name="automation",
-                copy_function=default_copy,
+                # Ours, so nothing outside this module knows versioning exists.
+                copy_function=AutomationContent.copy,
                 grouper_admin_mixin="__default__",
             ),
         ]

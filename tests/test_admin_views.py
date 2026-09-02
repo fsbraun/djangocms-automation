@@ -842,3 +842,30 @@ def test_the_trail_matches_the_admin_it_is_shown_in(admin_client, waiting_action
     else:
         assert '<div class="breadcrumbs">' in trail
         assert "&rsaquo;" in trail
+
+
+@pytest.mark.django_db
+def test_the_automation_list_says_which_ones_run(admin_client, automation):
+    """Whether an automation runs at all is the one thing worth seeing without
+    opening it: an inactive one looks exactly like an active one in a list of
+    names, and "why did nothing happen" is the question it answers."""
+    from djangocms_automation.models import Automation
+
+    Automation.objects.create(name="Switched off", is_active=False)
+    body = admin_client.get(reverse("admin:djangocms_automation_automation_changelist")).content.decode()
+
+    assert "field-is_active" in body, "a column of its own"
+    assert "Switched off" in body
+    assert 'id="changelist-filter"' in body or "By Active" in body, "and something to filter by"
+
+
+@pytest.mark.django_db
+def test_the_flag_is_called_what_it_means(admin_client, automation):
+    """Django would otherwise label it *Is active*."""
+    from djangocms_automation.models import Automation
+
+    assert str(Automation._meta.get_field("is_active").verbose_name) == "Active"
+    body = admin_client.get(
+        reverse("admin:djangocms_automation_automation_change", args=[automation.pk])
+    ).content.decode()
+    assert "do not start" in body, "and says what switching it off does"

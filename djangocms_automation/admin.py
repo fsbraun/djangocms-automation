@@ -34,6 +34,11 @@ from .triggers import trigger_registry
 class AutomationAdmin(GrouperModelAdmin):
     content_model = AutomationContent
     grouper_field_name = "automation"
+    # Whether an automation runs at all is the one thing about it worth seeing
+    # without opening it — an inactive one looks exactly like an active one in
+    # a list of names, and "why did nothing happen" is the question it answers.
+    list_display = ("__str__", "is_active")
+    list_filter = ("is_active",)
 
     def save_related(self, request, form, formsets, change):
         """After saving automation content, ensure it has a default trigger."""
@@ -810,6 +815,34 @@ class AutomationTriggerAdmin(ChangeListActionsMixin, admin.ModelAdmin):
             return  # A direct visit to the admin URL keeps the normal chrome.
         request.GET = request.GET.copy()
         request.GET[IS_POPUP_VAR] = "1"
+
+    def _editable(self, request, obj=None) -> bool:
+        """Whether the version this trigger belongs to still accepts changes.
+
+        A trigger names a flow, so changing one on a published version would
+        move plugins nobody is allowed to touch. django CMS answers this about
+        the placeholder; the trigger inherits it.
+
+        Adding has no object yet, so the automation comes from the query
+        parameter the editor's *Add Trigger* link carries. Without one there is
+        nothing to check against and Django's own permissions decide.
+        """
+        if obj is not None:
+            return obj.placeholder_editable(request)
+        content_id = request.GET.get("automation_content")
+        if not content_id:
+            return True
+        content = AutomationContent.admin_manager.filter(pk=content_id).first()
+        return content is None or content.placeholder_editable(request)
+
+    def has_add_permission(self, request):
+        return super().has_add_permission(request) and self._editable(request)
+
+    def has_change_permission(self, request, obj=None):
+        return super().has_change_permission(request, obj) and self._editable(request, obj)
+
+    def has_delete_permission(self, request, obj=None):
+        return super().has_delete_permission(request, obj) and self._editable(request, obj)
 
     def add_view(self, request, form_url="", extra_context=None):
         self._mark_as_popup(request)

@@ -2865,3 +2865,45 @@ def test_a_run_recorded_before_this_falls_back_to_the_step(run_setup, settings):
     action.refresh_from_db()
 
     assert _answer_format(action) == "markdown", "read from the step, for want of anything better"
+
+
+@pytest.mark.django_db
+def test_the_inputs_come_first_when_nothing_above_them_earns_the_place(settings):
+    """A plain action has one other section — the comment — so opening the
+    form on a collapsed note about the step, with the settings underneath, put
+    the least useful thing first."""
+    from cms.plugin_pool import plugin_pool
+    from django.contrib import admin as django_admin
+    from django.test import RequestFactory
+
+    plugin = plugin_pool.get_plugin("MailAction")
+    request = RequestFactory().get("/")
+    request.user = None
+
+    names = [str(name) for name, _options in plugin(plugin.model, django_admin.site).get_fieldsets(request, None)]
+
+    assert names[0] == "Inputs"
+    assert names == ["Inputs", "Comment"]
+
+
+@pytest.mark.django_db
+def test_the_inputs_stay_second_when_a_section_belongs_above_them(run_setup, settings):
+    """Inside an AI step the first section says what the model calls this and
+    when to use it, which is what somebody opening a tool reads first."""
+    from cms.plugin_pool import plugin_pool
+    from django.contrib import admin as django_admin
+    from django.test import RequestFactory
+
+    _trigger, placeholder = run_setup
+    ai = add_step(placeholder, settings)
+    tool = add_tool(placeholder, ai, settings, plugin_type="MailAction", tool_name="reply", exposed_fields=["subject"])
+
+    plugin = plugin_pool.get_plugin("MailAction")
+    request = RequestFactory().get("/")
+    request.user = None
+    instance = plugin.model.objects.get(pk=tool.pk)
+
+    names = [str(name) for name, _options in plugin(plugin.model, django_admin.site).get_fieldsets(request, instance)]
+
+    assert names[0] == "As a tool"
+    assert names[1] == "Inputs"

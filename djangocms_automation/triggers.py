@@ -264,7 +264,7 @@ class ClickTrigger(Trigger):
     id = "click"
     name = _("Manual")
     description = _("Starts when a staff user selects the automation to be started")
-    icon = "bi-mouse"
+    icon = "bi-person-raised-hand"
     #: Nothing is required. The schema described a click on a page element,
     #: back when that was the intended mechanism; what actually starts one of
     #: these is a person choosing it from the toolbar, and demanding an element
