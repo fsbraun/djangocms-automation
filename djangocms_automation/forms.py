@@ -12,6 +12,7 @@ swap the schema display when the selection changes.
 from __future__ import annotations
 
 from django import forms
+from django.utils.dateparse import parse_date, parse_datetime, parse_time
 from django.utils.translation import gettext_lazy as _
 
 from . import widgets
@@ -30,6 +31,29 @@ class TriggerChoiceField(forms.ChoiceField):
 
     def valid_value(self, value):  # Strict registry membership
         return trigger_registry.get(value) is not None
+
+
+def _from_config(field, value):
+    """A stored config value, in the shape its form field expects back.
+
+    ``clean`` writes datetimes out with ``isoformat`` because JSON has no such
+    type. Reading them back as strings is not merely untidy: a widget that
+    splits a value across two inputs calls ``decompress`` on it, and a string
+    has no ``utcoffset``, so opening a timer trigger raised ``AttributeError``
+    before the page could render.
+
+    Anything unparseable is passed through as it stands — a form field
+    reporting a bad value is more use than a config key silently emptied.
+    """
+    if not isinstance(value, str):
+        return value
+    if isinstance(field, (forms.SplitDateTimeField, forms.DateTimeField)):
+        return parse_datetime(value) or parse_date(value) or value
+    if isinstance(field, forms.DateField):
+        return parse_date(value) or value
+    if isinstance(field, forms.TimeField):
+        return parse_time(value) or value
+    return value
 
 
 class AutomationTriggerAdminForm(forms.ModelForm):
@@ -67,7 +91,7 @@ class AutomationTriggerAdminForm(forms.ModelForm):
         config = getattr(self.instance, "config", None) or {}
         for name in config:
             if name in self.fields and name not in self.initial:
-                self.initial[name] = config[name]
+                self.initial[name] = _from_config(self.fields[name], config[name])
 
     def clean(self):
         """Validate and prepare config data."""

@@ -1,6 +1,7 @@
 """Tests for trigger registry and schema validation."""
 
 import pytest
+from django.urls import reverse
 from jsonschema import ValidationError
 
 from djangocms_automation.triggers import (
@@ -627,3 +628,70 @@ def test_editability_is_asked_with_a_request(admin_user, rf):
     for model in (AutomationContent, AutomationTrigger):
         parameters = list(inspect.signature(model.placeholder_editable).parameters)
         assert parameters == ["self", "request"], f"{model.__name__}: {parameters}"
+
+
+def _admin_form(trigger):
+    """The form as the admin builds it: config fields come from the trigger type."""
+    from django.contrib import admin as django_admin
+    from django.contrib.auth import get_user_model
+    from django.test import RequestFactory
+
+    from djangocms_automation.admin import AutomationTriggerAdmin
+    from djangocms_automation.models import AutomationTrigger
+
+    site = AutomationTriggerAdmin(AutomationTrigger, django_admin.site)
+    request = RequestFactory().get("/")
+    # ``get_form`` asks the admin about permissions, which asks the user.
+    request.user = get_user_model().objects.filter(is_superuser=True).first()
+    return site.get_form(request, trigger)(instance=trigger)
+
+
+@pytest.mark.django_db
+class TestTimerTriggerRoundTrip:
+    """JSON has no datetime, so a timer's config stores a string."""
+
+    @pytest.fixture
+    def trigger(self, admin_user):
+        from djangocms_automation.models import Automation, AutomationContent, AutomationTrigger
+
+        automation = Automation.objects.create(name="Timing", is_active=True)
+        content = AutomationContent.objects.with_user(admin_user).create(automation=automation, description="Timing")
+        return AutomationTrigger.objects.create(
+            automation_content=content,
+            slot="start",
+            type="timer",
+            config={
+                "scheduled_at": "2026-08-28T16:28:15.764361+00:00",
+                "recurrence_frequency": "daily",
+                "recurrence_interval": 1,
+            },
+        )
+
+    def test_the_change_form_opens(self, admin_client, trigger):
+        """It did not. A widget that splits a value across two inputs calls
+        ``decompress`` on the initial, and a string has no ``utcoffset`` — so
+        the page raised ``AttributeError`` before rendering."""
+        response = admin_client.get(
+            reverse("admin:djangocms_automation_automationtrigger_change", args=[trigger.pk]) + "?_popup=1"
+        )
+
+        assert response.status_code == 200
+        assert "2026-08-28" in response.content.decode(), "and shows what was stored"
+
+    def test_the_stored_string_becomes_a_datetime(self, trigger, admin_user):
+        import datetime
+
+        form = _admin_form(trigger)
+
+        assert isinstance(form.initial["scheduled_at"], datetime.datetime)
+        assert form.initial["recurrence_interval"] == 1, "and anything else is left as it is"
+
+    def test_something_unparseable_is_handed_back_as_it_stands(self, trigger, admin_user):
+        """A form field reporting a bad value is more use than a config key
+        silently emptied."""
+        trigger.config = {**trigger.config, "scheduled_at": "not a date"}
+        trigger.save()
+
+        form = _admin_form(trigger)
+
+        assert form.initial["scheduled_at"] == "not a date"
