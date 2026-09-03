@@ -101,6 +101,15 @@
  * also read `background:#var(--hairline-color)` — a stray `#` that made the
  * declaration invalid, so the block had never had the background it looked
  * like it had. */
+/* The select plus its description and schema panels stack, whatever flex
+ * direction the surrounding admin form happens to use. */
+.automation-trigger-widget {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+}
+
 .automation-trigger-description {
     margin-top: .75rem;
     padding: .5rem;

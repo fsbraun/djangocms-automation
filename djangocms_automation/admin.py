@@ -793,7 +793,6 @@ class AutomationTriggerAdmin(ChangeListActionsMixin, admin.ModelAdmin):
 
     class Media:
         js = ("djangocms_automation/js/trigger_type_change.js",)
-        css = {"all": ("djangocms_automation/css/trigger_admin.css",)}
 
     def _mark_as_popup(self, request):
         """Render as a popup when django CMS opened this view in its modal.

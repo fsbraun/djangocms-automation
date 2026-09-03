@@ -57,7 +57,6 @@ class TriggerSelectWidget(forms.Select):
         select_html_parts = [f'<select name="{escape(name)}"']
         for k, v in attrs.items():
             select_html_parts.append(f' {escape(k)}="{escape(v)}"')
-        select_html_parts.append(' id="trigger-select"')
         select_html_parts.append(">")
 
         # Build option tags (no title tooltips - description shown below)
@@ -90,7 +89,15 @@ class TriggerSelectWidget(forms.Select):
                 "</details>"
             )
 
-        html = "".join(select_html_parts) + info_block
+        # One wrapper, so the select and the two panels below it are a single
+        # flex item. Django drops a widget's output straight into the admin's
+        # `.flex-container`, which is a plain `display: flex` row before Django
+        # 6.1 -- three siblings there sit side by side, not stacked. The layout
+        # used to come out right only because something else turned that
+        # container into a column (Django 6.1's form rework, or the django CMS
+        # admin style forcing it on 6.0 and earlier), which is not ours to
+        # assume.
+        html = f'<div class="automation-trigger-widget">{"".join(select_html_parts)}{info_block}</div>'
         return mark_safe(html)
 
     def _js_registry_json(self) -> str:
