@@ -13,13 +13,13 @@ automation just after building it — every other entry point needs something
 outside the editor, which used to make the moment right after building one the
 one moment there was no way to run it.
 
-Choose the trigger, give it the rows to start with as a JSON array, and it
+Choose the trigger, give it the items to start with as a JSON array, and it
 goes. This is a *real* run and not a rehearsal: mail is sent, records are
 written, and anything needing approval waits for a person under
 *Execution Instances → Open tasks*, exactly as it would have at three in the
 morning.
 
-The rows are validated against the trigger's data schema before anything
+The items are validated against the trigger's data schema before anything
 starts, the same check an inbound webhook gets. A manual run that skipped it
 could pass data the real entry point refuses, and so report that an automation
 works when it does not.
@@ -40,7 +40,8 @@ Programmatically
 
 Fetch the trigger and call
 :meth:`~djangocms_automation.models.AutomationTrigger.trigger_execution`.
-Data is a list of JSON-serializable rows:
+Data is a batch: a list of JSON-serializable items with named fields. See the
+:doc:`../glossary` for the distinction between a batch and a list inside a field.
 
 .. code-block:: python
 
@@ -68,7 +69,7 @@ With `djangocms-form-builder <https://github.com/fsbraun/djangocms-form-builder>
 installed, a *Trigger automation* form action becomes available. Give the
 automation a trigger of type *Form Submission*, then select the automation
 in the form's action settings. On submit, the cleaned form data is
-serialized to a data row (plus ``user_id``) and the automation starts.
+serialized to an item (plus ``user_id``) and the automation starts.
 
 On a schedule (timer)
 ---------------------

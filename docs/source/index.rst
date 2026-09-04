@@ -15,6 +15,7 @@ sections: Tutorials, How-To, Reference and Explanation.
    howto/index
    reference/index
    explanation/index
+   glossary
 
 Indices and tables
 ==================

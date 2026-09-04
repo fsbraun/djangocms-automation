@@ -10,9 +10,16 @@ djangocms-automation
 This package extends django CMS with the ability to model and edit automation workflows directly in the Frontend Editor (inline editing). Workflows are composed from CMS plugins (e.g., Triggers, Conditions/If‑Then‑Else, Actions, End) and can be arranged on the page via drag & drop like regular content.
 
 Overview
+
 - Frontend Editor: Edit workflows right on the page — no separate admin UI required.
 - Building blocks as plugins: Trigger, If/Then/Else, Action, and End are available as dedicated plugins.
 - Templates & assets: Project templates live under `templates/djangocms_automation/...` and static assets under `static/...`.
+
+We call one unit of automation data an **item**, its named values **fields**, and
+a list of items a **batch**. A field can itself contain a list, such as an order's
+lines. See [Reading an automation](docs/source/explanation/reading-an-automation.rst)
+and the [glossary](docs/source/glossary.rst) for the agreed model and how current
+action behavior differs while it is being implemented.
 
 Installation
 ------------
@@ -106,7 +113,7 @@ anywhere.
 | **Intelligent contact form** | A form submission, a model deciding what the message is about, and a conditional routing it to billing or support | ✅ |
 | **Editorial AI review** | A model drafting a change to an article, a person seeing the exact wording it chose, and nothing written until they approve | ✅ |
 | **Lead qualification** | A model scoring a lead, the score written back to the record, and sales told about the good ones | ✅ |
-| **Nightly content digest** | A recurring timer, a query, and one email per row — with bounded catch-up after downtime | ✅ |
+| **Nightly content digest** | A recurring timer, a query, and one email per item — with bounded catch-up after downtime | ✅ |
 | **Webhook order ingest** | An outside service starting a workflow over HTTP, idempotently, with retries, dead letters and replay | ✅ |
 
 Two notes so this does not read as more than it is:
@@ -125,11 +132,11 @@ Two notes so this does not read as more than it is:
 
 *Automation → Run now…* in the toolbar starts a run there and then, which is
 how you try an automation just after building it. Pick the trigger, give it the
-rows to start with as a JSON array, and it goes — a real run, so mail is sent,
+items to start with as a JSON array, and it goes — a real run, so mail is sent,
 records are written, and anything needing approval waits for a person under
 *Execution Instances → Open tasks*.
 
-The rows are checked against the trigger's data schema first, exactly as an
+The items are checked against the trigger's data schema first, exactly as an
 inbound webhook's would be, so a manual run cannot prove an automation works on
 data the real entry point would refuse.
 
@@ -189,7 +196,7 @@ first run, not after.
 
 ### Built-in actions
 
-- **Send Email** — one email per data row via Django's email framework.
+- **Send Email** — one email per item via Django's email framework.
 - **Create / Update / Query Records** — Django model CRUD, gated by the `AUTOMATION_ALLOWED_MODELS` setting.
 - **Ask a Model** — provider-independent LLM calls via [LiteLLM](https://docs.litellm.ai/). Install with `pip install djangocms-automation[llm]` and add `"djangocms_automation.ai"` to `INSTALLED_APPS`; models via `AUTOMATION_LLM_MODELS`, API keys in the admin *Secrets* store. On its own it answers a question; put actions inside it and it becomes an agent.
 - **Wait for User** — human-in-the-loop pause/resume from the admin.

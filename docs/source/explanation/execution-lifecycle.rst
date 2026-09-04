@@ -106,8 +106,9 @@ therefore finds an action that is no longer ``PENDING`` and becomes a no-op.
 Successful execution
 --------------------
 
-The plugin receives normalized data rows and returns a state and output. For an
-ordinary successful node, the engine records ``COMPLETED`` and creates the next
+The plugin receives a normalized batch of items (``rows`` in the Python API)
+and returns a state and output. For an ordinary successful node, the engine
+records ``COMPLETED`` and creates the next
 action or actions. The output becomes their input. When a completed root chain
 has no successor and no unfinished actions remain, the instance is marked
 ``COMPLETED`` and its final data is stored.

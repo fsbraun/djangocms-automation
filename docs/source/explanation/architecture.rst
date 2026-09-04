@@ -6,6 +6,10 @@ how automations are authored in the CMS editor, how building blocks (triggers,
 nodes and modifiers) are structured, and how execution is driven by the task
 framework at runtime.
 
+For the process reader's vocabulary and the agreed item/field data model, see
+:doc:`reading-an-automation` and the :doc:`../glossary`. This page describes the
+current implementation, including its batch-wide loops and concatenating joins.
+
 Authoring Automations
 ---------------------
 

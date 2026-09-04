@@ -30,8 +30,8 @@ schema.
 Generic webhook trigger
 -----------------------
 
-Give your automation a trigger of type *Webhook*. Any JSON object (one data
-row) or array of objects (multiple rows) posted to the trigger URL becomes
+Give your automation a trigger of type *Webhook*. Any JSON object (one
+item) or array of objects (a batch of items) posted to the trigger URL becomes
 the automation's data:
 
 .. code-block:: bash
@@ -97,7 +97,7 @@ Mailgun's timestamp/token scheme or Stripe's ``Stripe-Signature`` header):
         name = "Stripe event"
         description = "Starts on a Stripe webhook event."
         icon = "bi-credit-card"
-        data_schema = {}  # optionally constrain the rows
+        data_schema = {}  # optionally constrain the items
 
         def parse_payload(self, request, config):
             rows = super().parse_payload(request, config)

@@ -780,6 +780,7 @@ class AutomationTriggerAdmin(ChangeListActionsMixin, admin.ModelAdmin):
 
     name = _("Trigger")
     form = AutomationTriggerAdminForm
+    change_form_template = "djangocms_frontend/admin/base.html"
     list_display = (
         "__str__",
         "type",

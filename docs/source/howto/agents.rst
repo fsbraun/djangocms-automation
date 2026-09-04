@@ -194,7 +194,7 @@ Shaping the answer
 ------------------
 
 Without tools, an **Output shape** constrains the answer to a JSON schema: an
-object becomes one data row, an array becomes rows. Downstream steps can then
+object becomes one item, an array becomes a batch of items. Downstream steps can then
 read a field instead of parsing prose.
 
 For an object answer, use the field editor to name and describe each value the
@@ -289,8 +289,8 @@ What a call reports back
 ------------------------
 
 A tool call returns something to the model, and the default is deliberately
-narrow: **what the action added** to the rows it was handed. A *Send Email* tool
-reports ``_mail``, not the rows — which may carry a token an earlier query
+narrow: **what the action added** to the items it was handed. A *Send Email* tool
+reports ``_mail``, not the items — which may carry a token an earlier query
 fetched, or a column nobody meant to show anyone.
 
 An action whose answer *is* data has to say so, and one that wants to be precise
@@ -305,17 +305,20 @@ can name the fields:
         reports_to_model = ["_charge_id", "_status"]
 
 Nothing about the data can decide this. An action that filters returns fewer
-rows than it was given without having produced a single one of them; a lookup
-asked "does this user exist" returns exactly the row it was asked about. Both
+items than it was given without having produced a single one of them; a lookup
+asked "does this user exist" returns exactly the item it was asked about. Both
 look the same from outside, so the action declares which it is, and an action
 that says nothing is treated as the first.
 
 Under the default, what counts as the action's own is decided **by key**: a
 field that arrived belongs to the automation however it comes back, and a field
-that did not is the action's. Not by comparing rows position by position, which
+that did not is the action's. Not by comparing items position by position, which
 mistakes a re-sort for a hundred new values.
 
-This affects only what the model is told. The rows themselves are untouched, and
+The policy value ``"rows"`` is the existing API spelling for reporting complete
+items; it has not been renamed.
+
+This affects only what the model is told. The items themselves are untouched, and
 downstream steps see everything as usual.
 
 Fields that hold expressions

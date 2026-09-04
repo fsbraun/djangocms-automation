@@ -7,6 +7,7 @@ Design rationale, background information and conceptual explanation of the
 .. toctree::
    :maxdepth: 1
 
+   reading-an-automation
    architecture
    execution-lifecycle
    performance

@@ -2,24 +2,30 @@ Configuring actions
 ===================
 
 Actions are the workhorses of an automation: each action plugin consumes the
-current data rows, performs a side effect, and produces the rows for the
+current batch of items, performs a side effect, and produces the items for the
 next step.
+
+An item contains named fields; a batch is a list of items. See the
+:doc:`../glossary` and :doc:`../explanation/reading-an-automation` for the agreed
+data model. This guide describes the current actions: some preserve incoming
+fields while queries and AI actions replace the items. A universal **Save result
+in** control is planned, not available yet.
 
 Expressions and templates
 -------------------------
 
 Most action inputs are **expressions**: a number literal (``42``), a quoted
 string literal (``"info@django-cms.org"``), or a dotted path into the current
-data row (``user.email``). The full row list is available as ``data``
-(``data.0.email`` addresses the first row).
+item (``user.email``). The full batch is available as ``data``
+(``data.0.email`` addresses the first item).
 
 Multi-line inputs (email bodies, LLM prompts) are **templates**: free text
-with ``{{ dotted.path }}`` substitution against the current row.
+with ``{{ dotted.path }}`` substitution against the current item.
 
 Send Email
 ----------
 
-Sends one email per data row using Django's email framework — any configured
+Sends one email per item using Django's email framework — any configured
 ``EMAIL_BACKEND`` (SMTP, SES, anymail, ...) works.
 
 ============================ ==========================================================
@@ -39,9 +45,9 @@ deliberate — an editor made to write every message twice writes the second one
 badly, and a mail with no text part arrives blank for anyone whose client will
 not render markup.
 
-Each output row gains a ``_mail`` entry (``sent``, ``recipient``,
-``error``). If **all** rows fail, the action (and the run) fails; partial
-failures complete with per-row status.
+Each output item gains a ``_mail`` field (``sent``, ``recipient``,
+``error``). If **all** items fail, the action (and the run) fails; partial
+failures complete with per-item status.
 
 Create / Update / Query Records
 -------------------------------
@@ -53,15 +59,15 @@ Interact with Django models. For safety, only models listed in the
 
     AUTOMATION_ALLOWED_MODELS = ["auth.User", "myapp.Lead"]
 
-- **Create Record** — creates one instance per row from a JSON *field
+- **Create Record** — creates one instance per item from a JSON *field
   mapping* of model fields to expressions, e.g.
-  ``{"email": "user.email", "source": "'automation'"}``. Outputs each row
+  ``{"email": "user.email", "source": "'automation'"}``. Outputs each item
   plus ``_created_id``.
-- **Update Records** — per row, updates instances matching the *filters*
+- **Update Records** — per item, updates instances matching the *filters*
   mapping (lookups to expressions, e.g. ``{"email": "user.email"}``) with
   the *field mapping* values. Refuses to run without filters. Outputs each
-  row plus ``_updated`` (count).
-- **Query Records** — runs once per step; emits one row per matched
+  item plus ``_updated`` (count).
+- **Query Records** — runs once per step; emits one item per matched
   instance (``pk`` always included). Supports ``fields``, ``order_by`` and
   ``limit`` (hard cap 1000).
 
@@ -117,9 +123,9 @@ Fields:
   Appended to the instructions; steering rather than a guarantee.
 - **System prompt** (template, optional) and **Prompt** (template).
 - **Output JSON schema** (optional) — constrains the response to valid
-  JSON. A JSON *array* response becomes the new data rows; an *object*
-  becomes a single row. Without a schema, one
-  ``{"text", "model", "turns", "usage"}`` row is emitted. Object schemas must set
+  JSON. A JSON *array* response becomes the new batch of items; an *object*
+  becomes a single item. Without a schema, one
+  ``{"text", "model", "turns", "usage"}`` item is emitted. Object schemas must set
   ``"additionalProperties": false``.
 
 Rate limits pause the action and it is retried automatically by the
