@@ -66,10 +66,12 @@ def run_setup(db, admin_user, settings):
 
 def add_step(placeholder, settings, **config):
     """An AI step, configured the way the editor's form stores it."""
+    intent = config.pop("intent", "Answer the request")
     return add_plugin(
         placeholder=placeholder,
         plugin_type="AIStep",
         language=settings.LANGUAGE_CODE,
+        intent=intent,
         config={
             "model": "anthropic/claude-opus-4-8",
             "prompt": config.pop("prompt", "do the thing"),
@@ -85,6 +87,7 @@ def add_tool(placeholder, parent, settings, plugin_type="ActionPlugin", **kwargs
         plugin_type=plugin_type,
         language=settings.LANGUAGE_CODE,
         target=parent,
+        intent=kwargs.pop("intent", "Use the tool"),
         tool_name=kwargs.pop("tool_name", "echo"),
         tool_description=kwargs.pop("tool_description", "The echo tool."),
         exposed_fields=kwargs.pop("exposed_fields", []),
@@ -542,14 +545,19 @@ def test_a_tool_draws_as_a_modifier_row_with_a_square_marker(run_setup, settings
 
     _trigger, placeholder = run_setup
     ai = add_step(placeholder, settings)
-    add_tool(placeholder, ai, settings, plugin_type="MailAction", tool_name="reply", requires_approval=None)
+    tool = add_tool(placeholder, ai, settings, plugin_type="MailAction", tool_name="reply", requires_approval=None)
 
     instance = step.AIStepPluginModel.objects.get(pk=ai.pk)
     request = RequestFactory().get("/")
     request.user = None
     html = render_to_string(
         "djangocms_automation/plugins/ai_step.html",
-        {"instance": instance, "title": "Ask a Model", "tools": list(instance.cmsplugin_set.all())},
+        {
+            "instance": instance,
+            "title": "Ask a Model",
+            "tools": list(instance.cmsplugin_set.all()),
+            "approval_tools": [tool],
+        },
         request=request,
     )
 
@@ -557,6 +565,30 @@ def test_a_tool_draws_as_a_modifier_row_with_a_square_marker(run_setup, settings
     assert "tool-marker" in html, "and a square marker rather than a round one"
     assert "bi-envelope-at" in html, "carrying the icon of the action it runs"
     assert "bi-shield-exclamation" in html, "and the gate an irreversible action gets automatically"
+    assert html.index('class="modifier tool"') < html.index('class="modifier approval"')
+    assert html.index('class="modifier approval"') < html.index('class="modifier actor"')
+
+
+@pytest.mark.django_db
+def test_the_selected_model_is_the_ai_step_actor(run_setup, settings):
+    """The plugin derives its actor from configuration rather than storing another field."""
+    _trigger, placeholder = run_setup
+    settings.AUTOMATION_LLM_MODELS = [
+        ("anthropic/claude-opus-4-8", "Claude Opus"),
+    ]
+    ai = add_step(placeholder, settings)
+
+    assert step.AIStepPluginModel.objects.get(pk=ai.pk).actor == "Claude Opus"
+
+
+@pytest.mark.django_db
+def test_an_ai_step_actor_survives_a_model_removed_from_settings(run_setup, settings):
+    """An existing diagram remains legible if its configured model is no longer offered."""
+    _trigger, placeholder = run_setup
+    ai = add_step(placeholder, settings)
+    settings.AUTOMATION_LLM_MODELS = []
+
+    assert step.AIStepPluginModel.objects.get(pk=ai.pk).actor == "anthropic/claude-opus-4-8"
 
 
 @pytest.mark.django_db
@@ -571,7 +603,12 @@ def test_a_step_with_nothing_in_it_says_so(run_setup, settings):
     request.user = None
     html = render_to_string(
         "djangocms_automation/plugins/ai_step.html",
-        {"instance": step.AIStepPluginModel.objects.get(pk=ai.pk), "title": "Ask a Model", "tools": []},
+        {
+            "instance": step.AIStepPluginModel.objects.get(pk=ai.pk),
+            "title": "Ask a Model",
+            "tools": [],
+            "approval_tools": [],
+        },
         request=request,
     )
 
@@ -614,6 +651,7 @@ def test_the_wired_form_validates(run_setup, settings):
         ai,
         settings,
         data={
+            "intent": "Send the reply",
             "subject": "subject",
             "body": "body",
             "recipient_email": "recipient_email",
@@ -632,7 +670,16 @@ def test_the_wiring_switch_replaces_the_requirement(run_setup, settings):
     ai = add_step(placeholder, settings)
 
     _plugin, missing = wired_form(
-        "MailAction", ai, settings, data={"subject": "", "body": "b", "recipient_email": "r", "comment": ""}
+        "MailAction",
+        ai,
+        settings,
+        data={
+            "intent": "Send the reply",
+            "subject": "",
+            "body": "b",
+            "recipient_email": "r",
+            "comment": "",
+        },
     )
     assert not missing.is_valid()
     assert "subject" in missing.errors
@@ -642,6 +689,7 @@ def test_the_wiring_switch_replaces_the_requirement(run_setup, settings):
         ai,
         settings,
         data={
+            "intent": "Send the reply",
             "subject": "",
             "model_fills__subject": "on",
             "body": "b",
@@ -735,7 +783,7 @@ def test_the_inputs_come_second(run_setup, settings):
     wired = RequestFactory().get(f"/?plugin_parent={ai.pk}")
     wired.user = None
     labels = [str(label) for label, _opts in plugin.get_fieldsets(wired, None)]
-    assert labels == ["As a tool", "Inputs", "Comment"]
+    assert labels == ["Intent", "As a tool", "Inputs", "Comment"]
 
 
 def test_no_icon_is_defined_twice_in_the_sprite():
@@ -1316,7 +1364,7 @@ def test_a_bound_input_of_zero_is_filled_in(run_setup, settings):
     plugin = Counting(ActionPlugin.model, AdminSite())
     request = RequestFactory().get(f"/?plugin_parent={ai.pk}")
     request.user = None
-    form = plugin.get_form(request, None)(data={"count": 0, "comment": ""})
+    form = plugin.get_form(request, None)(data={"intent": "Count rows", "count": 0, "comment": ""})
 
     assert form.is_valid(), form.errors
 
@@ -1380,14 +1428,28 @@ def test_a_required_checkbox_must_still_be_ticked(run_setup, settings):
     request.user = None
     form_class = plugin.get_form(request, None)
 
-    unticked = form_class(data={"count": 0, "comment": ""})
+    unticked = form_class(data={"intent": "Confirm the count", "count": 0, "comment": ""})
     assert not unticked.is_valid(), "an unticked required box is not filled in"
     assert "confirmed" in unticked.errors
     assert "count" not in unticked.errors, "but zero is a value"
 
-    assert form_class(data={"count": 0, "confirmed": "on", "comment": ""}).is_valid()
+    assert form_class(
+        data={
+            "intent": "Confirm the count",
+            "count": 0,
+            "confirmed": "on",
+            "comment": "",
+        }
+    ).is_valid()
 
-    left_to_the_model = form_class(data={"count": 0, "model_fills__confirmed": "on", "comment": ""})
+    left_to_the_model = form_class(
+        data={
+            "intent": "Confirm the count",
+            "count": 0,
+            "model_fills__confirmed": "on",
+            "comment": "",
+        }
+    )
     assert left_to_the_model.is_valid(), "unless the model fills it"
 
 
@@ -2868,10 +2930,8 @@ def test_a_run_recorded_before_this_falls_back_to_the_step(run_setup, settings):
 
 
 @pytest.mark.django_db
-def test_the_inputs_come_first_when_nothing_above_them_earns_the_place(settings):
-    """A plain action has one other section — the comment — so opening the
-    form on a collapsed note about the step, with the settings underneath, put
-    the least useful thing first."""
+def test_intent_comes_first_for_a_plain_action(settings):
+    """The reader-facing name is the first decision when adding a step."""
     from cms.plugin_pool import plugin_pool
     from django.contrib import admin as django_admin
     from django.test import RequestFactory
@@ -2882,14 +2942,12 @@ def test_the_inputs_come_first_when_nothing_above_them_earns_the_place(settings)
 
     names = [str(name) for name, _options in plugin(plugin.model, django_admin.site).get_fieldsets(request, None)]
 
-    assert names[0] == "Inputs"
-    assert names == ["Inputs", "Comment"]
+    assert names == ["Intent", "Inputs", "Comment"]
 
 
 @pytest.mark.django_db
-def test_the_inputs_stay_second_when_a_section_belongs_above_them(run_setup, settings):
-    """Inside an AI step the first section says what the model calls this and
-    when to use it, which is what somebody opening a tool reads first."""
+def test_tool_wiring_and_inputs_follow_intent(run_setup, settings):
+    """A tool still starts with its reader-facing intent."""
     from cms.plugin_pool import plugin_pool
     from django.contrib import admin as django_admin
     from django.test import RequestFactory
@@ -2905,5 +2963,4 @@ def test_the_inputs_stay_second_when_a_section_belongs_above_them(run_setup, set
 
     names = [str(name) for name, _options in plugin(plugin.model, django_admin.site).get_fieldsets(request, instance)]
 
-    assert names[0] == "As a tool"
-    assert names[1] == "Inputs"
+    assert names[:3] == ["Intent", "As a tool", "Inputs"]

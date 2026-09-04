@@ -115,9 +115,34 @@ body {
             border-bottom: var(--dca-black) 1px solid;
             padding: 0.5em 10px;
             font-weight: bold;
-            svg {
-                float: inline-start;
-                margin: 5px 0px;
+        }
+        .automation-heading {
+            display: inline-flex;
+            width: 100%;
+            min-width: 0;
+            flex-direction: column;
+            align-items: stretch;
+            line-height: 1.2;
+            text-align: start;
+        }
+        .automation-intent {
+            font-weight: bold;
+            text-align: center;
+        }
+        .automation-type {
+            margin-top: 0.25em;
+            color: var(--dca-gray);
+            font-size: 65%;
+            font-weight: normal;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
+            > svg {
+                flex: 0 0 16px;
+                scale: 0.8;
             }
         }
         .modifier {
@@ -130,15 +155,11 @@ body {
         /* A tool is a modifier-shaped row: it belongs to the card it sits in
            rather than standing beside it. */
         .modifier.tool {
-            .tool-approval {
-                margin-inline-start: 4px;
-                svg {
-                    vertical-align: text-bottom;
-                }
+            .automation-heading {
+                vertical-align: middle;
             }
             &.answers-only {
                 color: var(--dca-gray);
-                font-style: italic;
             }
         }
         .modifier-arrow {
@@ -166,6 +187,17 @@ body {
            Everything else about the two rows is deliberately identical. */
         .modifier-arrow.tool-marker {
             border-radius: var(--dca-border-radius-sm, 3px);
+        }
+        .modifier.actor {
+            margin-top: auto;
+            color: var(--dca-gray);
+            font-size: 85%;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+        .modifier.approval {
+            color: var(--dca-gray);
+            font-size: 85%;
         }
         .errors, .paused {
             position: absolute;
@@ -237,6 +269,10 @@ body {
         .automation-comment-trigger:focus-visible + .automation-comment-balloon {
             display: block;
         }
+    }
+    .automation-action {
+        display: inline-flex;
+        flex-direction: column;
     }
     .automation-trigger {
         border-radius: 50%;

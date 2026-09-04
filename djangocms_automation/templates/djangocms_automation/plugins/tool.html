@@ -10,12 +10,10 @@ anywhere else.
 {% endcomment %}
 <div class="modifier tool"{% if request.toolbar.edit_mode_active and instance.comment %} data-comment="{{ instance.comment }}"{% endif %}>
     {% include "djangocms_automation/includes/errors.html" with errors=instance.tool_messages %}
-    {{ instance.tool_name|default:title }}
-    {% if instance.needs_approval %}
-    <span class="tool-approval" title="{% translate 'A person approves each call before it runs' %}">
-        <svg width="16" height="16"><use xlink:href="#bi-shield-exclamation"></use></svg>
+    <span class="automation-heading">
+        <span class="automation-intent">{{ instance.intent }}</span>
+        <span class="automation-type">{{ title }}</span>
     </span>
-    {% endif %}
     <div class="modifier-arrow tool-marker">
         <svg width="16" height="16"><use xlink:href="#{{ icon|default:'bi-plug' }}"></use></svg>
     </div>

@@ -442,7 +442,7 @@ class APIKey(models.Model):
 class AutomationPluginModel(CMSPlugin):
     """Base model for all automation plugins.
 
-    Provides common fields (uuid, comment) and abstract methods for
+    Provides common fields (uuid, intent, comment) and abstract methods for
     execution and action chaining that subclasses must implement.
     """
 
@@ -454,12 +454,27 @@ class AutomationPluginModel(CMSPlugin):
         verbose_name=_("UUID"),
         default=uuid.uuid4,
     )
+    intent = models.CharField(
+        max_length=255,
+        verbose_name=_("Intent"),
+        help_text=_("Name what this step achieves with a verb and noun, e.g. 'Notify the customer'."),
+    )
     comment = models.TextField(
         blank=True,
         default="",
         verbose_name=_("Comment"),
         help_text=_("Optional comment about this automation step"),
     )
+
+    @property
+    def actor(self) -> str:
+        """Who performs this step, derived by the concrete plugin.
+
+        Most mechanisms do not imply a useful business role. Plugins whose
+        configured fields do can override this property; an empty value keeps
+        the actor row out of the diagram.
+        """
+        return ""
 
     def resume_reenters(self, action: AutomationAction) -> bool:
         """Whether resuming this action re-enters it instead of completing it.
@@ -567,14 +582,6 @@ class ConditionalPluginModel(AutomationPluginModel):
     output and the flow resumes after the conditional block.
     """
 
-    question = models.CharField(
-        max_length=255,
-        verbose_name=_("Question"),
-        blank=True,
-        help_text=_(
-            "The question this conditional answers, e.g., 'Is the user active?' It will be shown in the editor."
-        ),
-    )
     condition = models.JSONField(
         verbose_name=_("Condition"),
         help_text=_(
@@ -736,12 +743,6 @@ class LoopPluginModel(AutomationPluginModel):
     #: produces a wrong result that looks like a right one.
     DEFAULT_MAX_ITERATIONS = 100
 
-    question = models.CharField(
-        max_length=255,
-        verbose_name=_("Description"),
-        blank=True,
-        help_text=_("What this loop repeats, e.g. 'While there are unprocessed rows'. Shown in the editor."),
-    )
     condition = models.JSONField(
         verbose_name=_("Condition"),
         help_text=_(

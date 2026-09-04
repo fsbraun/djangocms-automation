@@ -106,6 +106,7 @@ class Command(BaseCommand):
             placeholder=placeholder,
             plugin_type="QueryModelAction",
             language=LANGUAGE,
+            intent="Find recently changed articles",
             config={
                 "model": "demoproject.Article",
                 # Filter values are expressions, not literals: a bare word is a
@@ -120,6 +121,7 @@ class Command(BaseCommand):
             placeholder=placeholder,
             plugin_type="MailAction",
             language=LANGUAGE,
+            intent="Send the daily digest",
             config={
                 "subject": '"Daily content digest"',
                 "body": "Recently updated: {{ title }} ({{ slug }})",
@@ -153,6 +155,7 @@ class Command(BaseCommand):
             placeholder=placeholder,
             plugin_type="CreateModelAction",
             language=LANGUAGE,
+            intent="Store the order",
             config={
                 "model": "demoproject.Order",
                 "field_mapping": {
@@ -166,6 +169,7 @@ class Command(BaseCommand):
             placeholder=placeholder,
             plugin_type="MailAction",
             language=LANGUAGE,
+            intent="Confirm the order",
             config={
                 "subject": '"Order received"',
                 "body": "Thanks — we received order {{ reference }}.",
@@ -221,6 +225,7 @@ class Command(BaseCommand):
             placeholder=placeholder,
             plugin_type="AIStep",
             language=LANGUAGE,
+            intent="Classify the message",
             config={
                 "model": DUMMY_MODEL,
                 "prompt": (
@@ -240,6 +245,7 @@ class Command(BaseCommand):
             placeholder=placeholder,
             plugin_type="AutomationIf",
             language=LANGUAGE,
+            intent="Route the message",
             # Both sides are expressions, so the literal is quoted — bare
             # ``billing`` would be read as a path into the data.
             condition={"logic": "and", "conditions": [{"field": "topic", "operator": "==", "value": "'billing'"}]},
@@ -254,6 +260,7 @@ class Command(BaseCommand):
                 plugin_type="MailAction",
                 language=LANGUAGE,
                 target=path,
+                intent="Forward the message",
                 config={
                     "subject": subject,
                     "body": "It reads as {{ topic }}. Forwarded for a reply.",
@@ -285,6 +292,7 @@ class Command(BaseCommand):
             placeholder=placeholder,
             plugin_type="QueryModelAction",
             language=LANGUAGE,
+            intent="Find the latest article",
             config={
                 "model": "demoproject.Article",
                 "filters": {},
@@ -297,6 +305,7 @@ class Command(BaseCommand):
             placeholder=placeholder,
             plugin_type="AIStep",
             language=LANGUAGE,
+            intent="Draft a clearer title",
             config={
                 "model": DUMMY_MODEL,
                 "prompt": (
@@ -310,6 +319,7 @@ class Command(BaseCommand):
             plugin_type="UpdateModelAction",
             language=LANGUAGE,
             target=step,
+            intent="Retitle the article",
             tool_name="retitle_article",
             tool_description=(
                 "Rewrite an article's title. Use this once you have a title you are happy with. It cannot be undone."
@@ -365,6 +375,7 @@ class Command(BaseCommand):
             placeholder=placeholder,
             plugin_type="AIStep",
             language=LANGUAGE,
+            intent="Score the lead",
             config={
                 "model": DUMMY_MODEL,
                 "prompt": (
@@ -397,6 +408,7 @@ class Command(BaseCommand):
             placeholder=placeholder,
             plugin_type="UpdateModelAction",
             language=LANGUAGE,
+            intent="Record the lead score",
             config={
                 "model": "demoproject.Lead",
                 "filters": {"email": "email"},
@@ -407,6 +419,7 @@ class Command(BaseCommand):
             placeholder=placeholder,
             plugin_type="AutomationIf",
             language=LANGUAGE,
+            intent="Select hot leads",
             condition={"logic": "and", "conditions": [{"field": "score", "operator": "==", "value": "'hot'"}]},
         )
         path = add_plugin(placeholder=placeholder, plugin_type="ThenPlugin", language=LANGUAGE, target=branch)
@@ -415,6 +428,7 @@ class Command(BaseCommand):
             plugin_type="MailAction",
             language=LANGUAGE,
             target=path,
+            intent="Notify the sales team",
             config={
                 "subject": '"A hot lead just came in"',
                 "body": "{{ company }} scored {{ score }}. Call them.",

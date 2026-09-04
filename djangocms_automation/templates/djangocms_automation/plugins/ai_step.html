@@ -10,13 +10,21 @@ and deleted like any other action.
     <div class="automation-action automation-item"{% if request.toolbar.edit_mode_active and instance.comment %} data-comment="{{ instance.comment }}"{% endif %}>
         {% include "djangocms_automation/includes/errors.html" with errors=instance.messages %}
         <div class="card-title">
-            <svg width="16" height="16"><use xlink:href="#bi-stars"></use></svg> {{ title }}
+            <div class="automation-heading">
+                <div class="automation-intent">{{ instance.intent }}</div>
+                <div class="automation-type">
+                    <svg width="14" height="14"><use xlink:href="#bi-stars"></use></svg>
+                    {{ title }}
+                </div>
+            </div>
         </div>
         {% for tool in tools %}
             {% render_plugin tool %}
-        {% empty %}
-            <div class="modifier tool answers-only">{% translate "Answers only" %}</div>
         {% endfor %}
+        {% for tool in approval_tools %}
+            {% include "djangocms_automation/includes/approval.html" with tool=tool %}
+        {% endfor %}
+        {% include "djangocms_automation/includes/actor.html" %}
         {% include "djangocms_automation/includes/comment_balloon.html" %}
     </div>
 </div>

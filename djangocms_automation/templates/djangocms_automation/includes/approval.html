@@ -1,0 +1,7 @@
+{% load i18n %}
+<div class="modifier approval">
+    {% blocktranslate with intent=tool.intent %}Approval: {{ intent }}{% endblocktranslate %}
+    <div class="modifier-arrow approval-marker" title="{% translate 'A person approves this call before it runs' %}">
+        <svg width="16" height="16"><use xlink:href="#bi-shield-exclamation"></use></svg>
+    </div>
+</div>

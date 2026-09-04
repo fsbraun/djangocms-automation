@@ -84,15 +84,8 @@ class AutomationIf(AutomationPlugin):
     model = models.ConditionalPluginModel
     form = forms.ConditionalPluginForm
     fieldsets = (
-        (
-            None,
-            {
-                "fields": (
-                    "question",
-                    "condition",
-                )
-            },
-        ),
+        (_("Intent"), {"fields": ("intent",)}),
+        (_("Decision"), {"fields": ("condition",)}),
         (_("Comment"), {"classes": ("collapse",), "fields": ("comment",)}),
     )
 
@@ -144,11 +137,11 @@ class AutomationLoop(AutomationPlugin):
     allow_children = True
 
     fieldsets = (
+        (_("Intent"), {"fields": ("intent",)}),
         (
-            None,
+            _("Loop"),
             {
                 "fields": (
-                    "question",
                     "condition",
                     "max_iterations",
                 )
@@ -172,7 +165,12 @@ class AutomationSplit(AutomationPlugin):
     model = models.SplitPluginModel
     render_template = "djangocms_automation/plugins/split.html"
 
-    show_add_form = False
+    show_add_form = True
+
+    fieldsets = (
+        (_("Intent"), {"fields": ("intent",)}),
+        (_("Comment"), {"classes": ("collapse",), "fields": ("comment",)}),
+    )
 
     allow_children = True
     child_classes = ["AutomationPath"]
@@ -247,6 +245,7 @@ class ActionPlugin(AutomationPlugin):
     #: Fields the wiring section adds when this action sits inside an AI step.
     tool_fields = ("tool_name", "tool_description", "requires_approval")
     fieldsets = [
+        (_("Intent"), {"fields": ("intent",)}),
         (_("Comment"), {"classes": ("collapse",), "fields": ("comment",)}),
     ]
 
@@ -434,19 +433,21 @@ class ActionPlugin(AutomationPlugin):
         fieldsets = super().get_fieldsets(request, obj)
         wired = self.is_tool(request, obj)
         if wired:
-            fieldsets = [
-                (
-                    _("As a tool"),
-                    {
-                        "fields": list(self.tool_fields),
-                        "description": _(
-                            "This action sits inside an AI step, so a model may call it. What it "
-                            "is called and when to use it are the only things the model knows "
-                            "about it."
-                        ),
-                    },
-                )
-            ] + list(fieldsets)
+            tool_fieldset = (
+                _("As a tool"),
+                {
+                    "fields": list(self.tool_fields),
+                    "description": _(
+                        "This action sits inside an AI step, so a model may call it. What it "
+                        "is called and when to use it are the only things the model knows "
+                        "about it."
+                    ),
+                },
+            )
+            # Intent is the first decision for every step. Tool wiring is a
+            # property of this use of the action, so it follows that name.
+            fieldsets = list(fieldsets)
+            fieldsets[1:1] = [tool_fieldset]
         if self.data_form:
             # Only the inputs the plugin has not placed itself. An action that
             # declares no layout gets all of them here, which is the usual case;
@@ -467,17 +468,11 @@ class ActionPlugin(AutomationPlugin):
                 # where the input is.
                 data_fields = [(name, self.MODEL_FILLS + name) for name in data_fields]
             fieldsets = list(fieldsets)
-            # Second, not last: what an action is configured with is the point
-            # of opening it, and the sections around it — what it is called as
-            # a tool, and the comment — are about the step rather than its
-            # settings.
-            #
-            # Second only when there is something above it worth being first.
-            # A plain action has one section, the comment, and putting the
-            # inputs below it opens the form on a collapsed note about the step
-            # with the settings underneath.
+            # Intent stays first; configuration follows the tool wiring when
+            # present and otherwise follows the intent directly. The optional
+            # comment remains last.
             fieldsets.insert(
-                1 if len(fieldsets) >= 2 else 0,
+                2 if wired else 1,
                 (
                     _("Inputs"),
                     {

@@ -63,6 +63,7 @@ class AIStep(ActionPlugin):
     can_be_tool = True
 
     fieldsets = (
+        (_("Intent"), {"fields": ("intent",)}),
         (None, {"fields": ("model", "prompt", "system_prompt")}),
         (_("Answer"), {"classes": ("collapse",), "fields": ("answer_format", "output_schema")}),
         (
@@ -81,8 +82,15 @@ class AIStep(ActionPlugin):
 
     def render(self, context, instance, placeholder):
         context = super().render(context, instance, placeholder)
-        # Downcast, because each one is rendered as the plugin it is.
-        context.update({"tools": instance.child_plugin_instances or []})
+        children = instance.child_plugin_instances or []
+        approval_tools = []
+        for child in children:
+            tool = child
+            if not hasattr(tool, "needs_approval"):
+                tool, _plugin = child.get_plugin_instance()
+            if tool is not None and hasattr(tool, "needs_approval") and tool.needs_approval():
+                approval_tools.append(tool)
+        context.update({"tools": children, "approval_tools": approval_tools})
         return context
 
 

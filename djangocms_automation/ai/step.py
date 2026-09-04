@@ -224,6 +224,12 @@ class AIStepPluginModel(BaseActionPluginModel):
 
     no_name = _("Two tools share the name %(name)s. Each needs a name of its own.")
 
+    @property
+    def actor(self) -> str:
+        """The selected model, using the label shown to editors when available."""
+        model = str((self.config or {}).get("model") or "")
+        return dict(llm.get_llm_model_choices()).get(model, model)
+
     # -- the tools it may use ----------------------------------------------
 
     def _tools(self) -> list:
