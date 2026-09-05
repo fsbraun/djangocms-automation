@@ -56,11 +56,13 @@ class FlakyActionModel(BaseActionPluginModel):
         proxy = True
         app_label = "djangocms_automation"
 
-    def perform(self, action, rows):
+    default_outputs = {"calls": {"field": "calls"}, "ok": {"field": "ok"}}
+
+    def perform(self, context, inputs):
         CALLS["flaky"] = CALLS.get("flaky", 0) + 1
         if CALLS["flaky"] < 3:
             raise RetryableError("transient")
-        return [{"ok": True, "calls": CALLS["flaky"]}]
+        return {"ok": True, "calls": CALLS["flaky"]}
 
 
 class AlwaysRetryableModel(BaseActionPluginModel):
@@ -72,7 +74,7 @@ class AlwaysRetryableModel(BaseActionPluginModel):
         proxy = True
         app_label = "djangocms_automation"
 
-    def perform(self, action, rows):
+    def perform(self, context, inputs):
         CALLS["always"] = CALLS.get("always", 0) + 1
         raise RetryableError("still broken")
 
@@ -86,7 +88,7 @@ class PermanentFailureModel(BaseActionPluginModel):
         proxy = True
         app_label = "djangocms_automation"
 
-    def perform(self, action, rows):
+    def perform(self, context, inputs):
         CALLS["permanent"] = CALLS.get("permanent", 0) + 1
         raise PermanentError("misconfigured")
 
@@ -100,7 +102,7 @@ class UnknownFailureModel(BaseActionPluginModel):
         proxy = True
         app_label = "djangocms_automation"
 
-    def perform(self, action, rows):
+    def perform(self, context, inputs):
         CALLS["unknown"] = CALLS.get("unknown", 0) + 1
         raise ValueError("something surprising")
 
@@ -112,10 +114,10 @@ class SlowHeartbeatModel(BaseActionPluginModel):
         proxy = True
         app_label = "djangocms_automation"
 
-    def perform(self, action, rows):
+    def perform(self, context, inputs):
         BARRIER["running"].set()
         BARRIER["release"].wait(timeout=10)
-        return rows
+        return {}
 
 
 class ThreeAttemptModel(BaseActionPluginModel):
@@ -127,7 +129,7 @@ class ThreeAttemptModel(BaseActionPluginModel):
         proxy = True
         app_label = "djangocms_automation"
 
-    def perform(self, action, rows):
+    def perform(self, context, inputs):
         raise RetryableError("transient")
 
 
@@ -140,8 +142,10 @@ class SlowActionModel(BaseActionPluginModel):
         proxy = True
         app_label = "djangocms_automation"
 
-    def perform(self, action, rows):
-        return [{"slow": True}]
+    default_outputs = {"slow": {"field": "slow"}}
+
+    def perform(self, context, inputs):
+        return {"slow": True}
 
 
 @plugin_pool.register_plugin
@@ -229,7 +233,7 @@ def run_setup(automation_content, settings):
 def run(trigger, placeholder, plugin_type, settings):
     """Add a plugin, fire the trigger, and return the resulting action."""
     add_plugin(placeholder=placeholder, plugin_type=plugin_type, language=settings.LANGUAGE_CODE)
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
     return AutomationAction.objects.latest("id")
 
 
@@ -366,7 +370,7 @@ def test_split_re_entry_does_not_consume_attempts(run_setup, settings):
             language=settings.LANGUAGE_CODE,
             target=path,
         )
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     split_action = AutomationAction.objects.filter(parent__isnull=True).latest("id")
     split_action.refresh_from_db()
@@ -588,12 +592,12 @@ def test_replay_uses_the_input_the_failed_attempt_saw(run_setup, settings):
     trigger, placeholder = run_setup
     action = run(trigger, placeholder, "UnknownFailurePlugin", settings)
     action.refresh_from_db()
-    assert action.input_data == [{"seed": 1}]
+    assert action.input_data == {"seed": 1}
 
-    AutomationInstance.objects.filter(pk=action.automation_instance_id).update(data=[{"seed": 999}])
+    AutomationInstance.objects.filter(pk=action.automation_instance_id).update(data={"seed": 999})
     replacement = engine.replay_action(action.pk)
     replacement.refresh_from_db()
-    assert replacement.input_data == [{"seed": 1}]
+    assert replacement.input_data == {"seed": 1}
 
 
 @pytest.mark.django_db
@@ -688,7 +692,7 @@ def test_redaction_drops_payloads_but_keeps_metadata(run_setup, settings):
     assert AutomationInstance.redact_payloads(days=30) == 1
     instance.refresh_from_db()
     action.refresh_from_db()
-    assert instance.data == [] and instance.initial_data == []
+    assert instance.data == {} and instance.initial_data == {}
     assert action.input_data is None
     assert action.state == COMPLETED, "state and timings survive redaction"
     assert action.events.exists()
@@ -793,7 +797,7 @@ def test_enqueue_rejection_is_persisted_and_replayable(run_setup, settings, monk
             raise RuntimeError("broker unavailable")
 
     monkeypatch.setattr(tasks, "execute_action", RejectingTask())
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     action = AutomationAction.objects.latest("id")
     assert action.state == FAILED
@@ -815,7 +819,7 @@ def test_empty_trigger_placeholder_reports_a_usable_error(automation_content, se
     )
 
     with pytest.raises(ValueError, match="no plugins to execute"):
-        trigger.trigger_execution(data=[{"seed": 1}])
+        trigger.trigger_execution(data={"seed": 1})
 
     assert AutomationInstance.objects.count() == 0
 
@@ -829,7 +833,7 @@ def test_lost_join_wakeup_is_reconciled(run_setup, settings):
         placeholder=placeholder, plugin_type="AutomationPath", language=settings.LANGUAGE_CODE, target=split
     )
     add_plugin(placeholder=placeholder, plugin_type="ActionPlugin", language=settings.LANGUAGE_CODE, target=path)
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     split_action = AutomationAction.objects.filter(parent__isnull=True).latest("id")
     # Simulate the lost wake-up: children finished, parent left WAITING.
@@ -846,7 +850,7 @@ def test_reconciliation_leaves_genuinely_waiting_joins_alone(run_setup, settings
     """A join with an unfinished child must not be woken early."""
     trigger, placeholder = run_setup
     add_plugin(placeholder=placeholder, plugin_type="ActionPlugin", language=settings.LANGUAGE_CODE)
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
     parent = AutomationAction.objects.latest("id")
     AutomationAction.objects.filter(pk=parent.pk).update(state=WAITING, finished=None)
     AutomationAction.objects.create(
@@ -930,7 +934,7 @@ def test_redact_flag_strips_payloads_but_keeps_the_run(run_setup, settings):
 
     instance = AutomationInstance.objects.get(pk=action.automation_instance_id)
     action.refresh_from_db()
-    assert instance.data == [] and instance.initial_data == []
+    assert instance.data == {} and instance.initial_data == {}
     assert action.input_data is None
     assert action.state == COMPLETED
     assert action.events.exists(), "the audit trail survives redaction"
@@ -945,7 +949,7 @@ def test_trigger_without_a_placeholder_reports_a_usable_error(automation_content
     )
 
     with pytest.raises(ValueError, match="no placeholder"):
-        trigger.trigger_execution(data=[{"seed": 1}])
+        trigger.trigger_execution(data={"seed": 1})
 
     assert AutomationInstance.objects.count() == 0
 
@@ -973,7 +977,7 @@ def test_heartbeat_is_renewed_while_an_action_runs(run_setup, settings):
 
     def fire():
         try:
-            trigger.trigger_execution(data=[{"seed": 1}])
+            trigger.trigger_execution(data={"seed": 1})
         except Exception as exc:  # noqa: BLE001 - surfaced by the assertion below
             errors.append(exc)
 
@@ -1008,7 +1012,7 @@ def test_heartbeat_stops_when_the_action_finishes(run_setup, settings):
     BARRIER["running"] = threading.Event()
     BARRIER["release"] = threading.Event()
     BARRIER["release"].set()  # do not block
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     before = threading.active_count()
     threading.Event().wait(0.5)
@@ -1025,7 +1029,7 @@ def test_recovery_honours_the_plugins_retry_budget(run_setup, settings):
     """
     trigger, placeholder = run_setup
     add_plugin(placeholder=placeholder, plugin_type="ThreeAttemptPlugin", language=settings.LANGUAGE_CODE)
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     action = AutomationAction.objects.latest("id")
     assert action.max_attempts == 3, "the plugin's budget must be persisted at claim time"
@@ -1061,13 +1065,13 @@ def test_replaying_a_branch_action_lets_the_split_join(run_setup, settings):
         placeholder=placeholder, plugin_type="AutomationPath", language=settings.LANGUAGE_CODE, target=split
     )
     add_plugin(placeholder=placeholder, plugin_type="ActionPlugin", language=settings.LANGUAGE_CODE, target=path)
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     child = AutomationAction.objects.filter(parent__isnull=False).latest("id")
     parent = child.parent
     # Stage the fail-fast outcome: child failed, ancestors and instance closed.
     AutomationAction.objects.filter(pk=child.pk).update(
-        state=FAILED, finished=now(), dead_lettered=True, dead_lettered_at=now(), input_data=[{"seed": 1}]
+        state=FAILED, finished=now(), dead_lettered=True, dead_lettered_at=now(), input_data={"seed": 1}
     )
     AutomationAction.objects.filter(pk=parent.pk).update(state=FAILED, finished=now())
     AutomationInstance.objects.filter(pk=child.automation_instance_id).update(status=FAILED, finished=now())
@@ -1091,7 +1095,7 @@ def test_replaying_a_top_level_action_has_no_ancestors_to_reopen(run_setup, sett
     trigger, placeholder = run_setup
     action = run(trigger, placeholder, "SlowPlugin", settings)
     AutomationAction.objects.filter(pk=action.pk).update(
-        state=FAILED, finished=now(), dead_lettered=True, input_data=[]
+        state=FAILED, finished=now(), dead_lettered=True, input_data={}
     )
 
     replacement = engine.replay_action(action.pk)
@@ -1135,7 +1139,7 @@ def test_execution_policy_is_stored_with_the_claim(run_setup, settings):
     """
     trigger, placeholder = run_setup
     add_plugin(placeholder=placeholder, plugin_type="ThreeAttemptPlugin", language=settings.LANGUAGE_CODE)
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     action = AutomationAction.objects.latest("id")
     claim = action.events.filter(to_state=RUNNING).earliest("created")
@@ -1144,7 +1148,7 @@ def test_execution_policy_is_stored_with_the_claim(run_setup, settings):
     # The budget and input are on the row, and were not written later: the
     # action has since failed and been rescheduled, so nothing else has run.
     assert action.max_attempts == 3
-    assert action.input_data == [{"seed": 1}]
+    assert action.input_data == {"seed": 1}
 
 
 def fast_heartbeat(interval: float = 0.02):
@@ -1306,12 +1310,12 @@ def test_replaying_a_conditional_branch_lets_the_conditional_complete(run_setup,
     )
     add_plugin(placeholder=placeholder, plugin_type="ActionPlugin", language=settings.LANGUAGE_CODE, target=yes)
     add_plugin(placeholder=placeholder, plugin_type="ElsePlugin", language=settings.LANGUAGE_CODE, target=conditional)
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     child = AutomationAction.objects.filter(parent__isnull=False).latest("id")
     parent = child.parent
     AutomationAction.objects.filter(pk=child.pk).update(
-        state=FAILED, finished=now(), dead_lettered=True, dead_lettered_at=now(), input_data=[{"seed": 1}]
+        state=FAILED, finished=now(), dead_lettered=True, dead_lettered_at=now(), input_data={"seed": 1}
     )
     AutomationAction.objects.filter(pk=parent.pk).update(state=FAILED, finished=now())
     AutomationInstance.objects.filter(pk=child.automation_instance_id).update(status=FAILED, finished=now())
@@ -1422,7 +1426,7 @@ def test_recovery_uses_the_plugins_backoff(run_setup, settings):
     multiplier, cap and jitter decide *when* a recovered action runs again."""
     trigger, placeholder = run_setup
     add_plugin(placeholder=placeholder, plugin_type="ThreeAttemptPlugin", language=settings.LANGUAGE_CODE)
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     action = AutomationAction.objects.latest("id")
     stale = now() - datetime.timedelta(hours=1)
@@ -1640,7 +1644,7 @@ def test_reopening_clears_the_finished_timestamp(run_setup, settings):
     """A reopened run must be genuinely open, not merely relabelled."""
     trigger, placeholder = run_setup
     action = run(trigger, placeholder, "UnknownFailurePlugin", settings)
-    AutomationAction.objects.filter(pk=action.pk).update(input_data=[])
+    AutomationAction.objects.filter(pk=action.pk).update(input_data={})
 
     engine.replay_action(action.pk)
 
@@ -1683,7 +1687,7 @@ def test_a_failed_continuation_rolls_back_the_outcome(run_setup, settings, monke
 
     # The task backend records the failure rather than re-raising it, so the
     # crash is observed through what it left behind.
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     action = AutomationAction.objects.latest("id")
     assert action.state == RUNNING, "the outcome must not survive a lost continuation"
@@ -1702,7 +1706,7 @@ def test_a_failed_propagation_rolls_back_the_failure(run_setup, settings, monkey
 
     monkeypatch.setattr(engine, "propagate_failure", explode)
 
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     action = AutomationAction.objects.latest("id")
     assert action.state == RUNNING
@@ -2078,7 +2082,7 @@ def test_redaction_reaches_a_run_whose_payload_was_already_taken(run_setup, sett
     AutomationInstance.objects.filter(pk=instance.pk).update(finished=old, updated=old)
 
     # An earlier pass that knew nothing about scratch.
-    AutomationInstance.objects.filter(pk=instance.pk).update(data=[], initial_data=[])
+    AutomationInstance.objects.filter(pk=instance.pk).update(data={}, initial_data={})
     AutomationAction.objects.filter(pk=action.pk).update(
         input_data=None, result={}, scratch={"conversation": [{"role": "user", "content": "invoice 4402"}]}
     )

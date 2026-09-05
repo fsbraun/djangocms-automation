@@ -2,22 +2,20 @@ Configuring actions
 ===================
 
 Actions are the workhorses of an automation: each action plugin consumes the
-current batch of items, performs a side effect, and produces the items for the
-next step.
+current item, performs its work, and saves declared results into named fields.
 
-An item contains named fields; a batch is a list of items. See the
-:doc:`../glossary` and :doc:`../explanation/reading-an-automation` for the agreed
-data model. This guide describes the current actions: some preserve incoming
-fields while queries and AI actions replace the items. A universal **Save result
-in** control is planned, not available yet.
+Each instance owns one item. Use **Use data from** to select a source and
+**Save result in** to select or create a destination. **Replace value** replaces
+that field; **Append to list** appends one result. Other fields are preserved.
+See :doc:`../glossary` and :doc:`../explanation/reading-an-automation`.
 
 Expressions and templates
 -------------------------
 
 Most action inputs are **expressions**: a number literal (``42``), a quoted
 string literal (``"info@django-cms.org"``), or a dotted path into the current
-item (``user.email``). The full batch is available as ``data``
-(``data.0.email`` addresses the first item).
+item (``user.email``). Lists live in fields (``records.0.email``). There is
+no implicit ``data`` variable or batch wrapper.
 
 Multi-line inputs (email bodies, LLM prompts) are **templates**: free text
 with ``{{ dotted.path }}`` substitution against the current item.
@@ -45,9 +43,9 @@ deliberate — an editor made to write every message twice writes the second one
 badly, and a mail with no text part arrives blank for anyone whose client will
 not render markup.
 
-Each output item gains a ``_mail`` field (``sent``, ``recipient``,
-``error``). If **all** items fail, the action (and the run) fails; partial
-failures complete with per-item status.
+The named result ``delivery`` contains ``sent`` and ``recipient`` and is saved
+to the ``delivery`` field by default. A delivery exception fails the action.
+Use **For each** to send messages for a list stored in the item.
 
 Create / Update / Query Records
 -------------------------------
@@ -62,14 +60,15 @@ Interact with Django models. For safety, only models listed in the
 - **Create Record** — creates one instance per item from a JSON *field
   mapping* of model fields to expressions, e.g.
   ``{"email": "user.email", "source": "'automation'"}``. Outputs each item
-  plus ``_created_id``.
+  plus ``created_id`` (the named result is ``id``).
 - **Update Records** — per item, updates instances matching the *filters*
   mapping (lookups to expressions, e.g. ``{"email": "user.email"}``) with
   the *field mapping* values. Refuses to run without filters. Outputs each
-  item plus ``_updated`` (count).
-- **Query Records** — runs once per step; emits one item per matched
-  instance (``pk`` always included). Supports ``fields``, ``order_by`` and
-  ``limit`` (hard cap 1000).
+  item plus ``updated_count`` (the named result is ``count``).
+- **Query Records** — returns a list of matching records as the ``records``
+  result, saved in the ``records`` field. No matches produces an empty list.
+  ``pk`` is always included. Supports ``fields``, ``order_by`` and ``limit``
+  (hard cap 1000). The incoming item is preserved.
 
 LLM Prompt
 ----------
@@ -123,9 +122,9 @@ Fields:
   Appended to the instructions; steering rather than a guarantee.
 - **System prompt** (template, optional) and **Prompt** (template).
 - **Output JSON schema** (optional) — constrains the response to valid
-  JSON. A JSON *array* response becomes the new batch of items; an *object*
-  becomes a single item. Without a schema, one
-  ``{"text", "model", "turns", "usage"}`` item is emitted. Object schemas must set
+  JSON. The answer, whether object or array, is saved in the ``answer`` field.
+  Without a schema, that field contains ``text``, ``model``, ``turns``, and
+  ``usage``. Read text with ``answer.text``. Object schemas must set
   ``"additionalProperties": false``.
 
 Rate limits pause the action and it is retried automatically by the
@@ -204,13 +203,44 @@ proxy model and override ``perform``:
         class Meta:
             proxy = True
 
-        def perform(self, action, rows):
-            inputs = self.resolve_inputs(rows[0] if rows else {}, rows)
-            notify_slack(inputs["channel"], inputs["message"])
-            return rows
+        default_outputs = {"delivery": {"field": "slack_delivery"}}
+
+        def perform(self, context, inputs):
+            receipt = notify_slack(inputs["channel"], inputs["message"])
+            return {"delivery": receipt}
 
 Then register a CMS plugin subclassing
 ``djangocms_automation.cms_plugins.ActionPlugin`` with a ``data_form``
 declaring the inputs. Raise
 ``djangocms_automation.engine.ActionPause(until=...)`` to pause and retry
 later; raise any other exception to fail the run.
+
+The engine resolves and records ``inputs`` before calling ``perform``. Return
+only named result values, never a replacement item or a list of items.
+``context.item`` is a private snapshot; mutating it does not write fields.
+Use ``context.record(kind, payload)`` for additional observations. Executor
+working state belongs in ``action.scratch`` and must be saved through
+``execution.save_working_state`` so a stale worker cannot overwrite it.
+
+``default_outputs`` maps result names to destination fields. The editor stores
+overrides in ``outputs``, for example
+``{"delivery": {"field": "deliveries", "mode": "append"}}``. A result mapped
+to ``null`` is recorded but not saved in the item; clear its destination in the
+editor to select this. Returning no results (``{}``) performs no field writes.
+
+Declare literal configuration names in ``literal_fields`` and mappings of
+expressions in ``expression_mappings``. An explicit optional binding can use
+``{"field": "customer", "path": "email", "default": "fallback@example.com"}``.
+Without a default, missing paths in action expressions or templates fail.
+
+``AutomationContent.data_fields`` maps stable keys to labels and optional JSON
+schemas, for example ``{"count": {"label": "Count", "schema": {"type": "integer"}}}``.
+Configured destination schemas are frozen with the run and validated on writes.
+``AutomationContent.output_fields`` selects public output fields; an empty list
+returns the complete final item. ``loop`` is reserved for execution scope.
+
+Custom executor code must remain compatible with its recorded
+``execution_version`` (default 1). Increment that version for incompatible
+changes; old definitions then fail explicitly rather than silently executing
+different semantics. Store credential references, not secret values, in action
+configuration: configuration is part of the retained execution definition.

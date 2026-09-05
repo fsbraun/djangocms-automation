@@ -132,8 +132,8 @@ class ToolResult:
     call_id: str
     #: What the model is shown. Kept small — see :meth:`truncate`.
     content: str | dict[str, Any]
-    #: Canonical automation rows, for the data flowing on after the agent.
-    rows: list[dict] = field(default_factory=list)
+    #: Canonical automation item, for the data flowing on after the agent.
+    item: dict = field(default_factory=dict)
     is_error: bool = False
 
     def truncate(self, max_chars: int) -> ToolResult:
@@ -150,7 +150,7 @@ class ToolResult:
         return ToolResult(
             call_id=self.call_id,
             content=f"{kept}\n… truncated, {len(text) - max_chars} more characters",
-            rows=self.rows,
+            item=self.item,
             is_error=self.is_error,
         )
 
@@ -161,7 +161,7 @@ class ToolProvider(Protocol):
 
     def get_tool_spec(self) -> ToolSpec: ...
 
-    def invoke(self, call: ToolCall, *, action, rows: list[dict]) -> ToolResult:
+    def invoke(self, call: ToolCall, *, action, item: dict) -> ToolResult:
         """Run the tool.
 
         :param call: What the model asked for. ``call.arguments`` is

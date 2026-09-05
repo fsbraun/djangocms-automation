@@ -21,7 +21,7 @@ import logging
 
 from django.utils.translation import gettext_lazy as _
 
-from .instances import COMPLETED, FAILED, WAITING, AutomationAction
+from .instances import COMPLETED, FAILED, WAITING
 from .tools import (
     TOOL_NAME_RE,
     ToolCall,
@@ -181,86 +181,36 @@ class ToolMixin:
 
     # -- the contract ------------------------------------------------------
 
-    def validate_tool_arguments(self, call, rows: list | None = None) -> tuple[dict, ToolResult | None]:
-        """Check what the model sent against the action's own form.
+    def validate_tool_arguments(self, call, item: dict | None = None) -> tuple[dict, ToolResult | None]:
+        """Validate model arguments together with this item's bound inputs."""
+        from .execution import item_data
 
-        Once per row, because an action runs once per row. The model's
-        arguments are the same each time but the bound half is not — an
-        expression resolves against the row in front of it — so checking only
-        the first row lets every row after it through unexamined, and an action
-        validating a relationship between the two halves would have its rule
-        applied to one row out of a hundred.
-        """
+        item = item_data(item)
         form = self.tool_data_form()
         if form is None:
             return {}, None
-
-        exposed = self.tool_inputs()
-        mappings = frozenset(getattr(self, "expression_mappings", frozenset()))
-        arguments = {}
-        for row in self._rows_to_check(rows):
-            try:
-                arguments = validate_arguments(
-                    form,
-                    call.arguments,
-                    allowed=exposed,
-                    literal_mappings=mappings,
-                    bound=self._bound_values_for(row, rows or []),
-                )
-            except ToolValidationError as exc:
-                # Handed back for the model to correct rather than failing the
-                # run. The first row that refuses is the one reported: a model
-                # cannot act on a hundred variations of the same complaint.
-                return {}, ToolResult(call_id=call.id, content=str(exc), is_error=True)
+        try:
+            arguments = validate_arguments(
+                form,
+                call.arguments,
+                allowed=self.tool_inputs(),
+                literal_mappings=frozenset(self.expression_mappings),
+                bound=self._bound_values_for(item),
+            )
+        except ToolValidationError as exc:
+            return {}, ToolResult(call_id=call.id, content=str(exc), is_error=True)
         return arguments, None
 
-    def _rows_to_check(self, rows: list | None) -> list:
-        """Every row the action will run against, or one empty one.
-
-        Normalised the way the actions themselves normalise: a row that is not
-        a mapping is run as ``{"value": row}``, so discarding it here would let
-        it through unchecked while it still had effects.
-        """
-        actual = [row if isinstance(row, dict) else {"value": row} for row in (rows or [])]
-        return actual or [{}]
-
-    def _bound_values_for(self, row: dict, rows: list) -> dict:
-        """What the editor configured, as the values the action will use here.
-
-        Not the expressions but what they come to, against *this* row. They are
-        knowable — the automation's data is in hand, and resolving them is what
-        the action is about to do anyway — so a cross-field ``clean`` sees the
-        same pair of values the action will, rather than one half and a hole.
-
-        Per row, because an action runs over every row it is given and an
-        expression resolves differently against each: the recipient of row one
-        is not the recipient of row two.
-
-        An input whose expression will not resolve is left out rather than
-        guessed at: that is the action's own problem to report when it runs,
-        not a reason to refuse the model's arguments.
-        """
-        from cms.plugin_pool import plugin_pool
-
-        try:
-            plugin = plugin_pool.get_plugin(self.plugin_type)
-        except KeyError:
-            return {}
+    def _bound_values_for(self, item: dict) -> dict:
+        """Resolve the editor-bound half without exposing it to the model."""
         exposed = set(self.tool_inputs())
-        configured = {name: value for name, value in (self.config or {}).items() if name not in exposed}
-        if getattr(plugin, "convert_data_form", True) is False:
-            return configured  # already literal values
-        return self._bound_for_row(configured, row, rows)
-
-    def _bound_for_row(self, configured: dict, row: dict, rows: list) -> dict:
-        """The configured inputs as they resolve against one row."""
         try:
-            resolved = self.resolve_inputs(row, rows)
-        except Exception:  # noqa: BLE001 — an expression that will not resolve
+            resolved = self.resolve_inputs(item)
+        except Exception:  # noqa: BLE001 — unresolved bindings are reported when the action runs
             return {}
-        return {name: resolved[name] for name in configured if name in resolved}
+        return {name: value for name, value in resolved.items() if name not in exposed}
 
-    def validate_call(self, call, rows: list | None = None) -> tuple[dict, ToolResult | None]:
+    def validate_call(self, call, item: dict | None = None) -> tuple[dict, ToolResult | None]:
         """Check a call before anything is done about it.
 
         Before the approval gate, not after. Approval is for calls that could
@@ -277,7 +227,7 @@ class ToolMixin:
                 content="Your arguments were not valid JSON. Send the call again with a JSON object.",
                 is_error=True,
             )
-        return self.validate_tool_arguments(call, rows)
+        return self.validate_tool_arguments(call, item)
 
     # -- execution ---------------------------------------------------------
 
@@ -331,7 +281,7 @@ class ToolMixin:
             scratch["approved_by"] = getattr(user, "pk", None)
         elif scratch.get("awaiting_input"):
             scratch["input"] = data or {}
-        AutomationAction.objects.filter(pk=action.pk).update(scratch=scratch)
+        self._save_scratch(action, scratch)
         action.scratch = scratch
 
     def execute(self, action, data, single_step=False, plugin_dict=None):
@@ -357,21 +307,26 @@ class ToolMixin:
 
         # Waiting for something, and it has arrived.
         if scratch.get("awaiting_input"):
-            rows = data or []
+            from .execution import place_results
+
             answer = scratch.get("input") or {}
+            item = place_results(self, action, data, {"submission": answer})
             # The answer, or the fact that there wasn't one. Never the rows:
             # the ordinary admin *Resume* button sends no response at all, so a
             # fallback to the rows means the commonest way of answering a
             # person's tool hands the model the whole payload — every field the
             # editor deliberately kept from it — as the reward for waiting.
             said = str(answer) if answer else "The person resumed this without leaving a response."
-            self._record_observation(action, ToolResult(call_id=call.id, content=said, rows=rows))
-            return COMPLETED, rows
+            self._record_observation(action, ToolResult(call_id=call.id, content=said, item=item))
+            return COMPLETED, item
 
-        arguments, refusal = self.validate_call(call, data or [])
+        from .execution import ExecutionContext
+
+        variables = ExecutionContext(action, data).variables
+        arguments, refusal = self.validate_call(call, variables)
         if refusal is not None:
             self._record_observation(action, refusal)
-            return COMPLETED, []
+            return COMPLETED, data
 
         # Gated because it *is* gated, or because it already was: a call
         # carrying an approval — asked for, given, or still pending — was
@@ -381,13 +336,13 @@ class ToolMixin:
         # opposite of what disabling it means.
         under_the_gate = bool(scratch.get("approved_for") or scratch.get("awaiting_approval"))
         if self.needs_approval() or under_the_gate:
-            shown = self._for_the_person(call, data or [])
+            shown = self._for_the_person(call, variables)
             operation = self._fingerprint(shown)
             if not scratch.get("approved") and (self.needs_approval() or under_the_gate):
                 action.requires_interaction = True
                 scratch["awaiting_approval"] = True
                 scratch["approved_for"] = operation
-                AutomationAction.objects.filter(pk=action.pk).update(scratch=scratch)
+                self._save_scratch(action, scratch)
                 action.scratch = scratch
                 return WAITING, shown
             if scratch.get("approved_for") != operation:
@@ -402,11 +357,11 @@ class ToolMixin:
                 scratch["awaiting_approval"] = True
                 scratch["approved"] = False
                 scratch["approved_for"] = operation
-                AutomationAction.objects.filter(pk=action.pk).update(scratch=scratch)
+                self._save_scratch(action, scratch)
                 action.scratch = scratch
                 return WAITING, {**shown, "changed": True}
 
-        state, result, output = self.run_tool_call(call, action, data or [], arguments)
+        state, result, output = self.run_tool_call(call, action, data or {}, arguments)
         if state == WAITING:
             # Read back rather than reused: what just ran may have written its
             # own state here — a nested AI step saves its conversation and the
@@ -421,10 +376,10 @@ class ToolMixin:
                 # complete the call the moment it came back, having asked
                 # nobody and run nothing.
                 scratch["awaiting_input"] = True
-            AutomationAction.objects.filter(pk=action.pk).update(scratch=scratch)
+            self._save_scratch(action, scratch)
             action.scratch = scratch
             waiting = output if isinstance(output, dict) else {}
-            return WAITING, {**waiting, **self._for_the_person(call, data or [])}
+            return WAITING, {**waiting, **self._for_the_person(call, variables)}
 
         self._record_observation(action, result)
         return COMPLETED, output
@@ -439,7 +394,7 @@ class ToolMixin:
         """
         raise NotImplementedError
 
-    def run_tool_call(self, call, action, rows: list, arguments: dict) -> tuple[str, ToolResult | None, list]:
+    def run_tool_call(self, call, action, item: dict, arguments: dict) -> tuple[str, ToolResult | None, dict]:
         """Do the action's own work with the model's arguments in place.
 
         The action reads its inputs in one of two ways, so the values are put
@@ -456,6 +411,7 @@ class ToolMixin:
         leave its arguments behind for the next.
         """
         from .engine import ActionPause
+        from .execution import record_trace
         from .tools import as_literal_config
 
         mappings = frozenset(getattr(self, "expression_mappings", frozenset()))
@@ -464,7 +420,7 @@ class ToolMixin:
         if arguments:
             self.config = {**(configured or {}), **as_literal_config(arguments, mappings)}
         try:
-            state, output = self.do_work(action, rows)
+            state, output = self.do_work(action, item)
         except ActionPause:
             # The engine's own pause signal — a rate limit, a backoff. It is not
             # an observation for the model; it means "run me again later", and
@@ -473,16 +429,23 @@ class ToolMixin:
         except ToolError as exc:
             # Raised by an action to say something to the model. Its text was
             # written for that, so it is passed on as it is.
-            return COMPLETED, ToolResult(call_id=call.id, content=str(exc), is_error=True), []
-        except Exception:
+            return COMPLETED, ToolResult(call_id=call.id, content=str(exc), is_error=True), item
+        except Exception as exc:
             # Everything else is a fault, and a fault's text is not written for
             # anybody: it can carry a query, a path, a token, or the body of
-            # somebody else's response. It stays here, in the log, and the
+            # somebody else's response. It stays in the restricted trace and log; the
             # model is told only that the tool did not work — which is the part
             # it can actually act on.
             logger.exception(
                 "automation.tool.failed",
                 extra={"automation_action_id": getattr(action, "pk", None), "tool": call.name},
+            )
+            import traceback
+
+            record_trace(
+                action,
+                "tool_error",
+                {"error_type": type(exc).__name__, "error": str(exc), "traceback": traceback.format_exc()},
             )
             return (
                 COMPLETED,
@@ -491,7 +454,7 @@ class ToolMixin:
                     content="This tool failed. Try a different approach, or say that it could not be done.",
                     is_error=True,
                 ),
-                [],
+                item,
             )
         finally:
             self.config = configured
@@ -499,7 +462,7 @@ class ToolMixin:
 
         if state == WAITING:
             return WAITING, None, output
-        rows_out = output if isinstance(output, list) else [{"value": output}]
+        output_item = output
         if state == FAILED:
             # An action's failure payload is written for whoever operates this
             # — a traceback, a provider's response body, the query that broke.
@@ -513,6 +476,7 @@ class ToolMixin:
                     "output": output,
                 },
             )
+            record_trace(action, "tool_error", {"outcome": output})
             return (
                 COMPLETED,
                 ToolResult(
@@ -520,61 +484,17 @@ class ToolMixin:
                     content="This tool failed. Try a different approach, or say that it could not be done.",
                     is_error=True,
                 ),
-                [],
+                item,
             )
         return (
             COMPLETED,
-            ToolResult(call_id=call.id, content=str(self._reportable(rows, rows_out)), rows=rows_out),
-            rows_out,
+            ToolResult(call_id=call.id, content=str(getattr(action, "_declared_results", {})), item=output_item),
+            output_item,
         )
-
-    def _reportable(self, given: list, produced: list) -> list:
-        """What the model is told a call returned: what it *produced*.
-
-        Not the rows themselves. Most actions pass their input through and add
-        a field to it, so reporting the rows would hand back everything the
-        automation happens to be carrying — a token fetched by an earlier
-        query, a column nobody meant to expose — on the strength of having sent
-        an email. The model asked what happened, and what happened is the
-        difference.
-
-        An action that produces its own rows — a lookup, whose answer *is* the
-        rows — is reported in full. That is the case the distinction exists to
-        keep working.
-        """
-        from cms.plugin_pool import plugin_pool
-
-        given = self._rows_to_check(given) if given else []
-        produced = self._rows_to_check(produced) if produced else []
-        try:
-            policy = getattr(plugin_pool.get_plugin(self.plugin_type), "reports_to_model", "changes")
-        except KeyError:
-            policy = "changes"
-
-        if policy == "rows":
-            return produced
-        if isinstance(policy, (list, tuple, set, frozenset)):
-            named = set(policy)
-            added = [{key: value for key, value in row.items() if key in named} for row in produced]
-        else:
-            # By key, and against every row rather than the one in the same
-            # position. Position is not provenance: an action that sorts its
-            # rows would make every field of every row look new and report the
-            # lot, and one that edits a row in place would make nothing look
-            # new and report none of it. A key that came in is the automation's
-            # whatever order it comes back in; a key that did not is the
-            # action's, and that is the whole question.
-            arrived = {key for row in given for key in row}
-            added = [{key: value for key, value in row.items() if key not in arrived} for row in produced]
-        if any(added):
-            return added
-        # It added nothing of its own. Saying how many rows it handled beats a
-        # page of empty ones, and beats guessing at what it might have changed.
-        return [{"rows": len(produced)}]
 
     # -- what a person sees ------------------------------------------------
 
-    def _for_the_person(self, call, rows: list | None = None) -> dict:
+    def _for_the_person(self, call, item: dict | None = None) -> dict:
         """What the *Open tasks* page needs in order to be worth reading.
 
         Somebody approving a call is being asked to make a decision, and cannot
@@ -592,7 +512,7 @@ class ToolMixin:
         return {
             "tool": call.name,
             "arguments": call.arguments,
-            "bound": self._bound_per_row(rows),
+            "bound": self._bound_for_person(item),
             "destructive": self.is_destructive(),
         }
 
@@ -607,26 +527,16 @@ class ToolMixin:
         """
         return hashlib.sha256(json.dumps(shown, sort_keys=True, default=str).encode()).hexdigest()
 
-    def _bound_per_row(self, rows: list | None) -> list:
-        """The bound inputs as they resolve for each row the call will act on.
+    def _bound_for_person(self, item: dict | None) -> list:
+        """One displayed operation; the list is table presentation, not a batch."""
+        from .execution import item_data
 
-        One row is the common case and the misleading one: an action runs over
-        every row it is given, so showing the first recipient and then sending
-        to five is an approval of something that did not happen.
-        """
-        grouped: dict[tuple, dict] = {}
-        for row in self._rows_to_check(rows):
-            resolved = self._bound_values_for(row, rows or [])
-            key = tuple(sorted((name, str(value)) for name, value in resolved.items()))
-            if key in grouped:
-                # Counted, not collapsed. Three messages to one address are
-                # three messages, and an approval showing a single line has
-                # understated by two — which is exactly the direction an
-                # approver cannot check.
-                grouped[key]["times"] += 1
-            else:
-                grouped[key] = {"inputs": resolved, "times": 1}
-        return list(grouped.values())
+        return [{"inputs": self._bound_values_for(item_data(item)), "times": 1}]
+
+    def _save_scratch(self, action, scratch):
+        from .execution import save_working_state
+
+        save_working_state(action, scratch)
 
     def _record_observation(self, action, result: ToolResult) -> None:
         """Leave the observation where the AI step will look for it.
@@ -641,5 +551,5 @@ class ToolMixin:
         }
         scratch.pop("awaiting_input", None)
         scratch.pop("awaiting_approval", None)
-        AutomationAction.objects.filter(pk=action.pk).update(scratch=scratch)
+        self._save_scratch(action, scratch)
         action.scratch = scratch

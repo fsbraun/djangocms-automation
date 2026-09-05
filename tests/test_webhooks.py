@@ -84,21 +84,20 @@ def test_generic_webhook_fires_automation(client, automation_content, settings):
     assert response.json() == {"triggered": 1, "filtered": 0}
     instance = trigger.automation_content.automationinstance_set.first()
     assert instance is not None
-    assert instance.initial_data == [{"order_id": 42}]
+    assert instance.initial_data == {"order_id": 42}
     action = AutomationAction.objects.get(automation_instance=instance)
     assert action.state == COMPLETED
 
 
 @pytest.mark.django_db
-def test_generic_webhook_accepts_array_payload(client, automation_content, settings):
+def test_generic_webhook_rejects_batch_payload(client, automation_content, settings):
     trigger = _make_trigger(automation_content, settings)
 
     payload = [{"n": 1}, {"n": 2}]
     response = client.post(_url(), data=json.dumps(payload), content_type="application/json")
 
-    assert response.status_code == 200
-    instance = trigger.automation_content.automationinstance_set.first()
-    assert instance.initial_data == payload
+    assert response.status_code == 400
+    assert not trigger.automation_content.automationinstance_set.exists()
 
 
 @pytest.mark.django_db
@@ -200,7 +199,7 @@ def test_mail_webhook_normalizes_provider_aliases(client, automation_content, se
 
     assert response.status_code == 200
     assert response.json()["triggered"] == 1
-    row = trigger.automation_content.automationinstance_set.first().initial_data[0]
+    row = trigger.automation_content.automationinstance_set.first().initial_data
     assert row["recipient"] == "support@example.com"
     assert row["sender"] == "customer@example.org"
     assert row["subject"] == "Invoice overdue"

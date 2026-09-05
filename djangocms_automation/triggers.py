@@ -180,15 +180,14 @@ class WebhookTrigger(Trigger):
     POSTing to ``.../webhook/<token>/`` (see ``djangocms_automation.urls``)
     fires the trigger. Subclasses customize payload handling:
 
-    - :meth:`parse_payload` — turn the request into data rows. Return an
-      empty list to accept-but-ignore the request (e.g. filtered out).
+    - :meth:`parse_payload` — turn the request into one item. Return None to accept-but-ignore the request (e.g. filtered out).
       Raise ``ValueError`` for a malformed payload (results in HTTP 400).
     - :meth:`verify_request` — authenticate the request beyond the URL
       token. The default verifies an optional HMAC-SHA256 signature
       (``signing_secret`` config + ``X-Automation-Signature`` header,
       hex digest of the raw request body).
 
-    Rows are validated against :attr:`data_schema` before triggering.
+    Items are validated against :attr:`data_schema` before triggering.
     """
 
     signature_header = "X-Automation-Signature"
@@ -221,11 +220,10 @@ class WebhookTrigger(Trigger):
         expected = hmac.new(secret.encode(), request.body, hashlib.sha256).hexdigest()
         return hmac.compare_digest(provided, expected)
 
-    def parse_payload(self, request, config: dict[str, Any]) -> list[dict[str, Any]]:
-        """Parse the request body into data rows.
+    def parse_payload(self, request, config: dict[str, Any]) -> dict[str, Any] | None:
+        """Parse the request body into one item.
 
-        The default accepts a JSON object (one row) or a JSON array of
-        objects (multiple rows).
+        Accept a JSON object; reject arrays. Lists belong in named fields.
 
         :raises ValueError: If the payload is malformed.
         """
@@ -234,10 +232,8 @@ class WebhookTrigger(Trigger):
         except (json.JSONDecodeError, UnicodeDecodeError) as exc:
             raise ValueError(f"Invalid JSON payload: {exc}") from exc
         if isinstance(data, dict):
-            return [data]
-        if isinstance(data, list) and all(isinstance(row, dict) for row in data):
             return data
-        raise ValueError("Expected a JSON object or an array of objects.")
+        raise ValueError("Expected one item as a JSON object. Put lists in named fields; batches are not supported.")
 
 
 class GenericWebhookTrigger(WebhookTrigger):
@@ -388,13 +384,9 @@ class MailTrigger(WebhookTrigger):
         status_filter = config.get("status_filter")
         return not (status_filter and row.get("status") != status_filter)
 
-    def parse_payload(self, request, config: dict[str, Any]) -> list[dict[str, Any]]:
-        rows = super().parse_payload(request, config)
-        return [
-            normalized
-            for normalized in (self.normalize_row(row) for row in rows)
-            if self.matches_filters(normalized, config)
-        ]
+    def parse_payload(self, request, config: dict[str, Any]) -> dict[str, Any] | None:
+        item = self.normalize_row(super().parse_payload(request, config))
+        return item if self.matches_filters(item, config) else None
 
 
 # Timer Trigger schema: expects scheduled time and optional recurrence config
@@ -610,7 +602,7 @@ if apps.is_installed("djangocms_form_builder"):
             # field an automation is most likely to trust.
             payload["user_id"] = request.user.pk if request.user.is_authenticated else None
             for trigger in qs:
-                trigger.trigger_execution(data=[payload], start=True)
+                trigger.trigger_execution(data=payload, start=True)
 
 
 # Register example triggers

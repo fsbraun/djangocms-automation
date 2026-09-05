@@ -124,7 +124,7 @@ class Command(BaseCommand):
             intent="Send the daily digest",
             config={
                 "subject": '"Daily content digest"',
-                "body": "Recently updated: {{ title }} ({{ slug }})",
+                "body": "Recently updated articles: {{ records }}",
                 "recipient_email": '"editors@example.com"',
             },
         )
@@ -248,7 +248,10 @@ class Command(BaseCommand):
             intent="Route the message",
             # Both sides are expressions, so the literal is quoted — bare
             # ``billing`` would be read as a path into the data.
-            condition={"logic": "and", "conditions": [{"field": "topic", "operator": "==", "value": "'billing'"}]},
+            condition={
+                "logic": "and",
+                "conditions": [{"field": "answer.topic", "operator": "==", "value": "'billing'"}],
+            },
         )
         for child_type, recipient, subject in (
             ("ThenPlugin", '"billing@example.com"', '"A billing question came in"'),
@@ -263,7 +266,7 @@ class Command(BaseCommand):
                 intent="Forward the message",
                 config={
                     "subject": subject,
-                    "body": "It reads as {{ topic }}. Forwarded for a reply.",
+                    "body": "It reads as {{ answer.topic }}. Forwarded for a reply.",
                     "recipient_email": recipient,
                 },
             )
@@ -309,7 +312,7 @@ class Command(BaseCommand):
             config={
                 "model": DUMMY_MODEL,
                 "prompt": (
-                    "Retitle {{ title }} so it reads better.\n\n"
+                    "Retitle {{ records.0.title }} so it reads better.\n\n"
                     '!call retitle_article {"field_mapping": {"title": "A clearer title"}}'
                 ),
             },
@@ -332,7 +335,7 @@ class Command(BaseCommand):
             exposed_fields=["field_mapping"],
             config={
                 "model": "demoproject.Article",
-                "filters": {"slug": "slug"},
+                "filters": {"slug": "records.0.slug"},
             },
         )
         return "Editorial AI review"
@@ -412,7 +415,7 @@ class Command(BaseCommand):
             config={
                 "model": "demoproject.Lead",
                 "filters": {"email": "email"},
-                "field_mapping": {"score": "score"},
+                "field_mapping": {"score": "answer.score"},
             },
         )
         branch = add_plugin(
@@ -420,7 +423,7 @@ class Command(BaseCommand):
             plugin_type="AutomationIf",
             language=LANGUAGE,
             intent="Select hot leads",
-            condition={"logic": "and", "conditions": [{"field": "score", "operator": "==", "value": "'hot'"}]},
+            condition={"logic": "and", "conditions": [{"field": "answer.score", "operator": "==", "value": "'hot'"}]},
         )
         path = add_plugin(placeholder=placeholder, plugin_type="ThenPlugin", language=LANGUAGE, target=branch)
         add_plugin(
@@ -431,7 +434,7 @@ class Command(BaseCommand):
             intent="Notify the sales team",
             config={
                 "subject": '"A hot lead just came in"',
-                "body": "{{ company }} scored {{ score }}. Call them.",
+                "body": "{{ company }} scored {{ answer.score }}. Call them.",
                 "recipient_email": '"sales@example.com"',
             },
         )
@@ -477,7 +480,7 @@ class Command(BaseCommand):
             key = f"DUP-{now():%Y%m%d%H%M%S}"
             payload = {"reference": key, "email": "customer@example.com", "total": "10.00"}
             for _ in range(2):
-                trigger.trigger_execution(data=[payload], idempotency_key=key)
+                trigger.trigger_execution(data=payload, idempotency_key=key)
             count = AutomationInstance.objects.filter(idempotency_key=key).count()
             return f"webhook delivered twice with key {key} -> {count} instance(s) (expected 1)"
 

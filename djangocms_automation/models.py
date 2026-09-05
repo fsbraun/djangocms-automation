@@ -34,6 +34,13 @@ class AutomationContent(models.Model):
     Exists only in the site's default language (not translatable).
     """
 
+    data_fields = models.JSONField(
+        default=dict, blank=True, help_text=_("Stable field keys mapped to labels and schemas.")
+    )
+    output_fields = models.JSONField(
+        default=list, blank=True, help_text=_("Fields to return; empty returns the final item.")
+    )
+
     automation = models.ForeignKey(
         "djangocms_automation.Automation", related_name="contents", on_delete=models.CASCADE
     )
@@ -323,6 +330,14 @@ class AutomationTrigger(models.Model):
         """
         from django.db import IntegrityError
 
+        from .definitions import capture_definition
+        from .execution import item_data
+
+        data = item_data(data)
+        handler = self.get_definition()
+        if handler:
+            handler().validate_payload(data, config=self.config)
+
         if (
             idempotency_key
             and AutomationInstance.objects.filter(
@@ -353,8 +368,9 @@ class AutomationTrigger(models.Model):
             try:
                 instance = AutomationInstance.objects.create(
                     automation_content=self.automation_content,
-                    data=data or [],
-                    initial_data=data or [],
+                    data=data,
+                    initial_data=data,
+                    definition=capture_definition(self, placeholder),
                     idempotency_key=idempotency_key,
                     parent_action=parent_action,
                 )
@@ -535,7 +551,10 @@ class AutomationPluginModel(CMSPlugin):
             plugin, _unused = plugin.get_plugin_instance()
         return plugin.uuid
 
-    def get_next_payload(self, action: AutomationAction, state: str, output, rows: list):
+    def next_context(self, action, successor):
+        return action.context
+
+    def get_next_payload(self, action: AutomationAction, state: str, output, item: dict):
         """Decide what the actions created by :meth:`get_next_actions` receive.
 
         A completed node hands on its output; a node that fanned out passes its
@@ -544,7 +563,7 @@ class AutomationPluginModel(CMSPlugin):
         one's output, or it can never work towards its own exit — so it
         overrides this.
         """
-        return output if state == COMPLETED else rows
+        return output if state == COMPLETED else item
 
     def get_next_actions(self, action: AutomationAction) -> list[AutomationAction]:
         """Determine and create the next action(s) in the workflow.
@@ -631,10 +650,10 @@ class ConditionalPluginModel(AutomationPluginModel):
     def execute(
         self,
         action: AutomationAction,
-        data: list,
+        data: dict,
         single_step: bool = False,
         plugin_dict: dict | None = None,
-    ) -> tuple[str, dict | list]:
+    ) -> tuple[str, dict]:
         """Evaluate the condition and route into the matching branch.
 
         :returns: ``(WAITING, {"condition": ...})`` while the chosen branch
@@ -647,7 +666,12 @@ class ConditionalPluginModel(AutomationPluginModel):
         # parent forever.
         children = action.children.filter(replays__isnull=True)
         if not children.exists():
-            condition_result = bool(evaluate_condition(self.condition, data))
+            from .execution import ExecutionContext, save_working_state
+
+            context = ExecutionContext(action, data)
+            condition_result = bool(evaluate_condition(self.condition, context.variables))
+            context.record("decision", {"condition": self.condition, "result": condition_result})
+            save_working_state(action, {**action.scratch, "branch": condition_result})
             action._condition_result = condition_result
             branch = self._get_branch(condition_result)
             if branch is None or not branch.child_plugin_instances:
@@ -666,6 +690,11 @@ class ConditionalPluginModel(AutomationPluginModel):
             end_action = children.filter(plugin_ptr=end_uuid).order_by("-created").first()
             if end_action is not None and end_action.result is not None:
                 output = end_action.result
+                current = end_action
+                while current and current.pk != action.pk:
+                    for key, write in current.writes.items():
+                        action.writes.setdefault(key, write)
+                    current = current.previous
         return COMPLETED, output
 
     def _branch_taken(self, action: AutomationAction, children) -> bool:
@@ -683,6 +712,8 @@ class ConditionalPluginModel(AutomationPluginModel):
         and nothing overwrites that. Superseded actions are skipped, so a replay
         answers the same as the attempt it replaced.
         """
+        if "branch" in action.scratch:
+            return action.scratch["branch"]
         first = children.order_by("created").first()
         if first is not None:
             for outcome in (True, False):
@@ -741,6 +772,9 @@ class LoopPluginModel(AutomationPluginModel):
     #: construct here that can run forever, so the bound is not optional; it is
     #: an error rather than a quiet stop, because silently truncating a loop
     #: produces a wrong result that looks like a right one.
+    iterable = models.CharField(
+        max_length=255, blank=True, verbose_name=_("Use data from"), help_text=_("List field for For each.")
+    )
     DEFAULT_MAX_ITERATIONS = 100
 
     condition = models.JSONField(
@@ -781,29 +815,29 @@ class LoopPluginModel(AutomationPluginModel):
         body = self._body()
         return self._uuid_of(body[-1]) if body else None
 
-    def _carried(self, action: AutomationAction, rows: list) -> list:
+    def _carried(self, action: AutomationAction, item: dict) -> dict:
         """The data flowing into the next iteration: the previous one's output.
 
         On the first pass there is no previous iteration, so it is the loop's
         own input.
         """
-        from .engine import normalize_rows
+        from .execution import item_data
 
         if not self._iteration(action):
-            return rows
+            return item
         end_uuid = self._body_end_uuid()
         if end_uuid is None:
-            return rows
+            return item
         end_action = (
             action.children.filter(replays__isnull=True, plugin_ptr=end_uuid, finished__isnull=False)
             .order_by("-created")
             .first()
         )
         if end_action is None or end_action.result is None:
-            return rows
-        return normalize_rows(end_action.result)
+            return item
+        return item_data(end_action.result)
 
-    def get_next_payload(self, action: AutomationAction, state: str, output, rows: list):
+    def get_next_payload(self, action: AutomationAction, state: str, output, item: dict):
         """Hand each iteration the previous iteration's output.
 
         The engine's default passes a fan-out node's own input to every
@@ -813,7 +847,7 @@ class LoopPluginModel(AutomationPluginModel):
         """
         if state == COMPLETED:
             return output
-        return self._carried(action, rows)
+        return self._carried(action, item)
 
     def _iteration(self, action: AutomationAction) -> int:
         """How many iterations this loop has started, counted from its children.
@@ -840,10 +874,10 @@ class LoopPluginModel(AutomationPluginModel):
     def execute(
         self,
         action: AutomationAction,
-        data: list,
+        data: dict,
         single_step: bool = False,
         plugin_dict: dict | None = None,
-    ) -> tuple[str, dict | list]:
+    ) -> tuple[str, dict]:
         """Evaluate the condition and either start another iteration or finish.
 
         :returns: ``(WAITING, {"iteration": n})`` while the body runs,
@@ -870,7 +904,23 @@ class LoopPluginModel(AutomationPluginModel):
         iteration = self._iteration(action)
         current = self._carried(action, data)
 
-        if not bool(evaluate_condition(self.condition, current)):
+        from .execution import ExecutionContext, save_working_state
+
+        context = ExecutionContext(action, current)
+        if self.plugin_type == "AutomationForEach":
+            if "entries" not in action.scratch:
+                from .utilities.expressions import resolve_expression
+
+                entries = resolve_expression(self.iterable, context.variables)
+                if not isinstance(entries, list):
+                    raise ValueError("For each requires a list field.")
+                save_working_state(action, {**action.scratch, "entries": entries})
+            keep_going = iteration < len(action.scratch["entries"])
+        else:
+            keep_going = bool(evaluate_condition(self.condition, context.variables))
+        context.record("loop", {"iteration": iteration, "continue": keep_going, "item": current})
+        if not keep_going:
+            action.writes = self._body_writes(action)
             return COMPLETED, current
 
         if iteration >= self.max_iterations:
@@ -883,6 +933,25 @@ class LoopPluginModel(AutomationPluginModel):
             }
 
         return WAITING, {"iteration": iteration + 1}
+
+    def _body_writes(self, action):
+        writes = {}
+        for child in action.children.filter(state=COMPLETED, replays__isnull=True).order_by("pk"):
+            writes.update(child.writes)
+        return writes
+
+    def next_context(self, action, successor):
+        from copy import deepcopy
+
+        context = deepcopy(action.context)
+        if action.state == WAITING:
+            iteration = self._iteration(action) - 1
+            entry = {"index": iteration}
+            if self.plugin_type == "AutomationForEach":
+                entry["entry"] = deepcopy(action.scratch["entries"][iteration])
+            context["loop"] = entry
+            context["loops"] = {**context.get("loops", {}), str(self.uuid): entry}
+        return context
 
     def get_next_actions(self, action: AutomationAction) -> list[AutomationAction]:
         """Start the next iteration, or continue past the loop once it is done.
@@ -979,21 +1048,21 @@ class SplitPluginModel(AutomationPluginModel):
     def execute(
         self,
         action: AutomationAction,
-        data: list,
+        data: dict,
         single_step: bool = False,
         plugin_dict: dict[CMSPlugin] | None = None,
-    ) -> tuple[str, dict | list]:
+    ) -> tuple[str, dict]:
         """Execute the split: fan out, then join once all paths finished.
 
         First execution returns ``WAITING`` (the engine then creates one
         action per path via :meth:`get_next_actions`). When a branch chain
         ends, the engine wakes this action again: any failed branch fails
         the split; once all branches finished, the split completes with the
-        concatenated output rows of all branch ends (the join point).
+        combined explicit writes of all branch ends (the join point).
 
         :returns: Tuple of (state, output).
         """
-        from .engine import normalize_rows
+        from .execution import item_data
 
         # A child that has been replayed is superseded: its replacement is a
         # sibling in the same set, and the original is kept only as history.
@@ -1010,12 +1079,28 @@ class SplitPluginModel(AutomationPluginModel):
         if children.filter(finished__isnull=True).exists():
             # A branch is still running; keep waiting.
             return WAITING, {}
-        # Join: merge the outputs of all branch end actions.
-        action.message = "Joined"
-        merged: list = []
-        end_actions = children.filter(plugin_ptr__in=self._branch_end_uuids())
+        from .execution import ExecutionContext
+
+        merged = item_data(data)
+        owners = {}
+        writes = {}
+        end_actions = children.filter(plugin_ptr__in=self._branch_end_uuids()).order_by("pk")
         for end_action in end_actions:
-            merged.extend(normalize_rows(end_action.result))
+            branch_writes = {}
+            current_action = end_action
+            while current_action and current_action.pk != action.pk:
+                for key, write in current_action.writes.items():
+                    branch_writes.setdefault(key, write)
+                current_action = current_action.previous
+            for key, write in branch_writes.items():
+                if key in owners:
+                    raise ValueError(f"Parallel paths both write field '{key}'. Save results in separate fields.")
+                owners[key] = end_action.pk
+                writes[key] = write
+                merged[key] = end_action.result[key]
+        action.writes = writes
+        action.message = "Joined paths"
+        ExecutionContext(action, data).record("join", {"branches": owners, "writes": writes, "after": merged})
         return COMPLETED, merged
 
 
@@ -1032,6 +1117,10 @@ class BaseActionPluginModel(ToolMixin, AutomationPluginModel):
     stays bound to the editor's expressions. Outside an AI step none of that
     applies — see :mod:`djangocms_automation.tool_mixin`.
     """
+
+    outputs = models.JSONField(default=dict, blank=True, verbose_name=_("Save result in"))
+    default_outputs = {}
+    literal_fields = frozenset()
 
     config = models.JSONField(
         default=dict,
@@ -1103,84 +1192,68 @@ class BaseActionPluginModel(ToolMixin, AutomationPluginModel):
             name for name, field in data_form.base_fields.items() if isinstance(field.widget, django_forms.Textarea)
         }
 
-    def resolve_inputs(self, row: dict | None, rows: list, overrides: dict | None = None) -> dict:
-        """Resolve all configured inputs against a data row.
+    def resolve_inputs(self, item: dict, overrides: dict | None = None) -> dict:
+        """Resolve configured parameters once, against one item's scope."""
+        from cms.plugin_pool import plugin_pool
 
-        Expression fields are resolved with
-        :func:`~djangocms_automation.utilities.expressions.resolve_expression`;
-        template fields (Textarea widgets in the ``data_form``) are rendered
-        with :func:`~djangocms_automation.utilities.templates.safe_render`.
-        The context is the given row with the full row list available as
-        ``data``.
+        from .execution import item_data
+        from .utilities.expressions import ExpressionError, Literal, resolve_expression
+        from .utilities.templates import VAR_PATTERN, safe_render
 
-        :param row: The current data row (or None).
-        :param rows: All data rows.
-        :param overrides: Values to use as they are, instead of resolving the
-            configured expression for those keys. An editor's inputs are
-            expressions over the automation's data; a value supplied at call
-            time — by a model calling this action as a tool — is already the
-            literal, and running it through the resolver would read it as a
-            data path.
-        :returns: Mapping of config field name to resolved value.
-        """
-        from .utilities.expressions import resolve_expression
-        from .utilities.templates import safe_render
-
-        context = {**(row or {}), "data": rows}
+        context = item_data(item)
         template_fields = self._template_fields()
-        # An action's ``perform`` resolves its own inputs, so a caller supplying
-        # values cannot pass them down through it. Setting them on the instance
-        # is what lets any existing action be called as a tool without being
-        # changed to know about tools.
         overrides = overrides or getattr(self, "_input_overrides", None) or {}
+        convert = getattr(plugin_pool.get_plugin(self.plugin_type), "convert_data_form", True)
         resolved = {}
         for key, value in (self.config or {}).items():
             if key in overrides:
                 resolved[key] = overrides[key]
+            elif isinstance(value, dict) and "field" in value and key not in self.expression_mappings:
+                path = value["field"] + ("." + value["path"] if value.get("path") else "")
+                try:
+                    resolved[key] = resolve_expression(path, context)
+                except ExpressionError:
+                    if "default" not in value:
+                        raise
+                    resolved[key] = value["default"]
+            elif key in self.expression_mappings:
+                resolved[key] = {
+                    name: resolve_expression(expr if isinstance(expr, Literal) else str(expr), context)
+                    for name, expr in (value or {}).items()
+                }
+            elif key in template_fields and key not in getattr(self, "literal_fields", ()):
+                for path in VAR_PATTERN.findall(str(value or "")):
+                    resolve_expression(path, context)
+                resolved[key] = safe_render(str(value or ""), context)
+            elif not convert or key in getattr(self, "literal_fields", ()):
+                resolved[key] = value
             elif value is None or value == "":
                 resolved[key] = None
-            elif key in template_fields:
-                resolved[key] = safe_render(str(value), context)
             else:
                 resolved[key] = resolve_expression(str(value), context)
-        # An override for something the editor never configured is still an
-        # input the action should receive.
-        for key, value in overrides.items():
-            resolved.setdefault(key, value)
+        resolved.update(overrides)
         return resolved
 
-    def do_work(
-        self,
-        action: AutomationAction,
-        data: list,
-        single_step: bool = False,
-        plugin_dict: dict | None = None,
-    ) -> tuple[str, list]:
-        """Run :meth:`perform` and complete with its output.
+    def execution_inputs(self, action, item):
+        from .execution import ExecutionContext
 
-        Named ``do_work`` rather than ``execute`` because ``execute`` belongs to
-        :class:`~djangocms_automation.tool_mixin.ToolMixin`, which wraps this in
-        the phases of a tool call when a model asked for it and calls it
-        directly when a person drew it into a flow.
+        context = ExecutionContext(action, item)
+        inputs = self.resolve_inputs(context.variables)
+        context.record("inputs", {"used": inputs})
+        return context, inputs
 
-        Exceptions propagate to the engine, which records the action (and
-        instance) as failed; :class:`~djangocms_automation.engine.ActionPause`
-        pauses the action instead.
-        """
-        return COMPLETED, self.perform(action, data or [])
+    def do_work(self, action, data, single_step=False, plugin_dict=None):
+        from .execution import place_results
 
-    def perform(self, action: AutomationAction, rows: list) -> list:
-        """Perform the action's side effect and return the output rows.
+        context, inputs = self.execution_inputs(action, data)
+        results = self.perform(context, inputs)
+        if not isinstance(results, dict):
+            raise TypeError("Actions must return a mapping of declared result names to values.")
+        return COMPLETED, place_results(self, action, data, results)
 
-        The default implementation passes the data through unchanged.
-        Concrete actions (see :mod:`djangocms_automation.actions`) override
-        this.
-
-        :param action: The automation action being executed.
-        :param rows: The incoming data rows.
-        :returns: The outgoing data rows.
-        """
-        return rows
+    def perform(self, context, inputs) -> dict:
+        """Perform one operation and return declared results, without mutating the item."""
+        return {}
 
 
 @receiver(models.signals.post_delete, sender=AutomationTrigger)

@@ -126,6 +126,6 @@ LOGGING = {
 # A model that answers locally, so an AI step can be built and run without an
 # API key. See djangocms_automation.ai.dummy for the directives it understands.
 AUTOMATION_LLM_MODELS = [
-    ("dummy/echo", "Echo (answers locally, no provider needed)"),
+    ("dummy/echo", "No provider"),
 ]
 AUTOMATION_LLM_DEFAULT = "dummy/echo"

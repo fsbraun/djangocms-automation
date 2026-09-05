@@ -52,12 +52,11 @@ class WebhookView(View):
                 rows = handler.parse_payload(request, trigger.config)
             except ValueError:
                 return JsonResponse({"error": "Could not parse the request payload."}, status=400)
-            if not rows:
+            if rows is None:
                 filtered += 1
                 continue
-            for row in rows:
-                if not handler.validate_payload(row, raise_errors=False, config=trigger.config):
-                    return JsonResponse({"error": "Payload does not match the trigger's data schema."}, status=400)
+            if not handler.validate_payload(rows, raise_errors=False, config=trigger.config):
+                return JsonResponse({"error": "Payload does not match the trigger's data schema."}, status=400)
             try:
                 trigger.trigger_execution(data=rows, start=True, idempotency_key=idempotency_key)
             except Exception:  # noqa: BLE001 — never leak an internal error to a webhook caller

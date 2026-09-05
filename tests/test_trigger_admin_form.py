@@ -421,8 +421,8 @@ def test_a_form_submission_arrives_as_its_fields(content):
     from djangocms_automation.utilities.templates import safe_render
 
     flat = {"name": "Ada", "email": "ada@example.com", "message": "My invoice is wrong", "user_id": 1}
-    rows = [flat]
-    context = {**rows[0], "data": rows}
+    rows = flat
+    context = rows
 
     assert str(safe_render("{{ message }}", context)) == "My invoice is wrong"
 

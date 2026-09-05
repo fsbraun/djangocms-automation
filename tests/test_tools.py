@@ -195,14 +195,14 @@ def test_a_long_result_is_truncated_visibly():
 
 
 def test_a_short_result_is_returned_unchanged():
-    result = ToolResult(call_id="c1", content="short", rows=[{"a": 1}])
+    result = ToolResult(call_id="c1", content="short", item={"a": 1})
     assert result.truncate(100) is result
 
 
 def test_truncation_keeps_the_rows_that_flow_onward():
     """What the model sees is capped; what the automation carries is not."""
-    result = ToolResult(call_id="c1", content="y" * 50, rows=[{"a": 1}]).truncate(10)
-    assert result.rows == [{"a": 1}]
+    result = ToolResult(call_id="c1", content="y" * 50, item={"a": 1}).truncate(10)
+    assert result.item == {"a": 1}
 
 
 def test_a_tool_call_is_what_the_model_asked_for():
@@ -261,12 +261,12 @@ def test_overrides_bypass_expression_resolution(settings):
 
     # A bare model instance has no registered plugin_type, so every input is
     # treated as an expression here; "static" is the literal form.
-    action = MailActionPluginModel(config={"subject": "row_subject", "body": '"static"'})
-    rows = [{"row_subject": "From the data"}]
+    action = MailActionPluginModel(plugin_type="MailAction", config={"subject": "row_subject", "body": "static"})
+    rows = {"row_subject": "From the data"}
 
-    resolved = action.resolve_inputs(rows[0], rows)
+    resolved = action.resolve_inputs(rows)
     assert resolved["subject"] == "From the data", "an editor's expression still resolves"
 
-    overridden = action.resolve_inputs(rows[0], rows, overrides={"subject": "Hello"})
+    overridden = action.resolve_inputs(rows, overrides={"subject": "Hello"})
     assert overridden["subject"] == "Hello", "a model's literal is used as it stands"
     assert overridden["body"] == "static", "untouched inputs still resolve normally"

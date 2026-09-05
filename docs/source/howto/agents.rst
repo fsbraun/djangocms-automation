@@ -194,8 +194,9 @@ Shaping the answer
 ------------------
 
 Without tools, an **Output shape** constrains the answer to a JSON schema: an
-object becomes one item, an array becomes a batch of items. Downstream steps can then
-read a field instead of parsing prose.
+object or array is saved in the ``answer`` field, preserving the incoming item.
+Downstream steps can read ``answer.topic`` or ``answer.0`` instead of parsing
+prose. There is no implicit expansion into items.
 
 For an object answer, use the field editor to name and describe each value the
 model should produce. Those descriptions are part of the prompt the model sees.
@@ -273,7 +274,7 @@ action* in :doc:`actions`. An action works as a step in a flow and as a tool
 from one piece of code, and a third-party action becomes a tool with no work by
 anyone.
 
-Three things worth setting on an action meant for agents:
+Two things worth setting on an action meant for agents:
 
 .. code-block:: python
 
@@ -282,44 +283,22 @@ Three things worth setting on an action meant for agents:
         destructive = True
         #: Set False for an action that makes no sense unless a person chose it.
         can_be_tool = True
-        #: "changes" (the default) or "rows". See below.
-        reports_to_model = "changes"
 
 What a call reports back
 ------------------------
 
-A tool call returns something to the model, and the default is deliberately
-narrow: **what the action added** to the items it was handed. A *Send Email* tool
-reports ``_mail``, not the items — which may carry a token an earlier query
-fetched, or a column nobody meant to show anyone.
+A tool reports its declared results, not the entire item it received.
+*Send Email* reports ``delivery``; *Query Records* reports ``records``.
+Unrelated fields, such as credentials fetched earlier, remain in the item but
+are not automatically disclosed to the model. Tool authors should return only
+values intended for that observation. There is no ``reports_to_model``
+policy or comparison against the input item.
 
-An action whose answer *is* data has to say so, and one that wants to be precise
-can name the fields:
-
-.. code-block:: python
-
-    class FindSubscriptions(ActionPlugin):
-        reports_to_model = "rows"
-
-    class ChargeCard(ActionPlugin):
-        reports_to_model = ["_charge_id", "_status"]
-
-Nothing about the data can decide this. An action that filters returns fewer
-items than it was given without having produced a single one of them; a lookup
-asked "does this user exist" returns exactly the item it was asked about. Both
-look the same from outside, so the action declares which it is, and an action
-that says nothing is treated as the first.
-
-Under the default, what counts as the action's own is decided **by key**: a
-field that arrived belongs to the automation however it comes back, and a field
-that did not is the action's. Not by comparing items position by position, which
-mistakes a re-sort for a hundred new values.
-
-The policy value ``"rows"`` is the existing API spelling for reporting complete
-items; it has not been renamed.
-
-This affects only what the model is told. The items themselves are untouched, and
-downstream steps see everything as usual.
+Saved tool results also update the AI step's item, so later turns and later
+actions can use them. Calls dispatched together receive private copies.
+Their writes must have distinct root-field destinations; overlaps fail instead
+of choosing whichever call happened to finish last. Calls on later turns can
+update fields produced by earlier turns.
 
 Fields that hold expressions
 ----------------------------

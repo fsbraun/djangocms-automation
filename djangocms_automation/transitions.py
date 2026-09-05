@@ -54,6 +54,8 @@ MUTABLE_ACTION_FIELDS = frozenset(
         "max_attempts",
         # A node's own working state, written as it re-enters.
         "scratch",
+        "context",
+        "writes",
         # Reopening a terminal action for replay has to clear its finish time,
         # or it stays invisible to the "any unfinished actions?" checks that
         # decide when an instance is complete.
@@ -211,6 +213,33 @@ def transition_action(
             attempt=action.attempt_count,
             lease_id=action.lease_id,
             metadata=metadata or {},
+        )
+        from .execution import item_data
+        from .instances import ExecutionTrace
+
+        ExecutionTrace.objects.create(
+            action=action,
+            occurrence=action.lease_id,
+            kind="transition",
+            scope=action.context,
+            payload=item_data(
+                {
+                    "from": from_state,
+                    "to": to_state,
+                    "attempt": action.attempt_count,
+                    "continuation": action.re_entry_count,
+                    "replayed_from": action.replayed_from_id,
+                    "before": action.input_data,
+                    "after": action.result if to_state == COMPLETED else None,
+                    "outcome": action.result,
+                    "writes": action.writes,
+                    "working_state": action.scratch,
+                    "message": action.message,
+                    "error_type": action.error_type,
+                    "error": action.error_detail,
+                    "metadata": metadata or {},
+                }
+            ),
         )
     transaction.on_commit(lambda: _emit(action, from_state, to_state, metadata or {}))
     return action

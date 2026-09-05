@@ -1,0 +1,7 @@
+{% load i18n %}
+{% if data_summary.uses or data_summary.produces %}
+<div class="automation-data-summary">
+    {% if data_summary.uses %}<div>{% translate "Uses" %}: {{ data_summary.uses }}</div>{% endif %}
+    {% if data_summary.produces %}<div>{% translate "Produces" %}: {{ data_summary.produces }}</div>{% endif %}
+</div>
+{% endif %}

@@ -21,7 +21,6 @@ class AIStep(ActionPlugin):
     icon = "bi-stars"
 
     model = step.AIStepPluginModel
-    reports_to_model = "rows"  # the answer is the step's own product
     data_form = step.AIStepForm
     convert_data_form = False
     render_template = "djangocms_automation/plugins/ai_step.html"
@@ -65,7 +64,7 @@ class AIStep(ActionPlugin):
     fieldsets = (
         (_("Intent"), {"fields": ("intent",)}),
         (None, {"fields": ("model", "prompt", "system_prompt")}),
-        (_("Answer"), {"classes": ("collapse",), "fields": ("answer_format", "output_schema")}),
+        (_("Answer"), {"classes": ("collapse",), "fields": ("answer_format", "output_schema", "outputs")}),
         (
             _("Limits"),
             {

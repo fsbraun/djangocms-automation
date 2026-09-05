@@ -3,6 +3,15 @@ Engine Reference
 
 .. automodule:: djangocms_automation.engine
    :members:
+
+Item execution and frozen definitions
+-------------------------------------
+
+.. automodule:: djangocms_automation.execution
+   :members:
+
+.. automodule:: djangocms_automation.definitions
+   :members:
    :undoc-members:
    :show-inheritance:
 

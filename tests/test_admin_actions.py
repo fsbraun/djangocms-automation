@@ -64,7 +64,7 @@ def executed(content, settings):
         slot="start",
     )[0]
     add_plugin(placeholder=placeholder, plugin_type="ActionPlugin", language=settings.LANGUAGE_CODE)
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
     return AutomationAction.objects.latest("id")
 
 
@@ -113,7 +113,7 @@ def test_dead_letter_changelist_shows_only_dead_letters(executed, admin_user):
 def test_replay_action_creates_a_linked_replay(executed, request_with_messages, admin_user):
     """The button must produce a new, auditable action — not edit the old one."""
     AutomationAction.objects.filter(pk=executed.pk).update(
-        state=FAILED, dead_lettered=True, dead_lettered_at=now(), input_data=[{"seed": 1}]
+        state=FAILED, dead_lettered=True, dead_lettered_at=now(), input_data={"seed": 1}
     )
     admin = DeadLetterAdmin(DeadLetter, AdminSite())
     request = request_with_messages()
@@ -130,7 +130,7 @@ def test_replay_action_creates_a_linked_replay(executed, request_with_messages, 
 def test_replay_count_column_reports_replays(executed, request_with_messages):
     """The changelist column an operator uses to see what has been handled."""
     AutomationAction.objects.filter(pk=executed.pk).update(
-        state=FAILED, dead_lettered=True, dead_lettered_at=now(), input_data=[]
+        state=FAILED, dead_lettered=True, dead_lettered_at=now(), input_data={}
     )
     admin = DeadLetterAdmin(DeadLetter, AdminSite())
     dead_letter = DeadLetter.objects.get(pk=executed.pk)

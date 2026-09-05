@@ -1,43 +1,24 @@
 Reading an automation
 =====================
 
-An automation is a process drawn as steps. Read each step's intent to understand
-what it achieves, and its actor to see who does the work. For example, "Notify
-the customer" explains the purpose of a Send Email action. Follow the paths to
-see the order of work and where decisions or repeated steps occur.
+Read each step's **intent** to understand what it achieves and its **actor** to
+see who does the work. Follow the paths to see the order of work, decisions,
+and repeated steps. **Uses** and **Produces** show the step's data connections.
 
-Items, fields, and batches
------------------------------
+One instance, one item
+----------------------
 
-An :term:`item` is one unit of work, such as a customer request. Its named
-:term:`fields <Field>` contain the data used by the process: Customer, Request,
-Assessment, or Draft reply. Fields can contain simple values, structured
-objects, or lists. Multiple items processed together form a :term:`batch`.
+Each automation instance processes one :term:`item`: a JSON object containing
+named :term:`fields <Field>`. Fields hold simple values, structured objects,
+or lists. One order with ten order lines is one item with a list field.
+Ten independently processed orders require ten instances.
 
-A list inside an item is different from a batch. One order with ten order lines
-is one item with a list field. Ten independently processed orders are ten items.
-
-.. note::
-
-   The terminology is used throughout these guides. Preserving each item's
-   fields, the field picker, and the operation labels below describe the agreed
-   design and are not all implemented yet. See `Current behavior`_ when
-   configuring an automation today.
-
-The agreed data model
--------------------------
-
-An automation processes items, individually or in batches. Each item carries
-named fields. Steps read fields and save their results into fields, preserving
-the rest of the item. Fields can hold single values, structured data, or lists.
-Creating independent items or collecting items together requires an explicit
-step.
-
-For example, one request item could pass through these steps:
+Actions read fields and save named results into fields, preserving everything
+else. A value produced several steps earlier remains available by its field
+name. There is no need to draw long data wires between distant steps.
 
 .. list-table::
    :header-rows: 1
-   :widths: 30 40 30
 
    * - Step
      - Uses
@@ -55,78 +36,76 @@ For example, one request item could pass through these steps:
      - Customer → Email, Draft reply → Body
      - Delivery status
 
-Customer remains available after the assessment and drafting steps. Another
-request item carries its own customer and assessment; ordinary steps do not
-read or change fields belonging to other items in the batch. This data isolation
-does not itself promise independent failure handling.
+In the action editor, **Use data from** chooses a source. **Save result in**
+selects or creates a destination field. **Replace value** changes that field;
+**Append to list** adds one result to its list. An array result is appended as
+one nested list, not flattened. Appending to a non-list fails.
 
-The planned action editor uses **Use data from** to choose a source, and **Save
-result in** to select or create a destination field. **Replace value** changes
-that field; **Append to list** adds a result to a list field. There is no need
-to declare every intermediate field before drawing the process. The automation's
-public output selects which fields to return.
+Fields have stable machine keys (such as ``customer``) and optional display
+labels. Changing a label does not change bindings. Nested expressions such as
+``customer.email`` read part of a field; output writes target root fields.
+A missing expression fails input resolution unless an explicit default is
+configured. Fields produced only on another path may not be available.
+
+An automation can select public output fields through ``output_fields``.
+An empty selection returns the complete final item. The internal final item
+remains available for debugging even when the public output is smaller.
 
 Repeating and branching
 -----------------------
 
-**Repeat while** gives each item its own evolving state. The next iteration
-receives the item's updated fields. Append results to a list field to retain
-them across iterations. Different items can finish after different numbers of
-iterations.
+**Repeat while** tests its condition before each iteration and carries the
+updated item into the next one. **For each** captures a list when it starts,
+then visits its entries sequentially. Use ``loop.entry`` for the current entry
+and ``loop.index`` for its zero-based index. Changes to the source list do not
+change the captured iteration sequence. Both loops have an iteration limit;
+reaching it before finishing fails visibly. Nested loops restore the outer
+loop's scope when the inner loop finishes.
 
-**For each** visits entries in a list field, such as order lines, within the
-same item. **Split into items** instead makes those entries independent work
-units. **Collect items** brings independent items together, for example to
-calculate a total or send one digest.
+To collect results, choose **Append to list** on an action inside the loop.
+The list stays in the same item. Entries do not have independent instances,
+retry policies, or concurrent execution.
 
-**If** selects a path for an item. **Parallel paths** perform separate work on
-the same original item; **Join paths** reunites that work. Joining paths is
-different from collecting independent items. The proposed join preserves
-unchanged fields and combines writes to distinct fields. Branches writing the
-same field require an explicit resolution; conflict policies are still being
-specified.
+**If** chooses a path. **Parallel paths** start from private copies of the same
+item. **Join paths** preserves untouched fields and combines explicit writes
+to distinct root fields. Two paths writing the same root field fail with a
+conflict, even if they wrote equal values or both appended to a list. Use
+separate destinations and combine their results in a following action.
 
-Current behavior
-----------------
-
-The engine currently passes a list of items between steps, called ``rows`` in
-Python APIs. Output behavior depends on the action:
-
-* Send Email, Create Record, and Update Records preserve incoming items and add
-  result fields.
-* Query Records replaces the current items with its query results. AI actions
-  likewise produce new output items. There is no universal **Save result in**
-  control yet.
-* A split joins by concatenating its branch output lists. It does not yet
-  reunite field changes by original item identity.
-* The current Loop plugin carries the whole batch from one iteration to the
-  next. Independent loop state for each item is planned.
-* **For each**, **Split into items**, and **Collect items** are planned operations.
-
-Use :doc:`../howto/actions` for the current action settings and expression
-syntax. Existing expressions can also access the complete batch through
-``data``; that legacy behavior is broader than the planned ordinary field
-bindings.
+Batch processing, batch intake, **Split into items**, and **Collect items**
+are deferred. Top-level arrays are rejected; lists belong inside fields.
+Several independent instances can still execute concurrently.
 
 Reading a run's data
------------------------
+--------------------
 
-An action execution records its incoming data as ``input_data`` and its outcome
-as ``result``. These records provide raw item data for debugging, subject to
-retention. On failure or while waiting, the result can contain diagnostic or
-control information rather than successful output items. The recorded input
-is the incoming batch, not necessarily the resolved parameters the action used.
+Open an execution instance in the admin. Its **Executed definition** contains
+the flow captured before execution was queued. Editing or deleting the CMS
+plugins does not change that run, its resumed approvals, or its replay.
 
-The planned inspector adds four views:
+**Execution trace** contains chronological, occurrence-linked events:
 
-* **Before**: the complete incoming items.
-* **Used**: the resolved input values supplied to the action.
-* **Changed**: the fields it added, replaced, or appended to.
-* **After**: the resulting items.
+* **Before**: the complete incoming item, recorded on the claim.
+* **Used**: the resolved arguments supplied to the action.
+* **Changed**: explicit named-result writes, including same-value writes.
+* **After**: the accepted item after a successful execution.
 
-Stable item identity and :term:`provenance` will connect those views across
-branches, iterations, and replays. Current fields answer what the next step can
-use; historical step data answers how those values evolved.
+The trace also records condition decisions, loop scopes, joins, attempts,
+continuations, submitted human responses, and AI/tool conversation state.
+Scheduling state is mutable; these historical events are separate and
+append-only. A full visual debugger is future work; the admin exposes the
+stored events as expandable JSON.
 
-See the :doc:`../glossary` for the shared vocabulary, and
-:doc:`execution-lifecycle` for the current execution and recovery behavior.
+Outcome and successor scheduling commit together under the active lease.
+A stale worker cannot commit another result, and duplicate task delivery does
+not append a result twice. This does not guarantee exactly-once external
+effects: a worker lost during an email or API request leaves the external
+outcome **unknown**, which recovery records.
+
+Retention deliberately redacts payloads, including frozen configuration,
+loop entries, input/output snapshots, submissions, and AI conversations. The
+redaction marker remains visible; replay is refused after required data is
+removed. Access to the trace requires access to the execution-instance admin.
+
+See :doc:`../howto/actions`, :doc:`execution-lifecycle`, and the
+:doc:`../glossary` for details.

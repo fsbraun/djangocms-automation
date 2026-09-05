@@ -3,7 +3,7 @@ import hashlib
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
-from django.db import models
+from django.db import models, transaction
 from django.utils.timezone import now
 from django.utils.translation import gettext_lazy as _
 
@@ -109,7 +109,8 @@ class AutomationInstance(models.Model):
     automation_content = models.ForeignKey(
         "djangocms_automation.AutomationContent",
         blank=False,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         verbose_name=_("Automation Content"),
     )
     status = models.CharField(
@@ -120,12 +121,15 @@ class AutomationInstance(models.Model):
     )
     initial_data = models.JSONField(
         verbose_name=_("Initial Data"),
-        default=list,
+        default=dict,
     )
     data = models.JSONField(
         verbose_name=_("Data"),
-        default=list,
+        default=dict,
     )
+    definition = models.JSONField(default=dict, editable=False)
+    output = models.JSONField(default=dict, editable=False)
+    trace_redacted = models.BooleanField(default=False, editable=False)
     key = models.CharField(
         verbose_name=_("Unique hash"),
         default="",
@@ -182,6 +186,10 @@ class AutomationInstance(models.Model):
         Now it is written once, after the row exists, and never rewritten.
         """
         creating = not self.pk
+        if not creating and (kwargs.get("update_fields") is None or "definition" in kwargs["update_fields"]):
+            saved = type(self).objects.filter(pk=self.pk).values_list("definition", flat=True).first()
+            if saved is not None and saved != self.definition:
+                raise ValueError("The executed definition is immutable.")
         super().save(*args, **kwargs)
         if creating or not self.key:
             key = self.get_key()
@@ -194,7 +202,9 @@ class AutomationInstance(models.Model):
         :returns: Hexadecimal SHA1 hash based on automation and instance IDs.
         :rtype: str
         """
-        return hashlib.sha1(f"{self.automation_content.automation_id}-{self.id}".encode()).hexdigest()
+        automation_id = getattr(self.automation_content, "automation_id", None)
+        automation_id = automation_id or (self.definition.get("automation") or {}).get("id")
+        return hashlib.sha1(f"{automation_id}-{self.id}".encode()).hexdigest()
 
     @classmethod
     def delete_history(cls, days: int = 30):
@@ -209,6 +219,7 @@ class AutomationInstance(models.Model):
         return automations.delete()
 
     @classmethod
+    @transaction.atomic
     def redact_payloads(cls, days: int) -> int:
         """Strip stored payloads from finished instances older than ``days``.
 
@@ -230,7 +241,7 @@ class AutomationInstance(models.Model):
         :returns: The number of instances redacted.
         """
         cutoff = now() - datetime.timedelta(days=days)
-        finished = cls.objects.filter(finished__isnull=False, updated__lt=cutoff)
+        finished = cls.objects.select_for_update().filter(finished__isnull=False, updated__lt=cutoff)
         # Instances whose own payload is gone can still have actions holding
         # theirs — every run redacted before ``scratch`` was included here, for
         # one, and those are the oldest conversations on the system.
@@ -239,7 +250,7 @@ class AutomationInstance(models.Model):
         )
         stale_ids = list(
             finished.filter(
-                ~models.Q(initial_data=[], data=[]) | models.Exists(holding),
+                models.Q(trace_redacted=False) | models.Exists(holding),
             ).values_list("pk", flat=True)
         )
         if not stale_ids:
@@ -247,7 +258,17 @@ class AutomationInstance(models.Model):
         AutomationAction.objects.filter(automation_instance_id__in=stale_ids).update(
             input_data=None, result={}, scratch={}
         )
-        cls.objects.filter(pk__in=stale_ids).update(initial_data=[], data=[])
+        ExecutionTrace.objects.filter(action__automation_instance_id__in=stale_ids).update(
+            payload={}, scope={}, redacted=True
+        )
+        AutomationAction.objects.filter(automation_instance_id__in=stale_ids).update(
+            writes={}, context={}, error_detail="", message=""
+        )
+        AutomationActionEvent.objects.filter(action__automation_instance_id__in=stale_ids).update(metadata={})
+        AutomationInstanceEvent.objects.filter(instance_id__in=stale_ids).update(metadata={})
+        cls.objects.filter(pk__in=stale_ids).update(
+            initial_data={}, data={}, definition={}, output={}, trace_redacted=True
+        )
         return len(stale_ids)
 
     def cancel(self, message: str = "Canceled") -> int:
@@ -286,7 +307,7 @@ class AutomationInstance(models.Model):
         shell and noise in a page.
         """
         automation = getattr(getattr(self, "automation_content", None), "automation", None)
-        name = getattr(automation, "name", "") or ""
+        name = getattr(automation, "name", "") or (self.definition.get("automation") or {}).get("name", "")
         # The hash, not the row id: a run is referred to from outside this
         # database — a log line, a ticket, a message to a colleague — where two
         # deployments will happily disagree about run 17. Shortened the way a
@@ -313,6 +334,18 @@ class AutomationAction(models.Model):
     Represents a single plugin execution, tracking its state, timing,
     and any user interaction requirements.
     """
+
+    context = models.JSONField(default=dict, editable=False)
+    writes = models.JSONField(default=dict, editable=False)
+
+    def save(self, *args, **kwargs):
+        if self._state.adding and not self.context:
+            source = self.previous if self.previous_id else self.parent if self.parent_id else None
+            if source is not None:
+                from copy import deepcopy
+
+                self.context = deepcopy(source.context)
+        return super().save(*args, **kwargs)
 
     automation_instance = models.ForeignKey(
         AutomationInstance,
@@ -583,11 +616,11 @@ class AutomationAction(models.Model):
         """
         if plugins is None and self._step_name_cache is not None:
             return self._step_name_cache
-        from .engine import build_plugin_map
+        from .definitions import instance_plugins
 
         try:
             if plugins is None:
-                plugins = build_plugin_map(self.automation_instance.automation_content_id)
+                plugins = instance_plugins(self.automation_instance)
             plugin = plugins.get(self.plugin_ptr)
             name = str(getattr(plugin.get_plugin_class(), "name", "") or "") if plugin else ""
         except Exception:  # noqa: BLE001 — naming a step is not worth raising for
@@ -614,6 +647,26 @@ class AutomationAction(models.Model):
     def __repr__(self):
         """The diagnostic form, which is what angle brackets are for."""
         return f"<AutomationAction {self.plugin_ptr} {self.state} {self.message} ({self.id})>"
+
+
+class ExecutionTrace(models.Model):
+    """Append-only execution evidence, independent of mutable action state."""
+
+    action = models.ForeignKey(AutomationAction, on_delete=models.CASCADE, related_name="trace")
+    occurrence = models.UUIDField(null=True, db_index=True)
+    kind = models.CharField(max_length=40)
+    scope = models.JSONField(default=dict)
+    payload = models.JSONField(default=dict)
+    redacted = models.BooleanField(default=False)
+    created = models.DateTimeField(auto_now_add=True)
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise ValueError("Execution trace records are immutable; use retention to redact payloads.")
+        return super().save(*args, **kwargs)
+
+    class Meta:
+        ordering = ("pk",)
 
 
 class AutomationActionEvent(models.Model):

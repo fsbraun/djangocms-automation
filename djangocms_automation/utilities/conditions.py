@@ -120,7 +120,7 @@ def evaluate_leaf(cond: dict[str, Any], context: dict[str, Any]) -> bool:
     return False
 
 
-def evaluate(condition: dict | str | None, data: list[dict] | None) -> bool:
+def evaluate(condition: dict | str | None, data: dict | None) -> bool:
     """Evaluate a ConditionBuilderWidget condition against automation data.
 
     The context is the first data row (if any), with the full list of rows
@@ -142,9 +142,9 @@ def evaluate(condition: dict | str | None, data: list[dict] | None) -> bool:
     if not conditions:
         return True
 
-    rows = data or []
-    first_row = rows[0] if rows and isinstance(rows[0], dict) else {}
-    context = {**first_row, "data": rows}
+    from ..execution import item_data
+
+    context = item_data(data)
 
     results = (evaluate_leaf(cond, context) for cond in conditions)
     if condition.get("logic", "and") == "or":

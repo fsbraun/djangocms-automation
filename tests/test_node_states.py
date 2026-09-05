@@ -65,39 +65,28 @@ def _make_split(placeholder, settings, paths=2):
 def test_split_revival_with_straggler_keeps_waiting(placeholder, automation_content, settings):
     split, branch_plugins = _make_split(placeholder, settings)
     plugin_map = engine.build_plugin_map(automation_content.pk)
-    split_plugin = SplitPluginModel.objects.get(pk=split.pk)
-    split_node = plugin_map[split_plugin.uuid]
-
+    split_node = plugin_map[split.uuid]
     instance = AutomationInstance.objects.create(automation_content=automation_content)
-    split_action = AutomationAction.objects.create(
-        automation_instance=instance, plugin_ptr=split_plugin.uuid, state=WAITING
-    )
-    ends = [plugin_map[p.uuid].uuid for p in [type(bp).objects.get(pk=bp.pk) for bp in branch_plugins]]
-    # One branch finished, one still running -> the split keeps WAITING.
-    AutomationAction.objects.create(
-        automation_instance=instance,
-        plugin_ptr=ends[0],
-        parent=split_action,
-        state=COMPLETED,
-        finished="2026-01-01T00:00:00+00:00",
-        result=[{"done": 1}],
-    )
-    straggler = AutomationAction.objects.create(
-        automation_instance=instance, plugin_ptr=ends[1], parent=split_action, state=RUNNING
-    )
-
-    state, output = split_node.execute(split_action, [], plugin_dict=plugin_map)
+    pending = AutomationAction.objects.create(automation_instance=instance, plugin_ptr=split.uuid)
+    action = engine.claim_action(pending.pk)
+    for index, plugin in enumerate(branch_plugins):
+        AutomationAction.objects.create(
+            automation_instance=instance,
+            plugin_ptr=plugin.uuid,
+            parent=action,
+            state=COMPLETED if index == 0 else RUNNING,
+            finished="2026-01-01T00:00:00+00:00" if index == 0 else None,
+            result={f"done{index}": index},
+            writes={f"done{index}": {"mode": "replace", "value": index}},
+        )
+    state, output = split_node.execute(action, {}, plugin_dict=plugin_map)
     assert state == WAITING
-    assert output == {}
-
-    # Straggler finishes -> the join completes and merges branch outputs.
-    AutomationAction.objects.filter(pk=straggler.pk).update(
-        state=COMPLETED, finished="2026-01-01T00:01:00+00:00", result=[{"done": 2}]
-    )
-    state, output = split_node.execute(split_action, [], plugin_dict=plugin_map)
+    straggler = action.children.get(state=RUNNING)
+    AutomationAction.objects.filter(pk=straggler.pk).update(state=COMPLETED, finished="2026-01-01T00:01:00+00:00")
+    state, output = split_node.execute(action, {}, plugin_dict=plugin_map)
     assert state == COMPLETED
-    assert sorted(row["done"] for row in output) == [1, 2]
-    assert split_action.message == "Joined"
+    assert output == {"done0": 0, "done1": 1}
+    assert action.message == "Joined paths"
 
 
 @pytest.mark.django_db

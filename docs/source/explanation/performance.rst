@@ -13,6 +13,12 @@ Removing one orchestration query will not materially speed up a ten-second API
 call, while adding more workers will not make a chain of millisecond actions
 cheap if every action still requires its own queue and state transitions.
 
+.. note::
+
+   Measurements below predate the single-item/frozen-definition refactor.
+   They illustrate orchestration costs, not measured performance of the new
+   trace implementation. Rebenchmark before making capacity decisions.
+
 The cost model
 --------------
 
@@ -127,11 +133,10 @@ claim, event, outcome, and queue costs at every node. A wide split multiplies
 that fixed cost by its number of branches. In this shape, more workers may
 increase database contention without improving end-to-end latency.
 
-The row-oriented action contract is the main amortization mechanism. One action
-receives a list of data rows, so a plugin can transform or operate on a batch
-under one orchestration envelope. Turning every row into a separate action
-maximizes isolation and retry granularity, but also multiplies queue rows,
-action rows, events, plugin-tree loads, and claims.
+The engine processes one item per instance. Lists can live inside that item;
+a single query can return many records into one list field. A sequential
+**For each** pays orchestration and tracing cost for each body step and entry.
+Batch scheduling and automatic batch intake are deferred.
 
 Combining cheap operations has the opposite trade-off. It reduces coordination
 overhead, but produces a larger retry unit and less detailed per-step history.
@@ -147,25 +152,19 @@ results are stored for continuation and audit. Large row sets therefore cost
 more than Python serialization alone: they increase database writes, storage,
 replication traffic, backups, admin rendering, and later reads.
 
-Batching many rows reduces per-row orchestration, but an unbounded batch can
-replace query overhead with large JSON fields and high memory use. For large
-documents or binary data, storing a reference to object storage is generally a
-better execution payload than copying the content through every action result.
+Large lists can create large JSON fields and high memory use. Full execution
+tracing also records payload-bearing inputs, writes, scopes, and outcomes.
+For large documents or binary data, storing a reference to object storage is
+preferable to copying the content through every action and trace event.
 
-Plugin-tree loading
--------------------
+Frozen-definition loading
+--------------------------
 
-Before an action is claimed, the engine rebuilds and downcasts the automation's
-CMS plugin tree so it can resolve the action, its neighbors, and its branches.
-This cost grows with the size of the automation, not just the current node. It
-is often invisible beside a slow action but can become significant for large
-automations made of tiny steps.
-
-Normal execution deliberately does not keep a process-global tree cache. CMS
-content can change, and safe cache invalidation would need to follow content
-versioning and publication. Recovery does cache plugin maps within one recovery
-batch because that cache has a short, explicit lifetime. Any broader caching
-strategy trades database reads for staleness and invalidation complexity.
+Before an action is claimed, the engine reconstructs the instance's frozen
+definition. It does not downcast the live CMS plugin tree. The definition is
+captured once at intake; later CMS edits cannot affect an executing instance.
+Reconstruction cost still grows with the size of the definition. Recovery
+caches reconstructed maps within one scheduler pass.
 
 Heartbeat and scheduler load
 ----------------------------

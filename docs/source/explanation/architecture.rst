@@ -6,9 +6,8 @@ how automations are authored in the CMS editor, how building blocks (triggers,
 nodes and modifiers) are structured, and how execution is driven by the task
 framework at runtime.
 
-For the process reader's vocabulary and the agreed item/field data model, see
-:doc:`reading-an-automation` and the :doc:`../glossary`. This page describes the
-current implementation, including its batch-wide loops and concatenating joins.
+For the item/field vocabulary, see :doc:`reading-an-automation` and the
+:doc:`../glossary`. Each instance processes one item; batches are deferred.
 
 Authoring Automations
 ---------------------
@@ -157,18 +156,23 @@ Orchestration is owned by the execution engine
 Data Flow and Serialization
 ----------------------------
 
-Automation data is serialized as JSON and passed between nodes through an in-memory
-list. Each item in the list represents a row of data, akin to rows in a table. When
-a node executes, it performs bulk operations on all data in the list; the results
-are then passed to the next node in the pipeline.
+Automation data is one JSON object per instance. Named fields hold values,
+objects, and lists. Ordinary actions receive centrally resolved inputs and
+return named results; the engine saves them to explicit root-field destinations
+and preserves the rest of the item.
 
-For example, if a trigger collects user input, the data is converted to JSON and
-wrapped in a list. As the automation proceeds through action nodes, each node
-consumes the list, applies its logic (often in bulk to all rows), and produces
-a new list as output for the next node.
+**For each** captures a list and runs its body sequentially with
+``loop.entry`` and ``loop.index``. **Repeat while** carries the updated
+item between condition checks. Parallel paths receive private copies and join
+only distinct explicit field writes; overlapping writes fail.
 
-This list-based approach enables efficient batch processing and allows modifiers
-to enrich or transform the entire dataset before it is passed downstream.
+Before enqueueing, the trigger stores a frozen definition on the instance.
+Execution, resume, recovery, and replay reconstruct that definition rather
+than the editable CMS tree. Payload-bearing ``ExecutionTrace`` events are
+linked to action leases (execution occurrences) and record resolved inputs,
+writes, decisions, loop scopes, and outcomes. State and successor scheduling
+commit together under the lease. Retention redacts payloads and makes replay
+unavailable.
 
 Pausing and Reviving
 --------------------
@@ -191,12 +195,12 @@ Actions
 
 Concrete actions live in ``djangocms_automation.actions`` as proxy models of
 :class:`~djangocms_automation.models.BaseActionPluginModel`, overriding
-``perform(action, rows) -> rows``. Inputs are declared on the CMS plugin via
+``perform(context, inputs) -> dict``. Inputs are declared on the CMS plugin via
 a ``data_form``; entered values (expressions or ``{{ path }}`` templates)
 are persisted in the plugin's ``config`` JSON field and resolved against the
 automation data at runtime. Shipped actions:
 
-- **Send Email** — one email per data row via Django's email framework.
+- **Send Email** — one email per item via Django's email framework.
 - **Create/Update/Query Records** — Django model CRUD, gated by the
   ``AUTOMATION_ALLOWED_MODELS`` setting (deny-all by default).
 - **LLM Prompt** — provider-independent LLM completions via LiteLLM

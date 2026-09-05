@@ -1,4 +1,4 @@
-"""Email action: send one email per data row via Django's email framework."""
+"""Email action: send one email per item via Django's email framework."""
 
 from __future__ import annotations
 
@@ -42,53 +42,26 @@ class MailActionPluginModel(BaseActionPluginModel):
     ``body`` is a template rendered with ``{{ dotted.path }}``
     substitution against the current row.
 
-    Each output row is the input row plus a ``_mail`` entry recording the
-    send outcome. If every row fails, the action fails; partial failures
-    complete with per-row status.
+    Returns the named ``delivery`` result. The engine saves it in the selected
+    field while preserving the incoming item. Delivery errors fail the action.
     """
 
     class Meta:
         proxy = True
         app_label = "djangocms_automation"
 
-    def perform(self, action, rows: list) -> list:
-        if not rows:
-            rows = [{}]
-        output = []
-        errors = 0
-        for row in rows:
-            row = row if isinstance(row, dict) else {"value": row}
-            mail_status = {"sent": False, "recipient": None, "error": None}
-            try:
-                inputs = self.resolve_inputs(row, rows)
-                recipient = inputs.get("recipient_email")
-                if not recipient:
-                    raise ValueError("No recipient email resolved")
-                message = _compose(
-                    subject=str(inputs.get("subject") or ""),
-                    body=str(inputs.get("body") or ""),
-                    html=str(inputs.get("body_format") or "") == "html",
-                    from_email=inputs.get("from_email") or settings.DEFAULT_FROM_EMAIL,
-                    recipient=str(recipient),
-                )
-                message.send(fail_silently=False)
-                mail_status["sent"] = True
-                mail_status["recipient"] = str(recipient)
-            except Exception as exc:
-                errors += 1
-                # The type, not the message. This lands in the automation's own
-                # data, which travels — to the next action, into the run's
-                # record, and to a model when this action is somebody's tool —
-                # and a delivery error's text carries hosts, addresses and
-                # occasionally credentials. The message goes to the log.
-                logger.warning(
-                    "automation.mail.failed",
-                    exc_info=True,
-                    extra={"automation_action_id": getattr(action, "pk", None)},
-                )
-                mail_status["error"] = type(exc).__name__
-            output.append({**row, "_mail": mail_status})
-        if errors == len(output):
-            raise RuntimeError(f"Sending failed for all {errors} recipient(s): {output[0]['_mail']['error']}")
+    default_outputs = {"delivery": {"field": "delivery", "mode": "replace"}}
 
-        return output
+    def perform(self, context, inputs) -> dict:
+        recipient = inputs.get("recipient_email")
+        if not recipient:
+            raise ValueError("No recipient email resolved")
+        message = _compose(
+            subject=str(inputs.get("subject") or ""),
+            body=str(inputs.get("body") or ""),
+            html=str(inputs.get("body_format") or "") == "html",
+            from_email=inputs.get("from_email") or settings.DEFAULT_FROM_EMAIL,
+            recipient=str(recipient),
+        )
+        sent = message.send(fail_silently=False)
+        return {"delivery": {"sent": bool(sent), "recipient": str(recipient)}}

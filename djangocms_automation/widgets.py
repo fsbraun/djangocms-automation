@@ -255,6 +255,7 @@ class ConditionBuilderWidget(forms.Widget):
         container_id = hidden_attrs.get("id", name) + "_builder"
         operators = json.dumps([(key, str(value)) for key, value in self.operators], ensure_ascii=False)
         dataset = (
+            f'data-fields="{escape(json.dumps(getattr(self, "field_choices", {})))}" '
             f'data-operators="{escape(operators)}" '
             f'data-and-label="{escape(str(_("All of the following (AND)")))}" '
             f'data-or-label="{escape(str(_("Any of the following (OR)")))}"'

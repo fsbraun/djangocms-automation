@@ -77,13 +77,13 @@ def run_setup(automation_content, settings):
     return trigger, placeholder
 
 
-def test_normalize_rows():
-    assert engine.normalize_rows(None) == []
-    assert engine.normalize_rows([]) == []
-    assert engine.normalize_rows({}) == []
-    assert engine.normalize_rows({"a": 1}) == [{"a": 1}]
-    assert engine.normalize_rows([{"a": 1}, {"b": 2}]) == [{"a": 1}, {"b": 2}]
-    assert engine.normalize_rows("x") == [{"value": "x"}]
+def test_item_data():
+    assert engine.item_data(None) == {}
+    assert engine.item_data({}) == {}
+    assert engine.item_data({"a": [1, 2]}) == {"a": [1, 2]}
+    for value in ([], [{"a": 1}], "x"):
+        with pytest.raises(ValueError, match="one item"):
+            engine.item_data(value)
 
 
 @pytest.mark.django_db
@@ -142,7 +142,7 @@ def test_missing_plugin_fails_action_not_crash(run_setup):
 
     action.refresh_from_db()
     assert action.state == FAILED
-    assert "no longer exists" in action.result["error"]
+    assert "definition is unavailable" in action.result["error"]
     instance.refresh_from_db()
     assert instance.status == FAILED
     assert instance.finished is not None
@@ -171,7 +171,7 @@ def test_split_branch_failure_fails_split_and_instance(run_setup, settings):
     failing_model.config = {"subject": "'s'", "body": "b", "recipient_email": "missing"}
     failing_model.save()
 
-    trigger.trigger_execution(data=[{}], start=True)
+    trigger.trigger_execution(data={}, start=True)
 
     instance = trigger.automation_content.automationinstance_set.first()
     actions = AutomationAction.objects.filter(automation_instance=instance)
@@ -195,15 +195,15 @@ def test_split_join_merges_branch_outputs(run_setup, settings):
         )
         add_plugin(placeholder=placeholder, plugin_type="ActionPlugin", language=settings.LANGUAGE_CODE, target=path)
 
-    trigger.trigger_execution(data=[{"n": 1}], start=True)
+    trigger.trigger_execution(data={"n": 1}, start=True)
 
     instance = trigger.automation_content.automationinstance_set.first()
     actions = AutomationAction.objects.filter(automation_instance=instance)
     split_action = actions.filter(parent__isnull=True).first()
     assert split_action.state == COMPLETED
-    assert split_action.message == "Joined"
-    # Both branches passed [{"n": 1}] through; the join concatenates them.
-    assert split_action.result == [{"n": 1}, {"n": 1}]
+    assert split_action.message == "Joined paths"
+    # Neither branch wrote a field; the item is preserved once.
+    assert split_action.result == {"n": 1}
     instance.refresh_from_db()
     assert instance.status == COMPLETED
 
@@ -214,7 +214,7 @@ def test_pause_and_revive_roundtrip(run_setup, settings):
     add_plugin(placeholder=placeholder, plugin_type="ActionPlugin", language=settings.LANGUAGE_CODE)
 
     # Create the instance without starting it, then pause the action.
-    trigger.trigger_execution(data=[{"x": 1}], start=False)
+    trigger.trigger_execution(data={"x": 1}, start=False)
     instance = trigger.automation_content.automationinstance_set.first()
     action = AutomationAction.objects.get(automation_instance=instance)
     engine.pause_action(action, until=now() + datetime.timedelta(hours=1), message="later")
@@ -285,7 +285,7 @@ def test_execute_returning_failed_state_fails_run(run_setup, settings):
     trigger, placeholder = run_setup
     add_plugin(placeholder=placeholder, plugin_type="FailingStatePlugin", language=settings.LANGUAGE_CODE)
 
-    trigger.trigger_execution(data=[{}], start=True)
+    trigger.trigger_execution(data={}, start=True)
 
     instance = trigger.automation_content.automationinstance_set.first()
     action = AutomationAction.objects.get(automation_instance=instance)
@@ -311,7 +311,7 @@ def test_notify_parent_noop_when_parent_not_waiting(automation_content):
 def test_resume_action_rejects_non_interactive_and_double_resume(run_setup, admin_user, settings):
     trigger, placeholder = run_setup
     add_plugin(placeholder=placeholder, plugin_type="ActionPlugin", language=settings.LANGUAGE_CODE)
-    trigger.trigger_execution(data=[{}], start=True)
+    trigger.trigger_execution(data={}, start=True)
     instance = trigger.automation_content.automationinstance_set.first()
     action = AutomationAction.objects.get(automation_instance=instance)
 

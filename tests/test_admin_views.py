@@ -43,7 +43,7 @@ def waiting_action(automation_content, settings, admin_user):
     model = UserInputActionPluginModel.objects.get(pk=plugin.pk)
     model.config = {"note": "Please approve {{ subject }}", "permissions": ""}
     model.save()
-    trigger.trigger_execution(data=[{"subject": "order 42"}], start=True)
+    trigger.trigger_execution(data={"subject": "order 42"}, start=True)
     instance = automation_content.automationinstance_set.first()
     return AutomationAction.objects.get(automation_instance=instance)
 
@@ -103,7 +103,7 @@ def test_instance_admin_displays(automation_content, rf, admin_user):
     """is_success / data_display / error_message_display helpers."""
     admin_instance = AutomationInstanceAdmin(AutomationInstance, admin_site=None)
 
-    instance = AutomationInstance.objects.create(automation_content=automation_content, data=[{"x": 1}])
+    instance = AutomationInstance.objects.create(automation_content=automation_content, data={"x": 1})
 
     # No actions at all -> success (nothing failed, nothing running)
     assert admin_instance.is_success(instance) is True
@@ -120,7 +120,7 @@ def test_instance_admin_displays(automation_content, rf, admin_user):
     errors = admin_instance.error_message_display(instance)
     assert "boom" in errors and "tb..." in errors
 
-    empty = AutomationInstance.objects.create(automation_content=automation_content, data=[])
+    empty = AutomationInstance.objects.create(automation_content=automation_content, data={})
     assert admin_instance.data_display(empty) == "-"
     assert admin_instance.error_message_display(empty) == "-"
 
@@ -153,12 +153,12 @@ def test_run_now_starts_a_real_run(admin_client, runnable, automation_content):
     """The moment right after building one is the moment to try it."""
     response = admin_client.post(
         _run_url(automation_content),
-        {"trigger": runnable.pk, "data": '[{"subject": "order 42"}]'},
+        {"trigger": runnable.pk, "data": '{"subject": "order 42"}'},
     )
 
     assert response.status_code == 302
     instance = automation_content.automationinstance_set.get()
-    assert instance.initial_data == [{"subject": "order 42"}]
+    assert instance.initial_data == {"subject": "order 42"}
     assert AutomationAction.objects.filter(automation_instance=instance).exists(), "it actually ran"
     assert str(instance.pk) in response.url, "and lands on the run, not back where it started"
 
@@ -190,12 +190,12 @@ def test_run_now_refuses_data_the_real_entry_point_would(admin_client, runnable,
 
     response = admin_client.post(
         _run_url(automation_content),
-        {"trigger": runnable.pk, "data": '[{"nonsense": 1}]'},
+        {"trigger": runnable.pk, "data": '{"nonsense": 1}'},
     )
 
     assert response.status_code == 200, "redisplayed with the complaint"
     assert not automation_content.automationinstance_set.exists()
-    assert "Row 1" in response.content.decode()
+    assert "required property" in response.content.decode()
 
 
 @pytest.mark.django_db
@@ -215,7 +215,7 @@ def test_run_now_is_refused_to_someone_who_may_only_look(client, runnable, autom
     onlooker.user_permissions.add(Permission.objects.get(codename="view_automationtrigger"))
     client.force_login(onlooker)
 
-    response = client.post(_run_url(automation_content), {"trigger": runnable.pk, "data": '[{"subject": "order 42"}]'})
+    response = client.post(_run_url(automation_content), {"trigger": runnable.pk, "data": '{"subject": "order 42"}'})
 
     assert response.status_code == 403
     assert not automation_content.automationinstance_set.exists()
@@ -224,7 +224,7 @@ def test_run_now_is_refused_to_someone_who_may_only_look(client, runnable, autom
 @pytest.fixture
 def talked(automation_content):
     """An action carrying a conversation, as an AI step leaves one behind."""
-    instance = AutomationInstance.objects.create(automation_content=automation_content, data=[{}])
+    instance = AutomationInstance.objects.create(automation_content=automation_content, data={})
     return AutomationAction.objects.create(
         automation_instance=instance,
         plugin_ptr=uuid.uuid4(),
@@ -292,7 +292,7 @@ def test_a_models_words_are_printed_not_run(admin_client, talked):
 
 @pytest.mark.django_db
 def test_an_action_that_never_spoke_says_so(admin_client, automation_content):
-    instance = AutomationInstance.objects.create(automation_content=automation_content, data=[{}])
+    instance = AutomationInstance.objects.create(automation_content=automation_content, data={})
     silent = AutomationAction.objects.create(
         automation_instance=instance, plugin_ptr=uuid.uuid4(), state=COMPLETED, scratch={}
     )

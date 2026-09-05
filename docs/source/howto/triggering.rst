@@ -13,13 +13,13 @@ automation just after building it — every other entry point needs something
 outside the editor, which used to make the moment right after building one the
 one moment there was no way to run it.
 
-Choose the trigger, give it the items to start with as a JSON array, and it
+Choose the trigger, give it the item to start with as a JSON object, and it
 goes. This is a *real* run and not a rehearsal: mail is sent, records are
 written, and anything needing approval waits for a person under
 *Execution Instances → Open tasks*, exactly as it would have at three in the
 morning.
 
-The items are validated against the trigger's data schema before anything
+The item is validated against the trigger's data schema before anything
 starts, the same check an inbound webhook gets. A manual run that skipped it
 could pass data the real entry point refuses, and so report that an automation
 works when it does not.
@@ -40,8 +40,9 @@ Programmatically
 
 Fetch the trigger and call
 :meth:`~djangocms_automation.models.AutomationTrigger.trigger_execution`.
-Data is a batch: a list of JSON-serializable items with named fields. See the
-:doc:`../glossary` for the distinction between a batch and a list inside a field.
+Data is one JSON-serializable object with named fields. A list can be stored
+inside a field; top-level arrays and batch intake are rejected. See the
+:doc:`../glossary`.
 
 .. code-block:: python
 
@@ -52,7 +53,7 @@ Data is a batch: a list of JSON-serializable items with named fields. See the
         slot="start",
     )
     trigger.trigger_execution(
-        data=[{"first_name": "Alice", "email": "alice@example.com"}],
+        data={"first_name": "Alice", "email": "alice@example.com"},
         start=True,  # enqueue immediately; False defers to the scheduler
     )
 

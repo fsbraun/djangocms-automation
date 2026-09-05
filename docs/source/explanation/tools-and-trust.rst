@@ -160,12 +160,13 @@ An action can address the model on purpose. A validator raising ``ValidationErro
 is talking to whoever administers the automation; one raising ``ToolError`` is
 talking to the model, and that message is delivered as written. The same rule
 governs everything a call sends back — a raised exception, a failed action's
-output, the rows it returns.
+output, and the named results it returns.
 
-What a successful call returns follows from the same question. By default the
-model is told what the action *added*, not the rows it was given, because those
-rows are the automation's and may hold anything. An action whose answer is its
-rows says so with ``reports_to_model = "rows"``.
+A successful call reports only the named results returned by its ``perform``
+method. It does not report the surrounding item. A query explicitly returns a
+``records`` list; email returns ``delivery``. Results remain reportable even
+when they overwrite a field with an equal value. There is no diff-based guess
+about which data belongs to the action.
 
 What this does not protect against
 ----------------------------------

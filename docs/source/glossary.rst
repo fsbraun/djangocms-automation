@@ -1,9 +1,9 @@
 Glossary
 ========
 
-These terms are used throughout the documentation. The item-preserving behavior
-and editor labels described in :doc:`explanation/reading-an-automation` are the
-agreed design; that page also explains the current implementation differences.
+These terms describe the single-item engine and editor. See
+:doc:`explanation/reading-an-automation` for examples. Batch processing and
+batch intake are deferred; those terms reserve wording for later work.
 
 .. glossary::
    :sorted:
@@ -30,7 +30,7 @@ agreed design; that page also explains the current implementation differences.
 
    Item
       One unit of automation data, such as a request or order, containing named
-      fields. In the agreed design it retains its identity through ordinary
+      fields. It retains its identity through ordinary
       steps, and its fields are isolated from those of other items.
 
    Field
@@ -39,9 +39,9 @@ agreed design; that page also explains the current implementation differences.
       action's configuration field and from a CMS placeholder slot.
 
    Batch
-      A list of items processed together. It is distinct from a list stored
-      inside one item's field. Processing items together does not, by itself,
-      give them independent retry or failure handling.
+      A list of items processed together. Batch support is deferred from the
+      first item-engine refactor. A batch is distinct from a list stored inside
+      one item's field.
 
    List
       An ordered collection of values inside a field, such as an order's lines
@@ -50,10 +50,10 @@ agreed design; that page also explains the current implementation differences.
 
    Binding
       A saved selection connecting an action input to a source field or part of
-      a field. The planned editor label is **Use data from**.
+      a field. The editor label is **Use data from**.
 
    Output destination
-      The field in which an action saves its result. The planned editor label
+      The field in which an action saves its result. The editor label
       is **Save result in**, with **Replace value** or **Append to list** as
       write choices. Replacing a value changes that field, not the whole item.
 
@@ -62,21 +62,19 @@ agreed design; that page also explains the current implementation differences.
       shows particular values; it is not a guarantee of every future value.
 
    Parallel paths
-      Branches performing separate work on the same original item in the agreed
-      design. The existing plugin type is Split.
+      Branches performing separate work on the same original item in private copies. The plugin type is Split.
 
    Join paths
-      Reunite the work of branches of the same original item. The agreed design
-      distinguishes this from collecting different items. The current split
-      implementation instead concatenates its branch outputs.
+      Reunite explicit writes from branches of the same original item.
+      Distinct root fields are combined; writes to the same field conflict.
+      This is different from collecting independent items.
 
    Repeat while
       Repeat steps while a condition holds, carrying updated fields into the
-      next iteration. The agreed design gives each item its own loop state;
-      the current Loop plugin carries the entire batch.
+      next iteration, with a bounded number of iterations per instance.
 
    For each
-      Planned operation to repeat steps for entries in a list field within an
+      Repeat steps sequentially for captured entries in a list field within an
       item. It does not create independent items.
 
    Split into items
@@ -91,8 +89,15 @@ agreed design; that page also explains the current implementation differences.
       Where a value came from: its originating item and the step execution,
       branch, or loop iteration that produced it.
 
+   Execution occurrence
+      One lease-owned execution of an action, identified in trace events by its
+      lease UUID. Retries and continuations receive distinct occurrences.
+
+   Execution trace
+      Append-only evidence connecting a frozen definition to recorded inputs,
+      decisions, writes, outcomes, and execution scopes. Retention deliberately
+      removes payloads and leaves a visible redaction marker.
+
    Row
-      The existing Python API term for an item, also useful when displaying
-      items in a table. It does not mean a database record unless explicitly
-      described as a database row. Existing identifiers such as ``rows`` remain
-      unchanged.
+      A visual table row or database record, depending on context. The execution
+      API uses a single item object, not a list of rows.

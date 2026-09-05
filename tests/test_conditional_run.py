@@ -83,7 +83,7 @@ def test_conditional_routes_matching_branch(run_setup, settings, score, expect_c
     trigger, placeholder = run_setup
     conditional, then_action, else_action, follow_up = _build_conditional(placeholder, settings, CONDITION)
 
-    trigger.trigger_execution(data=[{"score": score}], start=True)
+    trigger.trigger_execution(data={"score": score}, start=True)
 
     instance = trigger.automation_content.automationinstance_set.first()
     actions = AutomationAction.objects.filter(automation_instance=instance)
@@ -113,7 +113,7 @@ def test_conditional_routes_matching_branch(run_setup, settings, score, expect_c
     instance.refresh_from_db()
     assert instance.status == COMPLETED
     # Branch output (pass-through of the input rows) flowed to the follow-up.
-    assert instance.data == [{"score": score}]
+    assert instance.data == {"score": score}
 
 
 @pytest.mark.django_db
@@ -122,7 +122,7 @@ def test_conditional_missing_branch_passes_through(run_setup, settings):
     # No Else branch; condition is false -> pass-through to follow-up.
     _build_conditional(placeholder, settings, CONDITION, with_else=False)
 
-    trigger.trigger_execution(data=[{"score": 1}], start=True)
+    trigger.trigger_execution(data={"score": 1}, start=True)
 
     instance = trigger.automation_content.automationinstance_set.first()
     actions = AutomationAction.objects.filter(automation_instance=instance)
@@ -131,7 +131,7 @@ def test_conditional_missing_branch_passes_through(run_setup, settings):
     assert all(a.state == COMPLETED for a in actions)
     instance.refresh_from_db()
     assert instance.status == COMPLETED
-    assert instance.data == [{"score": 1}]
+    assert instance.data == {"score": 1}
 
 
 @pytest.mark.django_db
@@ -157,7 +157,7 @@ def test_conditional_failing_branch_fails_conditional_and_instance(run_setup, se
     failing_model.config = {"subject": "'s'", "body": "b", "recipient_email": "missing"}
     failing_model.save()
 
-    trigger.trigger_execution(data=[{"score": 99}], start=True)  # condition true -> Then branch
+    trigger.trigger_execution(data={"score": 99}, start=True)  # condition true -> Then branch
 
     instance = trigger.automation_content.automationinstance_set.first()
     actions = AutomationAction.objects.filter(automation_instance=instance)

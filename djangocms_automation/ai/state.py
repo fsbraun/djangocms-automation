@@ -73,11 +73,10 @@ class AgentState:
         wholesale would lose both, and a step that forgets it was called as a
         tool answers into nothing.
         """
-        from djangocms_automation.instances import AutomationAction
+        from ..execution import save_working_state
 
         payload = {**(action.scratch or {}), **asdict(self)}
-        AutomationAction.objects.filter(pk=action.pk).update(scratch=payload)
-        action.scratch = payload
+        save_working_state(action, payload)
 
     # -- the conversation --------------------------------------------------
 

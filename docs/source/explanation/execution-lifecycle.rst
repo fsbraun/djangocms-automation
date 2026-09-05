@@ -106,7 +106,7 @@ therefore finds an action that is no longer ``PENDING`` and becomes a no-op.
 Successful execution
 --------------------
 
-The plugin receives a normalized batch of items (``rows`` in the Python API)
+The plugin receives one JSON object (the item)
 and returns a state and output. For an ordinary successful node, the engine
 records ``COMPLETED`` and creates the next
 action or actions. The output becomes their input. When a completed root chain

@@ -47,6 +47,17 @@ class AutomationPlugin(CMSPluginBase):
     allowed_models = ["djangocms_automation.AutomationContent"]
     icon = None
 
+    def get_form(self, request, obj=None, **kwargs):
+        from .data_editor import DataInputWidget, available_fields
+
+        form = super().get_form(request, obj, **kwargs)
+        choices = available_fields(obj)
+        if "iterable" in form.base_fields:
+            form.base_fields["iterable"].widget = DataInputWidget(choices.items())
+        if "condition" in form.base_fields:
+            form.base_fields["condition"].widget.field_choices = choices
+        return form
+
     def __str__(self):
         """The plugin's name, resolved.
 
@@ -59,12 +70,15 @@ class AutomationPlugin(CMSPluginBase):
         return str(self.name)
 
     def render(self, context, instance, placeholder):
+        from .data_editor import data_summary
+
         context.update(
             {
                 "title": self.name,
                 "instance": instance,
                 "icon": self.icon,
                 "end": any(plugin.plugin_type == "EndModifier" for plugin in instance.child_plugin_instances or []),
+                "data_summary": data_summary(instance),
             }
         )
         return context
@@ -122,7 +136,7 @@ class ElsePlugin(AutomationPlugin):
 
 @register_automation_plugin
 class AutomationLoop(AutomationPlugin):
-    name = _("Loop")
+    name = _("Repeat while")
     module = Module.FLOW
     icon = "bi-arrow-repeat"
     model = models.LoopPluginModel
@@ -159,8 +173,18 @@ class AutomationLoop(AutomationPlugin):
 
 
 @register_automation_plugin
+class AutomationForEach(AutomationLoop):
+    name = _("For each")
+    fieldsets = (
+        (_("Intent"), {"fields": ("intent",)}),
+        (_("List"), {"fields": ("iterable", "max_iterations")}),
+        (_("Comment"), {"fields": ("comment",)}),
+    )
+
+
+@register_automation_plugin
 class AutomationSplit(AutomationPlugin):
-    name = _("Split")
+    name = _("Parallel paths")
     module = Module.FLOW
     model = models.SplitPluginModel
     render_template = "djangocms_automation/plugins/split.html"
@@ -220,21 +244,6 @@ class ActionPlugin(AutomationPlugin):
     #: It sets the automatic approval gate when the action is used as a tool.
     destructive = False
 
-    #: What a model is told this action returned, when it is used as a tool.
-    #:
-    #: ``"changes"`` — only what the action added to the rows it was handed.
-    #: The default, and the safe one: most actions pass their input through and
-    #: add a field, so reporting the rows would hand back whatever the
-    #: automation happens to be carrying.
-    #:
-    #: ``"rows"`` — the rows themselves, for an action whose answer *is* data.
-    #: A lookup has to say this, or it reports nothing worth having.
-    #:
-    #: Cardinality cannot tell the two apart — an action that filters its input
-    #: returns fewer rows without having produced any, and a lookup can return
-    #: exactly as many as it was given — so the action says which it is.
-    reports_to_model = "changes"
-
     #: Whether an editor may offer this action to a model. True for everything
     #: by default: an action is a capability, and which capabilities an agent is
     #: given is the editor's decision rather than the author's. Set False for an
@@ -246,12 +255,34 @@ class ActionPlugin(AutomationPlugin):
     tool_fields = ("tool_name", "tool_description", "requires_approval")
     fieldsets = [
         (_("Intent"), {"fields": ("intent",)}),
+        (_("Output"), {"fields": ("outputs",)}),
         (_("Comment"), {"classes": ("collapse",), "fields": ("comment",)}),
     ]
 
     def get_form(self, request, obj=None, **kwargs):
         """Use data_form if defined for additional data fields."""
         data_form_fields = self.get_data_form_fields(request, obj)
+        from .data_editor import DataInputWidget, OutputWidget, available_fields, validate_outputs
+
+        choices = available_fields(obj)
+        for name, field in data_form_fields.items():
+            if (
+                name.startswith(self.MODEL_FILLS)
+                or name in self.model.literal_fields
+                or not isinstance(field, django_forms.CharField)
+            ):
+                continue
+            template = isinstance(field.widget, django_forms.Textarea)
+            if self.convert_data_form or template:
+                field.widget = DataInputWidget(choices.items(), template=template)
+        outputs = (obj.outputs or obj.default_outputs) if obj else self.model.default_outputs
+        data_form_fields["outputs"] = django_forms.JSONField(
+            label=_("Save result in"),
+            required=False,
+            initial=outputs,
+            validators=[validate_outputs],
+            widget=OutputWidget(self.model.default_outputs, choices.items()),
+        )
         data_form_fields["Media"] = type(
             "Media", (), {"js": (), "css": {"all": ("djangocms_automation/css/plugin_data_form.css",)}}
         )
@@ -415,6 +446,7 @@ class ActionPlugin(AutomationPlugin):
         sent nothing.
         """
         exposed = []
+        obj.outputs = form.cleaned_data.get("outputs") or {}
         if self.data_form:
             if self.is_tool(request, obj):
                 exposed = [
@@ -427,6 +459,15 @@ class ActionPlugin(AutomationPlugin):
                 if f_name in form.cleaned_data and f_name not in exposed
             }
         super().save_model(request, obj, form, change)
+        content = getattr(obj.placeholder, "source", None)
+        if isinstance(content, models.AutomationContent):
+            fields = dict(content.data_fields or {})
+            for binding in (obj.outputs or obj.default_outputs).values():
+                if binding is None:
+                    continue
+                key = binding["field"]
+                fields.setdefault(key, {"label": key})
+            models.AutomationContent.objects.filter(pk=content.pk).update(data_fields=fields)
 
     def get_fieldsets(self, request, obj=None):
         """Return fieldsets including data_form fields if defined."""
@@ -535,7 +576,6 @@ class UpdateModelAction(ActionPlugin):
 @register_automation_plugin
 class QueryModelAction(ActionPlugin):
     name = _("Query Records")
-    reports_to_model = "rows"  # the records found are the answer
     module = Module.ACTION
     icon = "bi-database-down"
 

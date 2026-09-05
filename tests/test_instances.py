@@ -58,7 +58,7 @@ def test_automation_instance_key_and_str(automation_content):
 
     # Nor does it collide. It used to: a run never saved a second time kept
     # sha1("<automation>-None"), the same string for every such run.
-    second = AutomationInstance.objects.create(automation_content=automation_content, data=[])
+    second = AutomationInstance.objects.create(automation_content=automation_content, data={})
     assert second.key != inst.key
     # A run is named for a person reading a page, not for a shell.
     s = str(inst)

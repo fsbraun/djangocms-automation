@@ -237,7 +237,7 @@ class TestRenamingATrigger:
         trigger.slot = "kickoff"
         trigger.save()
 
-        instance = trigger.trigger_execution(data=[{"seed": 1}], start=False)
+        instance = trigger.trigger_execution(data={"seed": 1}, start=False)
         assert instance is not None, "the plugins are still found"
 
     def test_saving_without_renaming_leaves_the_placeholder_alone(self, trigger):

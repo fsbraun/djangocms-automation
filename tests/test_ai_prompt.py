@@ -205,15 +205,15 @@ def test_llm_action_renders_prompt_and_outputs_text_row(run_setup, llm_settings)
         return make_response("positive")
 
     with mock.patch.object(llm, "_get_litellm", return_value=make_fake_litellm(completion)):
-        trigger.trigger_execution(data=[{"text": "I love this"}], start=True)
+        trigger.trigger_execution(data={"text": "I love this"}, start=True)
 
     assert seen["messages"][1]["content"] == "Classify: I love this"
     action = AutomationAction.objects.get(
         automation_instance=trigger.automation_content.automationinstance_set.first()
     )
     assert action.state == COMPLETED
-    assert action.result[0]["text"] == "positive"
-    assert action.result[0]["usage"]["input_tokens"] == 10
+    assert action.result["answer"]["text"] == "positive"
+    assert action.result["answer"]["usage"]["input_tokens"] == 10
 
 
 @pytest.mark.django_db
@@ -234,13 +234,13 @@ def test_llm_action_schema_list_becomes_rows(run_setup, llm_settings):
         return make_response('[{"sku": "A"}, {"sku": "B"}]')
 
     with mock.patch.object(llm, "_get_litellm", return_value=make_fake_litellm(completion)):
-        trigger.trigger_execution(data=[], start=True)
+        trigger.trigger_execution(data={}, start=True)
 
     action = AutomationAction.objects.get(
         automation_instance=trigger.automation_content.automationinstance_set.first()
     )
     assert action.state == COMPLETED
-    assert action.result == [{"sku": "A"}, {"sku": "B"}]
+    assert action.result["answer"] == [{"sku": "A"}, {"sku": "B"}]
 
 
 @pytest.mark.django_db
@@ -256,7 +256,7 @@ def test_llm_action_rate_limit_pauses_action(run_setup, llm_settings):
         raise FakeRateLimitError()
 
     with mock.patch.object(llm, "_get_litellm", return_value=make_fake_litellm(completion)):
-        trigger.trigger_execution(data=[], start=True)
+        trigger.trigger_execution(data={}, start=True)
 
     action = AutomationAction.objects.get(
         automation_instance=trigger.automation_content.automationinstance_set.first()
@@ -280,7 +280,7 @@ def test_llm_action_api_error_fails_action(run_setup, llm_settings):
         raise RuntimeError("provider exploded")
 
     with mock.patch.object(llm, "_get_litellm", return_value=make_fake_litellm(completion)):
-        trigger.trigger_execution(data=[], start=True)
+        trigger.trigger_execution(data={}, start=True)
 
     instance = trigger.automation_content.automationinstance_set.first()
     action = AutomationAction.objects.get(automation_instance=instance)
@@ -305,7 +305,7 @@ def test_llm_action_gives_up_after_max_retries(run_setup, llm_settings):
         raise FakeRateLimitError()
 
     with mock.patch.object(llm, "_get_litellm", return_value=make_fake_litellm(completion)):
-        trigger.trigger_execution(data=[], start=True)
+        trigger.trigger_execution(data={}, start=True)
         instance = trigger.automation_content.automationinstance_set.first()
         action = AutomationAction.objects.get(automation_instance=instance)
         # Re-run the paused action until the retry budget is exhausted.

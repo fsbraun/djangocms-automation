@@ -178,7 +178,7 @@ class TestFormBuilderActionExecute:
         # Flat, so an editor writing ``{{ email }}`` finds it. Nested under a
         # ``data`` key it was unreachable: a template already exposes the row
         # list as ``data``, so the payload's own key was shadowed.
-        assert instance.initial_data == [{"name": "Alice", "email": "alice@example.com", "user_id": admin_user.pk}]
+        assert instance.initial_data == {"name": "Alice", "email": "alice@example.com", "user_id": admin_user.pk}
         run_action = AutomationAction.objects.get(automation_instance=instance)
         assert run_action.state == COMPLETED
         assert trigger.automation_content == content
@@ -220,4 +220,4 @@ class TestFormBuilderActionExecute:
             action.execute(form, request)
 
         instance = content.automationinstance_set.first()
-        assert instance.initial_data[0]["user_id"] is None
+        assert instance.initial_data["user_id"] is None

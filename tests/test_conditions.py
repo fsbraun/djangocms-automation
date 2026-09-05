@@ -4,7 +4,7 @@ import pytest
 
 from djangocms_automation.utilities.conditions import evaluate
 
-DATA = [{"status": "active", "count": 5, "name": "Alice", "tags": ["a", "b"]}]
+DATA = {"status": "active", "count": 5, "name": "Alice", "tags": ["a", "b"]}
 
 
 @pytest.mark.parametrize(
@@ -72,7 +72,7 @@ def test_missing_field_is_falsy():
 
 def test_full_data_accessible_via_data_key():
     condition = {"logic": "and", "conditions": [{"field": "data.0.name", "operator": "==", "value": "'Alice'"}]}
-    assert evaluate(condition, DATA) is True
+    assert evaluate(condition, {"data": [DATA]}) is True
 
 
 @pytest.mark.parametrize("condition", [None, {}, {"conditions": []}, "", "not json"])
@@ -87,7 +87,7 @@ def test_json_string_condition():
 
 def test_empty_data():
     condition = {"logic": "and", "conditions": [{"field": "status", "operator": "==", "value": "'active'"}]}
-    assert evaluate(condition, []) is False
+    assert evaluate(condition, {}) is False
 
 
 @pytest.mark.parametrize(
@@ -110,7 +110,7 @@ def test_empty_data():
     ],
 )
 def test_operator_edges(field, operator, value, expected):
-    data = [{"status": "active", "count": 5, "name": "Alice", "flag": True}]
+    data = {"status": "active", "count": 5, "name": "Alice", "flag": True}
     cond = {"field": field, "value": value}
     if operator is not None:
         cond["operator"] = operator
@@ -118,6 +118,7 @@ def test_operator_edges(field, operator, value, expected):
     assert evaluate(condition, data) is expected
 
 
-def test_non_dict_first_row_uses_empty_context():
+def test_non_object_item_is_rejected():
     condition = {"logic": "and", "conditions": [{"field": "data.0", "operator": "==", "value": "'x'"}]}
-    assert evaluate(condition, ["x"]) is True
+    with pytest.raises(ValueError, match="one item"):
+        evaluate(condition, ["x"])

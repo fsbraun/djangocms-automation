@@ -43,11 +43,11 @@ class AtomicProbeModel(BaseActionPluginModel):
         proxy = True
         app_label = "djangocms_automation"
 
-    def perform(self, action, rows):
+    def perform(self, context, inputs):
         from django.db import connection
 
         PROBE["in_atomic_block"] = connection.in_atomic_block
-        return rows
+        return {}
 
 
 @plugin_pool.register_plugin
@@ -96,7 +96,7 @@ def setup(automation_content, durable):
 def test_enqueue_persists_and_does_not_execute_inline(setup):
     """The defining property of a durable backend: enqueue is not execution."""
     trigger, _placeholder = setup
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     assert QueuedTask.objects.filter(state=READY).count() == 1
     action = AutomationAction.objects.latest("id")
@@ -106,7 +106,7 @@ def test_enqueue_persists_and_does_not_execute_inline(setup):
 @pytest.mark.django_db(transaction=True)
 def test_worker_drains_the_queue_and_completes_the_run(setup):
     trigger, _placeholder = setup
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     call_command("runworker", "--once")
 
@@ -126,7 +126,7 @@ def test_rolled_back_transaction_enqueues_nothing(setup):
         pass
 
     with pytest.raises(Rollback), transaction.atomic():
-        trigger.trigger_execution(data=[{"seed": 1}])
+        trigger.trigger_execution(data={"seed": 1})
         raise Rollback
 
     assert QueuedTask.objects.count() == 0
@@ -137,7 +137,7 @@ def test_rolled_back_transaction_enqueues_nothing(setup):
 def test_a_killed_worker_releases_its_task(setup):
     """A claimed task whose lease expired returns to the queue for another worker."""
     trigger, _placeholder = setup
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     task_row = QueuedTask.objects.get()
     QueuedTask.objects.filter(pk=task_row.pk).update(
@@ -159,7 +159,7 @@ def test_a_killed_worker_releases_its_task(setup):
 def test_a_live_claim_is_not_stolen(setup):
     """Release must only reclaim expired leases, never a task in progress."""
     trigger, _placeholder = setup
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
     QueuedTask.objects.update(state=RUNNING, worker_id="busy", claimed_until=now() + datetime.timedelta(minutes=5))
     assert QueuedTask.release_expired() == 0
 
@@ -168,7 +168,7 @@ def test_a_live_claim_is_not_stolen(setup):
 def test_two_workers_do_not_execute_the_same_task(setup):
     """Claiming is exclusive: the second worker finds nothing to do."""
     trigger, _placeholder = setup
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     first = QueuedTask.claim_next(["default"], "worker-a")
     assert first is not None
@@ -179,7 +179,7 @@ def test_two_workers_do_not_execute_the_same_task(setup):
 @pytest.mark.django_db(transaction=True)
 def test_deferred_tasks_do_not_run_before_they_are_due(setup):
     trigger, _placeholder = setup
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
     QueuedTask.objects.update(run_after=now() + datetime.timedelta(hours=1))
 
     assert QueuedTask.claim_next(["default"], "worker-a") is None
@@ -188,7 +188,7 @@ def test_deferred_tasks_do_not_run_before_they_are_due(setup):
 @pytest.mark.django_db(transaction=True)
 def test_finished_task_rows_can_be_purged(setup):
     trigger, _placeholder = setup
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
     call_command("runworker", "--once")
 
     QueuedTask.objects.update(finished_at=now() - datetime.timedelta(days=30))
@@ -246,7 +246,7 @@ def test_reference_webhook_ingest_runs_end_to_end(reference_setup, durable, mail
     from django.contrib.auth import get_user_model
 
     trigger.trigger_execution(
-        data=[{"username": "ingested", "email": "ingested@example.com"}],
+        data={"username": "ingested", "email": "ingested@example.com"},
         idempotency_key="ORDER-1",
     )
     call_command("runworker", "--once")
@@ -264,7 +264,7 @@ def test_reference_webhook_ingest_is_idempotent(reference_setup, durable):
     add_plugin(placeholder=placeholder, plugin_type="ActionPlugin", language=durable.LANGUAGE_CODE)
 
     for _ in range(2):
-        trigger.trigger_execution(data=[{"reference": "R-1"}], idempotency_key="R-1")
+        trigger.trigger_execution(data={"reference": "R-1"}, idempotency_key="R-1")
 
     assert AutomationInstance.objects.filter(idempotency_key="R-1").count() == 1
 
@@ -306,7 +306,7 @@ def test_reference_digest_queries_then_mails(automation_content, durable, mailou
         language=durable.LANGUAGE_CODE,
         config={
             "subject": '"Digest"',
-            "body": "Latest: {{ username }}",
+            "body": "Latest: {{ records }}",
             "recipient_email": '"editors@example.com"',
         },
     )
@@ -345,7 +345,7 @@ def test_a_failing_task_is_recorded_and_does_not_kill_the_worker(setup):
     """One bad task must not take the worker down, and must leave a trace."""
     queue_a_task(task_path="djangocms_automation.does_not_exist.nope")
     trigger, _placeholder = setup
-    trigger.trigger_execution(data=[{"seed": 1}])  # a good task behind the bad one
+    trigger.trigger_execution(data={"seed": 1})  # a good task behind the bad one
 
     call_command("runworker", "--once")
 
@@ -418,7 +418,7 @@ def test_the_worker_does_not_wrap_a_task_in_a_transaction(automation_content, du
     add_plugin(placeholder=placeholder, plugin_type="AtomicProbePlugin", language=durable.LANGUAGE_CODE)
 
     PROBE.clear()
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
     call_command("runworker", "--once")
 
     assert PROBE.get("in_atomic_block") is False, "the worker held a transaction around the task"

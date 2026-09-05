@@ -3,6 +3,14 @@ body {
     background: var(--dca-white);
 }
 
+.automation-data-summary {
+    margin: .5rem 0;
+    font-size: .85em;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+    color: var(--dca-gray);
+}
+
 .automation-container {
     .title-block {
         position: absolute;

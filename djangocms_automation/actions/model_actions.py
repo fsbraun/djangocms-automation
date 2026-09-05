@@ -126,7 +126,7 @@ class QueryModelActionForm(ModelActionBaseForm):
     fields = forms.CharField(
         label=_("Fields"),
         required=False,
-        help_text=_("Comma-separated field names to include in the output rows. Empty includes all fields."),
+        help_text=_("Comma-separated field names to include in the returned records. Empty includes all fields."),
     )
     order_by = forms.CharField(label=_("Order by"), required=False)
     limit = forms.IntegerField(
@@ -146,25 +146,20 @@ class CreateModelActionModel(BaseActionPluginModel):
     #: what a model supplies is the value itself. See
     #: :class:`~djangocms_automation.utilities.expressions.Literal`.
     expression_mappings = frozenset({"field_mapping"})
+    default_outputs = {"id": {"field": "created_id"}}
+    literal_fields = frozenset({"model"})
 
     class Meta:
         proxy = True
         app_label = "djangocms_automation"
 
-    def perform(self, action, rows: list) -> list:
-        model = get_allowed_model((self.config or {}).get("model"))
-        mapping = (self.config or {}).get("field_mapping") or {}
-        _validate_model_fields(model, mapping.keys())
-        rows = rows or [{}]
-        output = []
+    def perform(self, context, inputs) -> dict:
+        model = get_allowed_model(inputs.get("model"))
+        values = inputs.get("field_mapping") or {}
+        _validate_model_fields(model, values)
         with transaction.atomic():
-            for row in rows:
-                row = row if isinstance(row, dict) else {"value": row}
-                context = {**row, "data": rows}
-                values = _resolve_mapping(mapping, context)
-                obj = model.objects.create(**values)
-                output.append({**row, "_created_id": obj.pk})
-        return output
+            obj = model.objects.create(**values)
+        return {"id": obj.pk}
 
 
 class UpdateModelActionModel(BaseActionPluginModel):
@@ -175,59 +170,49 @@ class UpdateModelActionModel(BaseActionPluginModel):
     #: what a model supplies is the value itself. See
     #: :class:`~djangocms_automation.utilities.expressions.Literal`.
     expression_mappings = frozenset({"filters", "field_mapping"})
+    default_outputs = {"count": {"field": "updated_count"}}
+    literal_fields = frozenset({"model"})
 
     class Meta:
         proxy = True
         app_label = "djangocms_automation"
 
-    def perform(self, action, rows: list) -> list:
-        model = get_allowed_model((self.config or {}).get("model"))
-        filters = (self.config or {}).get("filters") or {}
-        mapping = (self.config or {}).get("field_mapping") or {}
+    def perform(self, context, inputs) -> dict:
+        model = get_allowed_model(inputs.get("model"))
+        filters = inputs.get("filters") or {}
+        values = inputs.get("field_mapping") or {}
         if not filters:
-            raise ValueError("Refusing to update without filters (would affect every row).")
-        _validate_model_fields(model, filters.keys(), lookups=True)
-        _validate_model_fields(model, mapping.keys())
-        rows = rows or [{}]
-        output = []
+            raise ValueError("Refusing to update without filters.")
+        _validate_model_fields(model, filters, lookups=True)
+        _validate_model_fields(model, values)
         with transaction.atomic():
-            for row in rows:
-                row = row if isinstance(row, dict) else {"value": row}
-                context = {**row, "data": rows}
-                count = model.objects.filter(**_resolve_mapping(filters, context)).update(
-                    **_resolve_mapping(mapping, context)
-                )
-                output.append({**row, "_updated": count})
-        return output
+            count = model.objects.filter(**filters).update(**values)
+        return {"count": count}
 
 
 class QueryModelActionModel(BaseActionPluginModel):
-    """Query model instances and emit them as data rows (per run)."""
+    """Query model instances and return them as the records list result."""
 
     #: Config keys holding a mapping whose *values* are expressions rather than
     #: values. What an editor writes there is a path into the automation's data;
     #: what a model supplies is the value itself. See
     #: :class:`~djangocms_automation.utilities.expressions.Literal`.
     expression_mappings = frozenset({"filters"})
+    default_outputs = {"records": {"field": "records"}}
+    literal_fields = frozenset({"model", "fields", "order_by", "limit"})
 
     class Meta:
         proxy = True
         app_label = "djangocms_automation"
 
-    def perform(self, action, rows: list) -> list:
-        config = self.config or {}
-        model = get_allowed_model(config.get("model"))
-        filters = config.get("filters") or {}
-        _validate_model_fields(model, filters.keys(), lookups=True)
-
-        first_row = rows[0] if rows and isinstance(rows[0], dict) else {}
-        context = {**first_row, "data": rows or []}
-        queryset = model.objects.all()
-        if filters:
-            queryset = queryset.filter(**_resolve_mapping(filters, context))
-        order_by = (config.get("order_by") or "").strip()
+    def perform(self, context, inputs) -> dict:
+        model = get_allowed_model(inputs.get("model"))
+        filters = inputs.get("filters") or {}
+        _validate_model_fields(model, filters, lookups=True)
+        queryset = model.objects.filter(**filters)
+        order_by = (inputs.get("order_by") or "").strip()
         if order_by:
             queryset = queryset.order_by(*[part.strip() for part in order_by.split(",") if part.strip()])
-        limit = min(int(config.get("limit") or 100), MAX_QUERY_LIMIT)
-        field_names = [part.strip() for part in (config.get("fields") or "").split(",") if part.strip()]
-        return [model_to_row(obj, field_names or None) for obj in queryset[:limit]]
+        limit = min(int(inputs.get("limit") or 100), MAX_QUERY_LIMIT)
+        field_names = [part.strip() for part in (inputs.get("fields") or "").split(",") if part.strip()]
+        return {"records": [model_to_row(obj, field_names or None) for obj in queryset[:limit]]}

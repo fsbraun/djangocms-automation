@@ -44,7 +44,7 @@ def mail_setup(automation_content, settings):
 
 
 @pytest.mark.django_db
-def test_mail_action_sends_per_row(mail_setup, settings):
+def test_mail_action_sends_per_instance(mail_setup, settings):
     trigger, placeholder = mail_setup
     plugin = add_plugin(
         placeholder=placeholder,
@@ -60,13 +60,11 @@ def test_mail_action_sends_per_row(mail_setup, settings):
     }
     model.save()
 
-    trigger.trigger_execution(
-        data=[
-            {"name": "Alice", "email": "alice@example.com", "order_id": 1},
-            {"name": "Bob", "email": "bob@example.com", "order_id": 2},
-        ],
-        start=True,
-    )
+    for item in (
+        {"name": "Alice", "email": "alice@example.com", "order_id": 1},
+        {"name": "Bob", "email": "bob@example.com", "order_id": 2},
+    ):
+        trigger.trigger_execution(data=item)
 
     assert len(mail.outbox) == 2
     assert mail.outbox[0].subject == "Welcome"
@@ -79,12 +77,12 @@ def test_mail_action_sends_per_row(mail_setup, settings):
     action = AutomationAction.objects.get(automation_instance=instance)
     assert action.state == COMPLETED
     # Output rows carry the per-row mail status.
-    assert all(row["_mail"]["sent"] for row in action.result)
+    assert action.result["delivery"]["sent"]
     assert instance.status == COMPLETED
 
 
 @pytest.mark.django_db
-def test_mail_action_partial_failure_completes(mail_setup, settings):
+def test_mail_action_failure_is_isolated_between_instances(mail_setup, settings):
     trigger, placeholder = mail_setup
     plugin = add_plugin(
         placeholder=placeholder,
@@ -99,20 +97,17 @@ def test_mail_action_partial_failure_completes(mail_setup, settings):
     }
     model.save()
 
-    trigger.trigger_execution(
-        data=[
-            {"name": "NoMail"},  # no email key -> row fails
-            {"name": "Bob", "email": "bob@example.com"},
-        ],
-        start=True,
-    )
+    trigger.trigger_execution(data={"name": "NoMail"})
+    failed = AutomationAction.objects.latest("pk")
+    assert failed.state == FAILED
+    trigger.trigger_execution(data={"name": "Bob", "email": "bob@example.com"})
 
     assert len(mail.outbox) == 1
     instance = trigger.automation_content.automationinstance_set.first()
     action = AutomationAction.objects.get(automation_instance=instance)
-    assert action.state == COMPLETED
-    statuses = [row["_mail"]["sent"] for row in action.result]
-    assert statuses == [False, True]
+    assert action.state == FAILED
+    assert AutomationAction.objects.latest("pk").state == COMPLETED
+    assert AutomationAction.objects.latest("pk").result["delivery"]["sent"]
 
 
 @pytest.mark.django_db
@@ -131,7 +126,7 @@ def test_mail_action_total_failure_fails_action_and_instance(mail_setup, setting
     }
     model.save()
 
-    trigger.trigger_execution(data=[{"name": "NoMail"}], start=True)
+    trigger.trigger_execution(data={"name": "NoMail"}, start=True)
 
     assert len(mail.outbox) == 0
     instance = trigger.automation_content.automationinstance_set.first()
@@ -166,7 +161,7 @@ def test_an_html_body_arrives_in_both_forms(mail_setup, settings):
         },
     )
 
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     sent = mail.outbox[-1]
     assert sent.body == "Hello Ada", "the text part, derived rather than asked for twice"
@@ -184,7 +179,7 @@ def test_a_plain_body_stays_one_part(mail_setup, settings):
         {"recipient_email": "'to@example.com'", "subject": "'Digest'", "body": "Hello <not markup>"},
     )
 
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     sent = mail.outbox[-1]
     assert sent.body == "Hello <not markup>"

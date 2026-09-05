@@ -1,0 +1,5 @@
+{% extends "djangocms_frontend/admin/base.html" %}
+{% load admin_modify %}
+
+{# A trigger is an admin object, not a CMS plugin: use its own action URLs. #}
+{% block submit_buttons_bottom %}{% submit_row %}{% endblock %}

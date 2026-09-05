@@ -304,11 +304,11 @@ class AIStepPluginModel(BaseActionPluginModel):
             current = started_by
         return depth
 
+    default_outputs = {"answer": {"field": "answer"}}
+    literal_fields = frozenset({"model", "output_schema", "answer_format"})
+
     def do_work(self, action, data, single_step=False, plugin_dict=None):
         """Take one turn."""
-        from ..utilities.templates import safe_render
-
-        config = self.config or {}
         tools = self._tools()
 
         # An AI step is an action, so it can be a tool of another AI step. Each
@@ -324,17 +324,37 @@ class AIStepPluginModel(BaseActionPluginModel):
         if children.filter(finished__isnull=True).exists():
             return WAITING, {"turn": state.turn}
 
+        from ..execution import item_data, save_working_state
+
+        scratch = dict(action.scratch or {})
+        data = item_data(scratch.get("tool_item", data))
+        applied = set(scratch.get("applied_tools", []))
+        writes = dict(scratch.get("tool_writes", {}))
+        owners = {}
+        for child in children.order_by("pk"):
+            if child.pk in applied:
+                continue
+            for field, write in child.writes.items():
+                if field in owners:
+                    raise ValueError(f"Parallel tool calls both write field '{field}'. Use separate destinations.")
+                owners[field] = child.pk
+                data[field] = child.result[field]
+                writes[field] = write
+            applied.add(child.pk)
+        if applied:
+            save_working_state(
+                action, {**scratch, "tool_item": data, "tool_writes": writes, "applied_tools": sorted(applied)}
+            )
+        _execution_context, inputs = self.execution_inputs(action, data)
+        config = {**(self.config or {}), **inputs}
         budget = self.budget()
         if state.turn == 0:
-            rows = data or []
-            row = rows[0] if rows and isinstance(rows[0], dict) else {}
-            context = {**row, "data": rows}
             state.started_at = now().isoformat()
             # Recorded with the conversation, not looked up beside it later.
             state.answer_format = str(config.get("answer_format") or "")
             state.start(
-                system=_instructions(str(safe_render(str(config.get("system_prompt") or ""), context)), config),
-                prompt=str(safe_render(str(config.get("prompt") or ""), context)),
+                system=_instructions(str(inputs.get("system_prompt") or ""), config),
+                prompt=str(inputs.get("prompt") or ""),
             )
         else:
             for child in children.order_by("created"):
@@ -378,9 +398,9 @@ class AIStepPluginModel(BaseActionPluginModel):
                 retries = int((action.scratch or {}).get("llm_retries", 0))
                 if retries + 1 >= MAX_LLM_RETRIES:
                     return FAILED, {"error": f"Rate limited {MAX_LLM_RETRIES} times, giving up: {exc}"}
-                AutomationAction.objects.filter(pk=action.pk).update(
-                    scratch={**(action.scratch or {}), "llm_retries": retries + 1}
-                )
+                from ..execution import save_working_state
+
+                save_working_state(action, {**(action.scratch or {}), "llm_retries": retries + 1})
                 raise ActionPause(
                     until=now() + datetime.timedelta(seconds=exc.retry_after),
                     message=f"LLM rate limited, retry {retries + 1}/{MAX_LLM_RETRIES}",
@@ -464,7 +484,11 @@ class AIStepPluginModel(BaseActionPluginModel):
                         f"Check that the shape has the fields the answer should carry."
                     )
                 }
-            return COMPLETED, rows
+            from ..execution import place_results
+
+            output = place_results(self, action, data, {"answer": reply.json})
+            action.writes = {**writes, **action.writes}
+            return COMPLETED, output
         if not reply.text.strip():
             # Nothing was said. The provider called it a complete reply, so
             # nothing upstream objected, and an empty string would travel on
@@ -489,7 +513,21 @@ class AIStepPluginModel(BaseActionPluginModel):
                     f"(finish reason: {reply.finish_reason or 'none given'}).{because}"
                 )
             }
-        return COMPLETED, [{"text": reply.text, "model": reply.model, "turns": state.turn, "usage": state.usage}]
+        from ..execution import place_results
+
+        output = place_results(
+            self,
+            action,
+            data,
+            {"answer": {"text": reply.text, "model": reply.model, "turns": state.turn, "usage": state.usage}},
+        )
+        action.writes = {**writes, **action.writes}
+        return COMPLETED, output
+
+    def get_next_payload(self, action, state, output, item):
+        if state == WAITING:
+            return (action.scratch or {}).get("tool_item", item)
+        return output
 
     def _timeout(self, config, budget, state) -> int:
         """How long to wait for the provider.

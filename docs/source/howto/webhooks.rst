@@ -31,7 +31,7 @@ Generic webhook trigger
 -----------------------
 
 Give your automation a trigger of type *Webhook*. Any JSON object (one
-item) or array of objects (a batch of items) posted to the trigger URL becomes
+item) posted to the trigger URL becomes
 the automation's data:
 
 .. code-block:: bash
@@ -100,9 +100,9 @@ Mailgun's timestamp/token scheme or Stripe's ``Stripe-Signature`` header):
         data_schema = {}  # optionally constrain the items
 
         def parse_payload(self, request, config):
-            rows = super().parse_payload(request, config)
-            # Unwrap the Stripe envelope; return [] to accept-but-ignore.
-            return [row["data"]["object"] for row in rows if row.get("type") == "invoice.paid"]
+            item = super().parse_payload(request, config)
+            # Return None to accept-but-ignore; {} is a valid empty item.
+            return item["data"]["object"] if item.get("type") == "invoice.paid" else None
 
     trigger_registry.register(StripeWebhookTrigger)
 

@@ -202,7 +202,19 @@ class AutomationInstanceAdmin(admin.ModelAdmin):
             level=messages.SUCCESS if canceled else messages.INFO,
         )
 
-    readonly_fields = ("hash", "automation", "created", "updated", "data_display", "error_message_display")
+    readonly_fields = (
+        "hash",
+        "automation",
+        "created",
+        "updated",
+        "data_display",
+        "error_message_display",
+        "definition",
+        "trace_display",
+        "trace_redacted",
+        "output",
+        "initial_data",
+    )
     inlines = [AutomationActionInline]
     fieldsets = (
         (None, {"fields": (("hash", "automation"), ("created", "updated"))}),
@@ -217,13 +229,43 @@ class AutomationInstanceAdmin(admin.ModelAdmin):
         (
             _("Input data and results"),
             {
-                "fields": ("data_display", "error_message_display"),
+                "fields": ("initial_data", "data_display", "output", "error_message_display"),
                 "classes": ("collapse",),
             },
         ),
+        (_("Executed definition"), {"fields": ("definition",), "classes": ("collapse",)}),
+        (_("Execution trace"), {"fields": ("trace_redacted", "trace_display"), "classes": ("collapse",)}),
     )
 
-    @admin.display(description=_("Initial data"))
+    @admin.display(description=_("Trace events"))
+    def trace_display(self, obj):
+        from .instances import ExecutionTrace
+
+        events = ExecutionTrace.objects.filter(action__automation_instance=obj).select_related("action")
+        return (
+            mark_safe(
+                "\n".join(
+                    str(
+                        format_html(
+                            "<details><summary>#{} · {} · action {} · {}</summary><pre>{}</pre></details>",
+                            event.pk,
+                            event.kind,
+                            event.action_id,
+                            event.occurrence or "—",
+                            json.dumps(
+                                {"scope": event.scope, "payload": event.payload, "redacted": event.redacted},
+                                indent=2,
+                                ensure_ascii=False,
+                            ),
+                        )
+                    )
+                    for event in events
+                )
+            )
+            or "—"
+        )
+
+    @admin.display(description=_("Final item"))
     def data_display(self, obj):
         """Display JSON data in a formatted, readable way."""
         if obj.data:
@@ -443,7 +485,7 @@ def _answer_format(action) -> str:
     if "answer_format" in scratch:
         return str(scratch.get("answer_format") or "")
     try:
-        plugins = engine.build_plugin_map(action.automation_instance.automation_content_id)
+        plugins = engine.instance_plugins(action.automation_instance)
         plugin = plugins.get(action.plugin_ptr)
         return str((getattr(plugin, "config", None) or {}).get("answer_format") or "")
     except Exception:  # noqa: BLE001 — an unreadable tree only means plainer output
@@ -465,9 +507,7 @@ def _step_name(action, plugins=None) -> str:
     if not name:
         return ""
     try:
-        plugin = (plugins or engine.build_plugin_map(action.automation_instance.automation_content_id)).get(
-            action.plugin_ptr
-        )
+        plugin = (plugins or engine.instance_plugins(action.automation_instance)).get(action.plugin_ptr)
         label = str(getattr(plugin, "comment", "") or "")
     except Exception:  # noqa: BLE001 — a missing comment is not worth failing a page for
         label = ""
@@ -780,7 +820,7 @@ class AutomationTriggerAdmin(ChangeListActionsMixin, admin.ModelAdmin):
 
     name = _("Trigger")
     form = AutomationTriggerAdminForm
-    change_form_template = "djangocms_frontend/admin/base.html"
+    change_form_template = "admin/djangocms_automation/automationtrigger/change_form.html"
     list_display = (
         "__str__",
         "type",
@@ -909,7 +949,7 @@ class AutomationTriggerAdmin(ChangeListActionsMixin, admin.ModelAdmin):
         form = RunNowForm(request.POST or None, automation_content=automation_content)
         if request.method == "POST" and form.is_valid():
             trigger = form.cleaned_data["trigger"]
-            instance = trigger.trigger_execution(data=form.cleaned_data["rows"])
+            instance = trigger.trigger_execution(data=form.cleaned_data["item"])
             self.message_user(
                 request,
                 _("Started %(automation)s. Watch it under Execution Instances.") % {"automation": automation_content},

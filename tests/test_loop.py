@@ -35,10 +35,13 @@ class CountdownModel(BaseActionPluginModel):
         proxy = True
         app_label = "djangocms_automation"
 
-    def perform(self, action, rows):
-        row = rows[0] if rows and isinstance(rows[0], dict) else {}
+    default_outputs = {"remaining": {"field": "remaining"}, "seen": {"field": "seen"}}
+
+    def perform(self, context, inputs):
+        rows = context.item
+        row = rows
         remaining = int(row.get("remaining", 0))
-        return [{**row, "remaining": remaining - 1, "seen": int(row.get("seen", 0)) + 1}]
+        return {"remaining": remaining - 1, "seen": int(row.get("seen", 0)) + 1}
 
 
 class LoopFailureModel(BaseActionPluginModel):
@@ -48,7 +51,7 @@ class LoopFailureModel(BaseActionPluginModel):
         proxy = True
         app_label = "djangocms_automation"
 
-    def perform(self, action, rows):
+    def perform(self, context, inputs):
         raise ValueError("body blew up")
 
 
@@ -59,8 +62,8 @@ class NoProgressModel(BaseActionPluginModel):
         proxy = True
         app_label = "djangocms_automation"
 
-    def perform(self, action, rows):
-        return rows
+    def perform(self, context, inputs):
+        return {}
 
 
 @plugin_pool.register_plugin
@@ -81,12 +84,15 @@ class FlakyBodyModel(BaseActionPluginModel):
         proxy = True
         app_label = "djangocms_automation"
 
-    def perform(self, action, rows):
+    default_outputs = {"remaining": {"field": "remaining"}}
+
+    def perform(self, context, inputs):
+        rows = context.item
         if BODY_RUNS.get("fail_next"):
             raise ValueError("body failed on purpose")
         BODY_RUNS["ok"] += 1
-        row = rows[0] if rows and isinstance(rows[0], dict) else {}
-        return [{**row, "remaining": int(row.get("remaining", 0)) - 1}]
+        row = rows
+        return {"remaining": int(row.get("remaining", 0)) - 1}
 
 
 @plugin_pool.register_plugin
@@ -166,7 +172,7 @@ def test_a_loop_runs_its_body_until_the_condition_is_false(run_setup, settings):
     trigger, placeholder = run_setup
     build_loop(placeholder, settings, GREATER_THAN_ZERO)
 
-    trigger.trigger_execution(data=[{"remaining": 3}])
+    trigger.trigger_execution(data={"remaining": 3})
 
     loop = loop_action()
     assert loop.state == COMPLETED
@@ -180,11 +186,11 @@ def test_the_loop_output_is_the_last_iterations_output(run_setup, settings):
     trigger, placeholder = run_setup
     build_loop(placeholder, settings, GREATER_THAN_ZERO)
 
-    trigger.trigger_execution(data=[{"remaining": 3}])
+    trigger.trigger_execution(data={"remaining": 3})
 
     instance = AutomationInstance.objects.latest("id")
-    assert instance.data[0]["remaining"] == 0
-    assert instance.data[0]["seen"] == 3
+    assert instance.data["remaining"] == 0
+    assert instance.data["seen"] == 3
 
 
 @pytest.mark.django_db
@@ -193,12 +199,12 @@ def test_a_condition_that_is_already_false_runs_the_body_zero_times(run_setup, s
     trigger, placeholder = run_setup
     build_loop(placeholder, settings, GREATER_THAN_ZERO)
 
-    trigger.trigger_execution(data=[{"remaining": 0}])
+    trigger.trigger_execution(data={"remaining": 0})
 
     loop = loop_action()
     assert loop.state == COMPLETED
     assert loop.children.count() == 0, "the body must not run at all"
-    assert AutomationInstance.objects.latest("id").data == [{"remaining": 0}]
+    assert AutomationInstance.objects.latest("id").data == {"remaining": 0}
 
 
 @pytest.mark.django_db
@@ -208,7 +214,7 @@ def test_the_flow_continues_after_the_loop(run_setup, settings):
     build_loop(placeholder, settings, GREATER_THAN_ZERO)
     add_plugin(placeholder=placeholder, plugin_type="ActionPlugin", language=settings.LANGUAGE_CODE)
 
-    trigger.trigger_execution(data=[{"remaining": 2}])
+    trigger.trigger_execution(data={"remaining": 2})
 
     top_level = AutomationAction.objects.filter(parent__isnull=True).order_by("id")
     assert top_level.count() == 2, "the plugin after the loop must have run"
@@ -231,7 +237,7 @@ def test_iterations_are_re_entries_not_attempts(run_setup, settings):
     trigger, placeholder = run_setup
     build_loop(placeholder, settings, GREATER_THAN_ZERO)
 
-    trigger.trigger_execution(data=[{"remaining": 4}])
+    trigger.trigger_execution(data={"remaining": 4})
 
     loop = loop_action()
     assert loop.attempt_count == 1, "iterating is not retrying"
@@ -250,7 +256,7 @@ def test_a_loop_that_never_progresses_fails_at_its_bound(run_setup, settings):
     trigger, placeholder = run_setup
     build_loop(placeholder, settings, GREATER_THAN_ZERO, body_plugins=("NoProgressPlugin",), max_iterations=5)
 
-    trigger.trigger_execution(data=[{"remaining": 1}])
+    trigger.trigger_execution(data={"remaining": 1})
 
     loop = loop_action()
     assert loop.state == FAILED
@@ -264,7 +270,7 @@ def test_the_bound_is_configurable(run_setup, settings):
     trigger, placeholder = run_setup
     build_loop(placeholder, settings, GREATER_THAN_ZERO, body_plugins=("NoProgressPlugin",), max_iterations=2)
 
-    trigger.trigger_execution(data=[{"remaining": 1}])
+    trigger.trigger_execution(data={"remaining": 1})
 
     loop = loop_action()
     assert loop.state == FAILED
@@ -277,11 +283,11 @@ def test_a_loop_with_no_body_passes_data_through(run_setup, settings):
     trigger, placeholder = run_setup
     build_loop(placeholder, settings, GREATER_THAN_ZERO, body_plugins=())
 
-    trigger.trigger_execution(data=[{"remaining": 5}])
+    trigger.trigger_execution(data={"remaining": 5})
 
     loop = loop_action()
     assert loop.state == COMPLETED
-    assert AutomationInstance.objects.latest("id").data == [{"remaining": 5}]
+    assert AutomationInstance.objects.latest("id").data == {"remaining": 5}
 
 
 # --------------------------------------------------------------------------
@@ -294,7 +300,7 @@ def test_a_failing_body_fails_the_loop(run_setup, settings):
     trigger, placeholder = run_setup
     build_loop(placeholder, settings, GREATER_THAN_ZERO, body_plugins=("LoopFailurePlugin",))
 
-    trigger.trigger_execution(data=[{"remaining": 3}])
+    trigger.trigger_execution(data={"remaining": 3})
 
     loop = loop_action()
     assert loop.state == FAILED
@@ -332,7 +338,7 @@ def test_a_multi_step_body_runs_in_order_each_iteration(run_setup, settings):
     trigger, placeholder = run_setup
     build_loop(placeholder, settings, GREATER_THAN_ZERO, body_plugins=("CountdownPlugin", "ActionPlugin"))
 
-    trigger.trigger_execution(data=[{"remaining": 2}])
+    trigger.trigger_execution(data={"remaining": 2})
 
     loop = loop_action()
     assert loop.state == COMPLETED
@@ -365,7 +371,7 @@ def test_replaying_a_failed_iteration_does_not_repeat_it(run_setup, settings):
 
     BODY_RUNS["ok"] = 0
     BODY_RUNS["fail_next"] = True
-    trigger.trigger_execution(data=[{"remaining": 1}])
+    trigger.trigger_execution(data={"remaining": 1})
 
     loop = loop_action()
     failed = loop.children.filter(state=FAILED).first()
@@ -395,7 +401,7 @@ def test_a_replayed_iteration_does_not_reset_the_bound(run_setup, settings):
 
     BODY_RUNS["ok"] = 0
     BODY_RUNS["fail_next"] = True
-    trigger.trigger_execution(data=[{"remaining": 5}])  # would loop forever unbounded
+    trigger.trigger_execution(data={"remaining": 5})  # would loop forever unbounded
 
     loop = loop_action()
     failed = loop.children.filter(state=FAILED).first()
@@ -444,7 +450,7 @@ def test_replaying_a_failed_branch_inside_a_loop_keeps_the_iteration(run_setup, 
 
     BODY_RUNS["ok"] = 0
     BODY_RUNS["fail_next"] = True
-    trigger.trigger_execution(data=[{"remaining": 1}])
+    trigger.trigger_execution(data={"remaining": 1})
 
     # The leaf failure: the step inside the branch, not the conditional above it.
     # Replaying the conditional would sidestep the bug, because a fresh
@@ -459,7 +465,7 @@ def test_replaying_a_failed_branch_inside_a_loop_keeps_the_iteration(run_setup, 
     loop_row = loop_action()
     assert BODY_RUNS["ok"] == 1, "the branch ran more than once"
     assert loop_row.state == COMPLETED, f"the loop did not finish: {loop_row.result}"
-    assert AutomationInstance.objects.latest("id").data[0]["remaining"] == 0
+    assert AutomationInstance.objects.latest("id").data["remaining"] == 0
 
 
 # --------------------------------------------------------------------------
@@ -555,7 +561,7 @@ def test_replaying_a_failed_else_branch_inside_a_loop(run_setup, settings):
     BODY_RUNS["ok"] = 0
     BODY_RUNS["fail_next"] = True
     # flag is 0, so the conditional takes Else, where the failing step sits.
-    trigger.trigger_execution(data=[{"remaining": 1, "flag": 0}])
+    trigger.trigger_execution(data={"remaining": 1, "flag": 0})
 
     failed = AutomationAction.objects.filter(state=FAILED, children__isnull=True).order_by("id").first()
     assert failed is not None, "the Else branch step failed as the test intended"
@@ -566,4 +572,4 @@ def test_replaying_a_failed_else_branch_inside_a_loop(run_setup, settings):
     loop_row = loop_action()
     assert BODY_RUNS["ok"] == 1, "the Else step ran more than once"
     assert loop_row.state == COMPLETED, f"the loop did not finish: {loop_row.result}"
-    assert AutomationInstance.objects.latest("id").data[0]["remaining"] == 0
+    assert AutomationInstance.objects.latest("id").data["remaining"] == 0

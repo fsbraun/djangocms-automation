@@ -125,6 +125,26 @@
                 fieldInput.setAttribute('code', '');
                 fieldInput.value = condition.field;
                 fieldInput.placeholder = 'Field name';
+                const sourceSelect = document.createElement('select');
+                sourceSelect.setAttribute('aria-label', 'Use data from');
+                const emptySource = document.createElement('option');
+                emptySource.value = '';
+                emptySource.textContent = 'Use data from…';
+                sourceSelect.appendChild(emptySource);
+                Object.entries(JSON.parse(this.container.dataset.fields || '{}')).forEach(([path, label]) => {
+                    const option = document.createElement('option');
+                    option.value = path;
+                    option.textContent = label;
+                    sourceSelect.appendChild(option);
+                });
+                sourceSelect.addEventListener('change', () => {
+                    if (sourceSelect.value) {
+                        fieldInput.value = sourceSelect.value;
+                        this.updateCondition(index, 'field', sourceSelect.value);
+                        sourceSelect.value = '';
+                    }
+                });
+                conditionDiv.appendChild(sourceSelect);
                 fieldInput.addEventListener('input', (e) => {
                     this.updateCondition(index, 'field', e.target.value);
                 });

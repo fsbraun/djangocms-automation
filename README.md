@@ -18,8 +18,10 @@ Overview
 We call one unit of automation data an **item**, its named values **fields**, and
 a list of items a **batch**. A field can itself contain a list, such as an order's
 lines. See [Reading an automation](docs/source/explanation/reading-an-automation.rst)
-and the [glossary](docs/source/glossary.rst) for the agreed model and how current
-action behavior differs while it is being implemented.
+and the [glossary](docs/source/glossary.rst). Each instance processes one item;
+actions preserve its fields and save named results into explicit destinations.
+Batches and batch intake are deferred. Completed runs retain their frozen
+definition and execution trace for debugging, subject to retention.
 
 Installation
 ------------
@@ -161,7 +163,7 @@ INSTALLED_APPS = [..., "djangocms_automation", "djangocms_automation.ai"]
 # works and labels itself.
 AUTOMATION_LLM_MODELS = [
     ("anthropic/claude-opus-4-8", "Claude Opus — best quality, costs money"),
-    ("dummy/echo", "Echo — answers locally, no provider"),
+    ("dummy/echo", "No provider"),
 ]
 AUTOMATION_LLM_DEFAULT = "anthropic/claude-opus-4-8"
 ```

@@ -66,11 +66,11 @@ def test_it_needs_no_api_key(run_setup, settings):
     trigger, placeholder = run_setup
     add_step(placeholder, settings, "Summarise {{ seed }}.")
 
-    trigger.trigger_execution(data=[{"seed": "the thing"}])
+    trigger.trigger_execution(data={"seed": "the thing"})
 
     action = step_action()
     assert action.state == COMPLETED
-    assert action.result[0]["text"] == "Summarise the thing."
+    assert action.result["answer"]["text"] == "Summarise the thing."
 
 
 @pytest.mark.django_db
@@ -96,12 +96,12 @@ def test_a_directive_makes_it_call_a_tool(run_setup, settings):
         config={"recipient_email": "'to@example.com'", "subject": "'x'", "body": "x"},
     )
 
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     assert mail.outbox[-1].subject == "Thanks"
     action = step_action()
     assert action.state == COMPLETED
-    assert "Tools returned" in action.result[0]["text"], "it reports what it saw"
+    assert "Tools returned" in action.result["answer"]["text"], "it reports what it saw"
 
 
 @pytest.mark.django_db
@@ -120,7 +120,7 @@ def test_a_directive_reaches_the_approval_gate(run_setup, settings):
         config={"recipient_email": "'to@example.com'", "subject": "'x'", "body": "x"},
     )
 
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     call = AutomationAction.objects.exclude(parent__isnull=True).latest("id")
     assert call.state == WAITING and call.requires_interaction
@@ -132,9 +132,9 @@ def test_it_can_answer_in_a_shape(run_setup, settings):
     trigger, placeholder = run_setup
     add_step(placeholder, settings, '!json {"topic": "billing"}')
 
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
-    assert step_action().result == [{"topic": "billing"}]
+    assert step_action().result == {"seed": 1, "answer": {"topic": "billing"}}
 
 
 @pytest.mark.django_db
@@ -143,7 +143,7 @@ def test_it_can_be_told_to_fail(run_setup, settings):
     trigger, placeholder = run_setup
     add_step(placeholder, settings, "!fail the provider is down")
 
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     action = step_action()
     assert action.state == FAILED
@@ -163,7 +163,7 @@ def test_an_unknown_tool_name_is_corrected_as_a_real_one_would_be(run_setup, set
         tool_description="Echo.",
     )
 
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     from djangocms_automation.ai.state import AgentState
 

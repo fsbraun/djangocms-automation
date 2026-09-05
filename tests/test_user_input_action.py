@@ -53,7 +53,7 @@ def test_user_input_action_waits_and_resumes(run_setup, admin_user, settings):
         placeholder=placeholder, plugin_type="ActionPlugin", language=settings.LANGUAGE_CODE, position="last-child"
     )
 
-    trigger.trigger_execution(data=[{"name": "Alice"}], start=True)
+    trigger.trigger_execution(data={"name": "Alice"}, start=True)
 
     instance = trigger.automation_content.automationinstance_set.first()
     wait_action = AutomationAction.objects.get(automation_instance=instance, plugin_ptr=model.uuid)
@@ -79,7 +79,7 @@ def test_user_input_action_waits_and_resumes(run_setup, admin_user, settings):
     assert instance.status == COMPLETED
     # The resumed data (original rows + approval row) flowed into the next action.
     follow_up = actions.exclude(pk=wait_action.pk).get()
-    assert follow_up.result == [{"name": "Alice"}, {"approved": True}]
+    assert follow_up.result == {"name": "Alice", "response": {"approved": True}}
 
 
 @pytest.mark.django_db
@@ -90,7 +90,7 @@ def test_user_input_action_permission_denied(run_setup, admin_user, django_user_
     model.config = {"note": "", "permissions": "auth.change_user"}
     model.save()
 
-    trigger.trigger_execution(data=[], start=True)
+    trigger.trigger_execution(data={}, start=True)
 
     instance = trigger.automation_content.automationinstance_set.first()
     wait_action = AutomationAction.objects.get(automation_instance=instance)

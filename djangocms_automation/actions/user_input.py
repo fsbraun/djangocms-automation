@@ -7,7 +7,7 @@ from django.utils.translation import gettext_lazy as _
 
 from ..instances import WAITING, AutomationAction
 from ..models import BaseActionPluginModel
-from ..utilities.templates import safe_render, validate_template
+from ..utilities.templates import validate_template
 
 
 class UserInputActionForm(forms.Form):
@@ -41,6 +41,9 @@ class UserInputActionPluginModel(BaseActionPluginModel):
     resumed via :func:`djangocms_automation.engine.resume_action`.
     """
 
+    default_outputs = {"submission": {"field": "response"}}
+    literal_fields = frozenset({"permissions"})
+
     class Meta:
         proxy = True
         app_label = "djangocms_automation"
@@ -48,7 +51,7 @@ class UserInputActionPluginModel(BaseActionPluginModel):
     def do_work(
         self,
         action: AutomationAction,
-        data: list,
+        data: dict,
         single_step: bool = False,
         plugin_dict: dict | None = None,
     ) -> tuple[str, dict]:
@@ -57,6 +60,6 @@ class UserInputActionPluginModel(BaseActionPluginModel):
         action.interaction_permissions = [
             perm.strip() for perm in str(config.get("permissions") or "").split(",") if perm.strip()
         ]
-        first_row = data[0] if data and isinstance(data[0], dict) else {}
-        note = safe_render(str(config.get("note") or ""), {**first_row, "data": data})
+        _context, inputs = self.execution_inputs(action, data)
+        note = inputs.get("note")
         return WAITING, ({"note": str(note)} if note else {})

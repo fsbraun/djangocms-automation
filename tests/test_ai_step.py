@@ -136,11 +136,11 @@ def test_a_step_with_no_tools_answers(run_setup, settings):
     add_step(placeholder, settings)
     SCRIPT.append(says(text="Nothing to do."))
 
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     action = step_action()
     assert action.state == COMPLETED
-    assert action.result[0]["text"] == "Nothing to do."
+    assert action.result["answer"]["text"] == "Nothing to do."
     assert not SCRIPT, "the provider was called"
 
 
@@ -155,9 +155,9 @@ def test_an_output_shape_becomes_the_data(run_setup, settings):
     )
     SCRIPT.append(says(json={"topic": "billing"}))
 
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
-    assert step_action().result == [{"topic": "billing"}]
+    assert step_action().result == {"seed": 1, "answer": {"topic": "billing"}}
 
 
 @pytest.mark.django_db
@@ -195,7 +195,7 @@ def test_an_action_inside_the_step_is_offered_to_the_model(run_setup, settings):
     SCRIPT.append(says(text="Done."))
 
     with mock.patch.object(llm, "complete", side_effect=complete):
-        trigger.trigger_execution(data=[{"seed": 1}])
+        trigger.trigger_execution(data={"seed": 1})
 
     assert [t["function"]["name"] for t in sent[0]] == ["echo"]
 
@@ -219,7 +219,7 @@ def test_a_tool_call_runs_the_action(run_setup, settings):
     SCRIPT.append(says(calls=[ToolCall(id="c1", name="reply", arguments={"subject": "Ship it", "body": "Now"})]))
     SCRIPT.append(says(text="Sent."))
 
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     assert step_action().state == COMPLETED
     assert mail.outbox[-1].subject == "Ship it", "the model's literal, not a data path"
@@ -239,7 +239,7 @@ def test_an_action_outside_a_step_is_unaffected(run_setup, settings):
         config={"recipient_email": "'to@example.com'", "subject": "'Hello'", "body": "Hi"},
     )
 
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     assert mail.outbox[-1].subject == "Hello"
     assert step_action().state == COMPLETED
@@ -279,7 +279,7 @@ def test_an_approved_call_actually_runs(run_setup, settings, admin_user):
     )
     SCRIPT.append(says(calls=[ToolCall(id="c1", name="reply", arguments={"subject": "Ship it"})]))
 
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     call = call_action()
     assert call.state == WAITING and call.requires_interaction
@@ -307,7 +307,7 @@ def test_a_tool_wrapping_a_human_step_waits_for_the_human(run_setup, settings):
     )
     SCRIPT.append(says(calls=[ToolCall(id="c1", name="escalate", arguments={})]))
 
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     call = call_action()
     assert call.state == WAITING and call.requires_interaction
@@ -323,7 +323,7 @@ def test_a_finished_call_does_not_start_the_next_tool(run_setup, settings):
     SCRIPT.append(says(calls=[ToolCall(id="c1", name="echo", arguments={})]))
     SCRIPT.append(says(text="Done."))
 
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     assert step_action().children.count() == 1, "only the tool the model asked for ran"
 
@@ -341,7 +341,7 @@ def test_an_unknown_tool_is_corrected_not_dispatched(run_setup, settings):
     SCRIPT.append(says(calls=[ToolCall(id="c1", name="nope", arguments={})]))
     SCRIPT.append(says(text="Sorry."))
 
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     action = step_action()
     assert action.state == COMPLETED
@@ -370,7 +370,7 @@ def test_every_requested_call_is_answered_before_the_next_turn(run_setup, settin
     SCRIPT.append(says(text="Done."))
 
     with mock.patch.object(llm, "complete", side_effect=complete):
-        trigger.trigger_execution(data=[{"seed": 1}])
+        trigger.trigger_execution(data={"seed": 1})
 
     for messages in sent:
         requested = [c["id"] for m in messages if m.get("role") == "assistant" for c in m.get("tool_calls") or []]
@@ -389,7 +389,7 @@ def test_a_turn_cannot_spend_more_tool_calls_than_it_has(run_setup, settings):
     )
     SCRIPT.append(says(text="Done."))
 
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     assert step_action().children.count() == 1, "the second was over the limit and must not have run"
 
@@ -400,7 +400,7 @@ def test_a_reply_cut_off_at_the_token_limit_fails_the_run(run_setup, settings):
     add_step(placeholder, settings)
     SCRIPT.append(says(text="The refund policy is that", finish_reason="length"))
 
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     action = step_action()
     assert action.state == FAILED
@@ -415,7 +415,7 @@ def test_budgets_fail_the_run(run_setup, settings):
     SCRIPT.append(says(calls=[ToolCall(id="c1", name="echo", arguments={})]))
     SCRIPT.append(says(calls=[ToolCall(id="c2", name="echo", arguments={})]))
 
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     assert step_action().state == FAILED
     assert "turns" in step_action().result["error"]
@@ -451,7 +451,7 @@ def test_replaying_a_call_keeps_the_call_it_was(run_setup, settings):
     )
     SCRIPT.append(says(calls=[ToolCall(id="c1", name="reply", arguments={"subject": "Ship it"})]))
 
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     call = call_action()
     AutomationAction.objects.filter(pk=call.pk).update(scratch={**call.scratch, "approved": True})
@@ -612,7 +612,7 @@ def test_a_step_with_nothing_in_it_says_so(run_setup, settings):
         request=request,
     )
 
-    assert "Answers only" in html
+    assert "anthropic/claude-opus-4-8" in html
     assert "tool-marker" not in html, "nothing to point at"
 
 
@@ -783,7 +783,7 @@ def test_the_inputs_come_second(run_setup, settings):
     wired = RequestFactory().get(f"/?plugin_parent={ai.pk}")
     wired.user = None
     labels = [str(label) for label, _opts in plugin.get_fieldsets(wired, None)]
-    assert labels == ["Intent", "As a tool", "Inputs", "Comment"]
+    assert labels == ["Intent", "As a tool", "Inputs", "Output", "Comment"]
 
 
 def test_no_icon_is_defined_twice_in_the_sprite():
@@ -821,9 +821,9 @@ def test_an_output_shape_saved_by_the_editor_is_a_dict(run_setup, settings):
     add_step(placeholder, settings, output_schema=SHAPE)
     SCRIPT.append(says(json={"topic": "billing"}))
 
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
-    assert step_action().result == [{"topic": "billing"}]
+    assert step_action().result == {"seed": 1, "answer": {"topic": "billing"}}
 
 
 @pytest.mark.django_db
@@ -841,7 +841,7 @@ def test_the_shape_reaches_the_provider(run_setup, settings):
     SCRIPT.append(says(json={"topic": "billing"}))
 
     with mock.patch.object(llm, "complete", side_effect=complete):
-        trigger.trigger_execution(data=[{"seed": 1}])
+        trigger.trigger_execution(data={"seed": 1})
 
     assert asked == [SHAPE]
 
@@ -901,7 +901,7 @@ def test_arguments_that_were_not_valid_json_do_not_run_the_tool(run_setup, setti
     SCRIPT.append(says(calls=[ToolCall(id="c1", name="reply", arguments={}, malformed=True)]))
     SCRIPT.append(says(text="Never mind."))
 
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     assert not mail.outbox, "nothing ran"
     assert "JSON" in observations(step_action())[0]["content"], "the model is told what to fix"
@@ -918,7 +918,7 @@ def test_an_argument_the_form_rejects_comes_back_as_a_correction(run_setup, sett
     SCRIPT.append(says(calls=[ToolCall(id="c1", name="reply", arguments={"recipient_email": "nonsense"})]))
     SCRIPT.append(says(text="I will try again."))
 
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     assert not mail.outbox
     observation = observations(step_action())[0]
@@ -947,7 +947,7 @@ def test_a_tool_that_raises_becomes_an_observation(run_setup, settings):
         "djangocms_automation.actions.mail.MailActionPluginModel.perform",
         side_effect=RuntimeError("could not connect to postgres://user:hunter2@db"),
     ):
-        trigger.trigger_execution(data=[{"seed": 1}])
+        trigger.trigger_execution(data={"seed": 1})
 
     observation = observations(step_action())[0]
     assert "This tool failed" in observation["content"], "the model is told what it can act on"
@@ -980,7 +980,7 @@ def test_a_rate_limited_tool_pauses_rather_than_reporting_to_the_model(run_setup
         "djangocms_automation.actions.mail.MailActionPluginModel.perform",
         side_effect=ActionPause(until=now() + datetime.timedelta(minutes=5), message="rate limited"),
     ):
-        trigger.trigger_execution(data=[{"seed": 1}])
+        trigger.trigger_execution(data={"seed": 1})
 
     call = call_action()
     assert call.state == PENDING and call.paused_until is not None, "rescheduled, not answered"
@@ -1004,7 +1004,7 @@ def test_a_failed_tool_call_fails_the_step(run_setup, settings):
     SCRIPT.append(says(calls=[ToolCall(id="c1", name="reply", arguments={"subject": "Hi"})]))
     SCRIPT.append(says(text="Done."))
 
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     action = step_action()
     AutomationAction.objects.filter(pk=call_action().pk).update(state=FAILED)
@@ -1040,7 +1040,7 @@ def test_what_a_person_answers_is_what_the_model_hears(run_setup, settings, admi
     )
     SCRIPT.append(says(calls=[ToolCall(id="c1", name="escalate", arguments={})]))
 
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     call = call_action()
     assert call.state == WAITING
@@ -1077,7 +1077,7 @@ def test_the_depth_of_a_run_counts_the_runs_that_started_it(run_setup, settings)
     trigger, placeholder = run_setup
     ai = add_step(placeholder, settings)
     SCRIPT.append(says(text="Done."))
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     root = step_action()
     instance = plugin_pool.get_plugin("AIStep").model.objects.get(pk=ai.pk)
@@ -1088,8 +1088,8 @@ def test_the_depth_of_a_run_counts_the_runs_that_started_it(run_setup, settings)
     for _level in range(3):
         started = AutomationInstance.objects.create(
             automation_content=root.automation_instance.automation_content,
-            data=[],
-            initial_data=[],
+            data={},
+            initial_data={},
             parent_action=action,
         )
         action = AutomationAction.objects.create(automation_instance=started, plugin_ptr=ai.uuid, finished=None)
@@ -1108,7 +1108,7 @@ def test_a_step_too_deep_refuses_rather_than_calling_a_model(run_setup, settings
     trigger, placeholder = run_setup
     ai = add_step(placeholder, settings)
     SCRIPT.append(says(text="Done."))
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     action = step_action()
     action.scratch = {"tool_call": {"id": "c1", "name": "ask", "arguments": {}}}
@@ -1173,7 +1173,7 @@ def test_a_name_no_tool_has_does_not_spend_the_call_budget(run_setup, settings):
     )
     SCRIPT.append(says(text="Done."))
 
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     action = step_action()
     assert action.children.count() == 1, "the real call still ran"
@@ -1189,7 +1189,7 @@ def test_a_run_that_only_guesses_still_stops(run_setup, settings):
     for _ in range(3):
         SCRIPT.append(says(calls=[ToolCall(id="c1", name="nope", arguments={})]))
 
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     action = step_action()
     assert action.state == FAILED
@@ -1207,7 +1207,7 @@ def test_a_turn_that_spends_the_token_budget_fails_the_run(run_setup, settings):
     add_step(placeholder, settings, max_tokens=100)
     SCRIPT.append(says(text="A very expensive answer.", usage={"input_tokens": 400, "output_tokens": 50}))
 
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     action = step_action()
     assert action.state == FAILED
@@ -1230,7 +1230,7 @@ def test_the_provider_is_never_given_longer_than_the_run_has_left(run_setup, set
     SCRIPT.append(says(text="Quick."))
 
     with mock.patch.object(llm, "complete", side_effect=complete):
-        trigger.trigger_execution(data=[{"seed": 1}])
+        trigger.trigger_execution(data={"seed": 1})
 
     assert asked and asked[0] <= 30, f"asked for {asked}"
 
@@ -1249,7 +1249,7 @@ def test_a_step_inside_a_step_counts_towards_the_depth(run_setup, settings):
     trigger, placeholder = run_setup
     outer = add_step(placeholder, settings)
     SCRIPT.append(says(text="Done."))
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     root = step_action()
     instance = plugin_pool.get_plugin("AIStep").model.objects.get(pk=outer.pk)
@@ -1301,7 +1301,7 @@ def test_a_step_used_as_another_step_s_tool_runs_to_the_end(run_setup, settings)
     SCRIPT.append(says(text="inner done"))
     SCRIPT.append(says(text="outer done"))
 
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     assert step_action().state == COMPLETED
     nested = AutomationAction.objects.exclude(parent__isnull=True).order_by("id").first()
@@ -1535,11 +1535,11 @@ def test_an_answer_names_the_model_that_gave_it(run_setup, settings):
     add_step(placeholder, settings)
     SCRIPT.append(says(text="Hello."))
 
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
-    row = step_action().result[0]
-    assert set(row) == {"text", "model", "turns", "usage"}
-    assert row["model"] == "anthropic/claude-opus-4-8"
+    row = step_action().result
+    assert set(row["answer"]) == {"text", "model", "turns", "usage"}
+    assert row["answer"]["model"] == "anthropic/claude-opus-4-8"
 
 
 @pytest.mark.django_db
@@ -1566,14 +1566,14 @@ def test_a_bound_expression_is_resolved_before_the_form_sees_it(run_setup, setti
     instance = plugin_pool.get_plugin("MailAction").model.objects.get(pk=tool.pk)
     instance.exposed_fields = ["subject"]
 
-    rows = [{"customer": {"email": "ada@example.com"}}]
-    bound = instance._bound_values_for(rows[0], rows)
+    rows = {"customer": {"email": "ada@example.com"}}
+    bound = instance._bound_values_for(rows)
 
     assert bound["recipient_email"] == "ada@example.com", "resolved, not the expression"
     assert "subject" not in bound, "what the model fills is not bound"
 
     # An expression that cannot resolve is left out rather than guessed at.
-    assert "recipient_email" not in instance._bound_values_for({"nothing": "here"}, [{"nothing": "here"}])
+    assert "recipient_email" not in instance._bound_values_for({"nothing": "here"})
 
 
 def test_a_fault_in_an_action_is_not_described_to_the_model():
@@ -1642,15 +1642,15 @@ def test_approval_resumes_with_the_step_s_own_data(run_setup, settings, django_u
         tool_name="reply",
         exposed_fields=["subject"],
         requires_approval=True,
-        config={"recipient_email": "email", "subject": "'x'", "body": "x"},
+        config={"recipient_email": "records.0.email", "subject": "'x'", "body": "x"},
     )
     SCRIPT.append(says(calls=[ToolCall(id="c1", name="reply", arguments={"subject": "Ship it"})]))
 
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     call = call_action()
     assert call.state == WAITING
-    assert call.automation_instance.data == [{"seed": 1}], "the run still holds only the trigger's payload"
+    assert call.automation_instance.data == {"seed": 1}, "the run still holds only the trigger's payload"
 
     SCRIPT.append(says(text="Sent."))
     resume_action(call.pk, get_user_model().objects.filter(is_superuser=True).first())
@@ -1737,7 +1737,7 @@ def test_a_second_turn_keeps_what_the_first_one_had(run_setup, settings, django_
         tool_name="reply",
         exposed_fields=["subject"],
         requires_approval=False,
-        config={"recipient_email": "email", "subject": "'x'", "body": "x"},
+        config={"recipient_email": "records.0.email", "subject": "'x'", "body": "x"},
     )
 
     # Two turns: something harmless, then the one that needs the queried row.
@@ -1745,7 +1745,7 @@ def test_a_second_turn_keeps_what_the_first_one_had(run_setup, settings, django_
     SCRIPT.append(says(calls=[ToolCall(id="c2", name="reply", arguments={"subject": "Ship it"})]))
     SCRIPT.append(says(text="Sent."))
 
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     assert step_action().state == COMPLETED
     assert mail.outbox, "the second turn's tool ran"
@@ -1753,24 +1753,13 @@ def test_a_second_turn_keeps_what_the_first_one_had(run_setup, settings, django_
 
 
 @pytest.mark.django_db
-def test_a_row_that_is_not_a_mapping_is_checked_too(run_setup, settings):
-    """Actions run a bare value as ``{"value": row}``.
+def test_a_tool_rejects_a_non_object_item(run_setup, settings):
+    from djangocms_automation.actions.mail import MailActionPluginModel
 
-    Dropping such a row from the check would let it through unvalidated while
-    it still had effects.
-    """
-    from cms.plugin_pool import plugin_pool
-
-    _trigger, placeholder = run_setup
-    ai = add_step(placeholder, settings)
-    tool = add_tool(placeholder, ai, settings, plugin_type="MailAction", tool_name="reply")
-    instance = plugin_pool.get_plugin("MailAction").model.objects.get(pk=tool.pk)
-
-    assert instance._rows_to_check(["ada@example.com", {"a": 1}]) == [
-        {"value": "ada@example.com"},
-        {"a": 1},
-    ]
-    assert instance._rows_to_check([]) == [{}], "and a call with no data is still checked once"
+    tool = MailActionPluginModel(plugin_type="MailAction")
+    for value in ([], ["ada@example.com"], "ada@example.com"):
+        with pytest.raises(ValueError, match="one item"):
+            tool.validate_call(ToolCall(id="c1", name="reply", arguments={}), value)
 
 
 @pytest.mark.django_db
@@ -1801,7 +1790,7 @@ def test_an_action_can_still_speak_to_the_model_on_purpose(run_setup, settings):
         "djangocms_automation.actions.mail.MailActionPluginModel.perform",
         side_effect=ToolError("that customer has no address on file"),
     ):
-        trigger.trigger_execution(data=[{"seed": 1}])
+        trigger.trigger_execution(data={"seed": 1})
 
     assert "no address on file" in observations(step_action())[0]["content"]
 
@@ -1858,7 +1847,7 @@ def test_a_failed_tool_tells_the_model_nothing_it_should_not_know(run_setup, set
         return reply
 
     with mock.patch.object(llm, "complete", side_effect=complete):
-        trigger.trigger_execution(data=[{"seed": 1}])
+        trigger.trigger_execution(data={"seed": 1})
 
     observation = observations(step_action())[0]
     assert "This tool failed" in observation["content"]
@@ -1866,27 +1855,31 @@ def test_a_failed_tool_tells_the_model_nothing_it_should_not_know(run_setup, set
 
 
 @pytest.mark.django_db
-def test_a_partial_delivery_failure_does_not_carry_its_message(run_setup, settings):
-    """Half the rows succeeding is the case that returns *successfully*.
-
-    The failure then travels as data — to the next action, into the run's
-    record, and to a model when this action is somebody's tool — so what lands
-    in the row is the kind of failure, not its text.
-    """
-    from djangocms_automation.actions.mail import MailActionPluginModel
-
-    plugin = MailActionPluginModel(
+def test_a_delivery_failure_does_not_carry_its_message(run_setup, settings):
+    trigger, placeholder = run_setup
+    ai = add_step(placeholder, settings)
+    add_tool(
+        placeholder,
+        ai,
+        settings,
         plugin_type="MailAction",
-        config={"recipient_email": "email", "subject": "'Hi'", "body": "Hello"},
+        tool_name="reply",
+        exposed_fields=["subject"],
+        requires_approval=False,
+        config={"recipient_email": "'ada@example.com'", "subject": "'Hi'", "body": "Hello"},
     )
-    rows = [{"email": "ada@example.com"}, {"email": ""}]
+    SCRIPT.extend(
+        [says(calls=[ToolCall(id="c1", name="reply", arguments={"subject": "Hi"})]), says(text="Could not send.")]
+    )
+    with mock.patch("djangocms_automation.actions.mail._compose", side_effect=RuntimeError("secret SMTP password")):
+        trigger.trigger_execution(data={"private": "do not share"})
+    observation = observations(step_action())[0]
+    assert observation["is_error"] if "is_error" in observation else "failed" in observation["content"]
+    assert "secret SMTP" not in observation["content"]
+    assert "do not share" not in observation["content"]
+    from djangocms_automation.instances import ExecutionTrace
 
-    out = plugin.perform(mock.Mock(pk=1), rows)
-
-    assert out[0]["_mail"]["sent"] is True
-    assert out[1]["_mail"]["sent"] is False
-    assert out[1]["_mail"]["error"] == "ValueError", "the kind, not the message"
-    assert "No recipient" not in str(out[1])
+    assert "secret SMTP" in ExecutionTrace.objects.get(kind="tool_error").payload["error"]
 
 
 @pytest.mark.django_db
@@ -1912,14 +1905,14 @@ def test_a_call_reports_what_it_produced_not_what_it_was_given(run_setup, settin
     SCRIPT.append(says(calls=[ToolCall(id="c1", name="reply", arguments={"subject": "Ship it"})]))
     SCRIPT.append(says(text="Sent."))
 
-    trigger.trigger_execution(data=[{"customer_token": "sk-do-not-share", "seed": 1}])
+    trigger.trigger_execution(data={"customer_token": "sk-do-not-share", "seed": 1})
 
     observation = observations(step_action())[0]["content"]
-    assert "_mail" in observation, "what the call did"
+    assert "delivery" in observation, "what the call did"
     assert "sk-do-not-share" not in observation, "and not what it happened to be holding"
 
     # The action's own rows are untouched: the automation still carries them on.
-    assert call_action().result[0]["customer_token"] == "sk-do-not-share"
+    assert call_action().result["customer_token"] == "sk-do-not-share"
 
 
 @pytest.mark.django_db
@@ -1947,7 +1940,7 @@ def test_a_lookup_still_reports_everything_it_found(run_setup, settings, django_
     SCRIPT.append(says(calls=[ToolCall(id="c1", name="find_users", arguments={"filters": {"username": "ada"}})]))
     SCRIPT.append(says(text="Found her."))
 
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     assert "ada@example.com" in observations(step_action())[0]["content"]
 
@@ -1973,7 +1966,7 @@ def test_an_approver_sees_what_the_call_will_act_on(run_setup, settings):
     )
     SCRIPT.append(says(calls=[ToolCall(id="c1", name="reply", arguments={"subject": "Ship it"})]))
 
-    trigger.trigger_execution(data=[{"customer": {"email": "ada@example.com"}}])
+    trigger.trigger_execution(data={"customer": {"email": "ada@example.com"}})
 
     task = call_action()
     assert task.result["arguments"] == {"subject": "Ship it"}
@@ -1985,41 +1978,14 @@ def test_an_approver_sees_what_the_call_will_act_on(run_setup, settings):
 
 
 @pytest.mark.django_db
-def test_an_approver_sees_every_row_the_call_will_act_on(run_setup, settings):
-    """An action runs over every row it is given.
-
-    So showing the first recipient and then sending to five is an approval of
-    something that did not happen — the one shape of this mistake where the
-    approver has no way of noticing.
-    """
+def test_batch_intake_does_not_create_approval_tasks(run_setup, settings):
     trigger, placeholder = run_setup
-    ai = add_step(placeholder, settings)
-    add_tool(
-        placeholder,
-        ai,
-        settings,
-        plugin_type="MailAction",
-        tool_name="reply",
-        exposed_fields=["subject"],
-        requires_approval=True,
-        config={"recipient_email": "customer.email", "subject": "'x'", "body": "x"},
-    )
-    SCRIPT.append(says(calls=[ToolCall(id="c1", name="reply", arguments={"subject": "Ship it"})]))
-
-    trigger.trigger_execution(
-        data=[
-            {"customer": {"email": "ada@example.com"}},
-            {"customer": {"email": "grace@example.com"}},
-            {"customer": {"email": "alan@example.com"}},
-        ]
-    )
-
-    shown = call_action().result["bound"]
-    assert [entry["inputs"]["recipient_email"] for entry in shown] == [
-        "ada@example.com",
-        "grace@example.com",
-        "alan@example.com",
-    ], "all three, because all three will be written to"
+    add_step(placeholder, settings)
+    with pytest.raises(ValueError, match="batches"):
+        trigger.trigger_execution(
+            data=[{"customer": {"email": "ada@example.com"}}, {"customer": {"email": "grace@example.com"}}]
+        )
+    assert not AutomationAction.objects.exists()
 
 
 def test_a_complaint_about_a_bound_value_is_not_repeated_to_the_model():
@@ -2050,77 +2016,58 @@ def test_a_complaint_about_a_bound_value_is_not_repeated_to_the_model():
 
 
 @pytest.mark.django_db
-def test_a_call_that_drops_rows_reports_how_many_not_which(run_setup, settings):
-    """Returning fewer rows is not evidence of having produced any.
-
-    An action that filters its input returns a different number of rows without
-    having made a single one of them — they are the automation's rows, minus
-    some. Counting them was the wrong way to tell the two apart, and got this
-    case exactly backwards.
-    """
-    from cms.plugin_pool import plugin_pool
-
-    _trigger, placeholder = run_setup
+def test_tool_result_reports_declared_values_even_when_unchanged(run_setup, settings):
+    trigger, placeholder = run_setup
     ai = add_step(placeholder, settings)
-    tool = add_tool(
+    add_tool(
         placeholder,
         ai,
         settings,
         plugin_type="MailAction",
         tool_name="reply",
         exposed_fields=["subject"],
-        config={"recipient_email": "'to@example.com'", "subject": "'x'", "body": "x"},
+        requires_approval=False,
+        config={"recipient_email": "'ada@example.com'", "subject": "'Hi'", "body": "Hi"},
     )
-    instance = plugin_pool.get_plugin("MailAction").model.objects.get(pk=tool.pk)
-
-    given = [{"token": "sk-do-not-share", "keep": bool(n)} for n in (0, 1, 1)]
-    survivors = [row for row in given if row["keep"]]
-
-    reported = str(instance._reportable(given, survivors))
-    assert "sk-do-not-share" not in reported, "they are its input, however few came back"
-    assert "2" in reported, "how many survived is what there is to say"
+    SCRIPT.extend([says(calls=[ToolCall(id="c1", name="reply", arguments={"subject": "Hi"})]), says(text="Done.")])
+    trigger.trigger_execution(
+        data={"delivery": {"sent": True, "recipient": "ada@example.com"}, "token": "sk-do-not-share"}
+    )
+    reported = observations(step_action())[0]["content"]
+    assert "delivery" in reported and "ada@example.com" in reported
+    assert "sk-do-not-share" not in reported
 
 
 @pytest.mark.django_db
-def test_a_lookup_reports_its_rows_even_when_it_finds_as_many_as_it_was_given(run_setup, settings):
-    """And the mirror image: a lookup can find exactly what it was asked about.
-
-    "Does this user exist" is a query filtered on the row's own data, so the
-    record that comes back matches the row that went in. Cardinality says
-    "unchanged", the delta is empty, and a read tool answers ``{"rows": 1}``
-    where it meant "yes, here she is". What it returns is its answer because of
-    what it *is*, and no shape of the data will say so.
-    """
-    from cms.plugin_pool import plugin_pool
-
-    _trigger, placeholder = run_setup
+def test_lookup_reports_its_declared_records(run_setup, settings, django_user_model):
+    settings.AUTOMATION_ALLOWED_MODELS = ["auth.User"]
+    django_user_model.objects.create(username="ada", email="ada@example.com")
+    trigger, placeholder = run_setup
     ai = add_step(placeholder, settings)
-    tool = add_tool(
+    add_tool(
         placeholder,
         ai,
         settings,
         plugin_type="QueryModelAction",
         tool_name="find_users",
-        exposed_fields=["filters"],
-        config={"model": "auth.User", "fields": "username", "limit": 5},
+        exposed_fields=[],
+        requires_approval=False,
+        config={"model": "auth.User", "filters": {"username": "'ada'"}, "fields": "email", "limit": 5},
     )
-    instance = plugin_pool.get_plugin("QueryModelAction").model.objects.get(pk=tool.pk)
+    SCRIPT.extend([says(calls=[ToolCall(id="c1", name="find_users", arguments={})]), says(text="Found.")])
+    trigger.trigger_execution(data={"token": "sk-do-not-share"})
+    reported = observations(step_action())[0]["content"]
+    assert "ada@example.com" in reported and "records" in reported
+    assert "sk-do-not-share" not in reported
+    assert step_action().result["records"][0]["email"] == "ada@example.com"
 
-    asked_about = [{"username": "ada", "email": "ada@example.com"}]
-    found = [{"username": "ada", "email": "ada@example.com"}]
-    reported = str(instance._reportable(asked_about, found))
-    assert "ada@example.com" in reported, "the rows are the answer, identical or not"
 
+def test_an_action_declares_named_results():
+    from djangocms_automation.actions.mail import MailActionPluginModel
+    from djangocms_automation.actions.model_actions import QueryModelActionModel
 
-def test_an_action_says_what_it_reports_rather_than_being_guessed_at():
-    """The policy is a declaration, because nothing else can tell."""
-    from cms.plugin_pool import plugin_pool
-
-    from djangocms_automation.cms_plugins import ActionPlugin
-
-    assert ActionPlugin.reports_to_model == "changes", "the conservative one is the default"
-    assert plugin_pool.get_plugin("QueryModelAction").reports_to_model == "rows"
-    assert plugin_pool.get_plugin("MailAction").reports_to_model == "changes"
+    assert MailActionPluginModel.default_outputs["delivery"]["field"] == "delivery"
+    assert QueryModelActionModel.default_outputs["records"]["field"] == "records"
 
 
 def test_a_complaint_the_model_alone_caused_is_one_it_is_asked_to_fix():
@@ -2242,7 +2189,7 @@ def test_resuming_a_persons_tool_without_an_answer_says_nothing_else(run_setup, 
     )
     SCRIPT.append(says(calls=[ToolCall(id="c1", name="escalate", arguments={"note": "Need a hand"})]))
 
-    trigger.trigger_execution(data=[{"customer_token": "sk-do-not-share", "seed": 1}])
+    trigger.trigger_execution(data={"customer_token": "sk-do-not-share", "seed": 1})
 
     call = call_action()
     assert call.state == WAITING
@@ -2282,7 +2229,7 @@ def test_a_call_that_changed_while_waiting_is_put_back_for_approval(run_setup, s
     )
     SCRIPT.append(says(calls=[ToolCall(id="c1", name="reply", arguments={"subject": "Ship it"})]))
 
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     call = call_action()
     assert call.result["bound"][0]["inputs"]["recipient_email"] == "ada@example.com"
@@ -2298,10 +2245,9 @@ def test_a_call_that_changed_while_waiting_is_put_back_for_approval(run_setup, s
     resume_action(call.pk, admin_user)
 
     call.refresh_from_db()
-    assert len(mail.outbox) == sent_before, "nobody approved this one"
-    assert call.state == WAITING, "so it is asked again rather than run"
-    assert call.result["changed"] is True, "and the page says why it is being asked twice"
-    assert call.result["bound"][0]["inputs"]["recipient_email"] == "someone-else@example.com"
+    assert len(mail.outbox) == sent_before + 1
+    assert call.state == COMPLETED
+    assert mail.outbox[-1].to == ["ada@example.com"], "the approved, frozen recipient"
 
 
 @pytest.mark.django_db
@@ -2329,7 +2275,7 @@ def test_approving_does_not_add_a_row_of_its_own(run_setup, settings, admin_user
     )
     SCRIPT.append(says(calls=[ToolCall(id="c1", name="reply", arguments={"subject": "Ship it"})]))
 
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     sent_before = len(mail.outbox)
     SCRIPT.append(says(text="Sent."))
@@ -2339,62 +2285,25 @@ def test_approving_does_not_add_a_row_of_its_own(run_setup, settings, admin_user
 
 
 @pytest.mark.django_db
-def test_reordering_rows_does_not_hand_them_to_the_model(run_setup, settings):
-    """Position is not provenance.
-
-    An action that sorts its rows returns the automation's own data in a
-    different order. Compared position by position every field of every row
-    looks new, and reporting "what changed" reports the lot.
-    """
-    from cms.plugin_pool import plugin_pool
-
-    _trigger, placeholder = run_setup
+def test_an_unrelated_list_field_is_not_reported_to_the_model(run_setup, settings):
+    trigger, placeholder = run_setup
     ai = add_step(placeholder, settings)
-    tool = add_tool(
-        placeholder,
-        ai,
-        settings,
-        plugin_type="MailAction",
-        tool_name="reply",
-        exposed_fields=["subject"],
-        config={"recipient_email": "'to@example.com'", "subject": "'x'", "body": "x"},
-    )
-    instance = plugin_pool.get_plugin("MailAction").model.objects.get(pk=tool.pk)
-
-    given = [{"token": "sk-do-not-share", "rank": 2}, {"token": "sk-also-secret", "rank": 1}]
-    sorted_back = sorted(given, key=lambda row: row["rank"])
-
-    reported = str(instance._reportable(given, sorted_back))
-    assert "sk-do-not-share" not in reported, "the same rows, in a different order"
+    add_tool(placeholder, ai, settings, tool_name="look", requires_approval=False)
+    SCRIPT.extend([says(calls=[ToolCall(id="c1", name="look", arguments={})]), says(text="Done.")])
+    trigger.trigger_execution(data={"credentials": [{"token": "sk-do-not-share"}, {"token": "sk-also-secret"}]})
+    reported = observations(step_action())[0]["content"]
+    assert "sk-do-not-share" not in reported
     assert "sk-also-secret" not in reported
+    assert len(step_action().result["credentials"]) == 2
 
 
 @pytest.mark.django_db
-def test_repeated_targets_are_counted_not_collapsed(run_setup, settings):
-    """Three messages to one address are three messages.
-
-    Showing a single line understates by two, and understating is the one
-    direction an approver has no way of checking.
-    """
+def test_repeated_items_are_rejected_not_implicitly_collapsed(run_setup, settings):
     trigger, placeholder = run_setup
-    ai = add_step(placeholder, settings)
-    add_tool(
-        placeholder,
-        ai,
-        settings,
-        plugin_type="MailAction",
-        tool_name="reply",
-        exposed_fields=["subject"],
-        requires_approval=True,
-        config={"recipient_email": "customer.email", "subject": "'x'", "body": "x"},
-    )
-    SCRIPT.append(says(calls=[ToolCall(id="c1", name="reply", arguments={"subject": "Ship it"})]))
-
-    trigger.trigger_execution(data=[{"customer": {"email": "ada@example.com"}}] * 3)
-
-    shown = call_action().result["bound"]
-    assert len(shown) == 1, "one address"
-    assert shown[0]["times"] == 3, "written to three times"
+    add_step(placeholder, settings)
+    with pytest.raises(ValueError, match="batches"):
+        trigger.trigger_execution(data=[{"customer": {"email": "ada@example.com"}}] * 3)
+    assert not AutomationAction.objects.exists()
 
 
 @pytest.mark.django_db
@@ -2424,7 +2333,7 @@ def test_turning_approval_off_does_not_wave_a_pending_call_through(run_setup, se
     )
     SCRIPT.append(says(calls=[ToolCall(id="c1", name="reply", arguments={"subject": "Ship it"})]))
 
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
     call = call_action()
     assert call.state == WAITING
 
@@ -2440,9 +2349,9 @@ def test_turning_approval_off_does_not_wave_a_pending_call_through(run_setup, se
     resume_action(call.pk, admin_user)
 
     call.refresh_from_db()
-    assert len(mail.outbox) == sent_before, "still not what anybody approved"
-    assert call.state == WAITING
-    assert call.result["changed"] is True
+    assert len(mail.outbox) == sent_before + 1
+    assert call.state == COMPLETED
+    assert mail.outbox[-1].to == ["ada@example.com"], "the frozen call still requires the approval just given"
 
 
 def test_a_per_field_hook_cannot_smuggle_a_secret_past_the_probe():
@@ -2651,12 +2560,12 @@ def test_a_project_can_name_its_models_for_the_people_choosing_them(settings):
 
     settings.AUTOMATION_LLM_MODELS = [
         ("anthropic/claude-opus-4-8", "Claude Opus — best quality, costs real money"),
-        ("dummy/echo", "Echo — answers locally, no provider"),
+        ("dummy/echo", "No provider"),
     ]
 
     assert get_llm_model_choices() == [
         ("anthropic/claude-opus-4-8", "Claude Opus — best quality, costs real money"),
-        ("dummy/echo", "Echo — answers locally, no provider"),
+        ("dummy/echo", "No provider"),
     ]
     # The allowlist is still about model strings; a label decides nothing.
     assert get_allowed_llm_models() == ["anthropic/claude-opus-4-8", "dummy/echo"]
@@ -2772,7 +2681,7 @@ def test_a_model_that_says_nothing_fails_the_step(run_setup, settings):
     add_step(placeholder, settings)
     SCRIPT.append(says(text=""))
 
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     action = step_action()
     assert action.state == FAILED
@@ -2793,7 +2702,7 @@ def test_a_model_that_thought_until_it_ran_out_says_which(run_setup, settings):
     add_step(placeholder, settings)
     SCRIPT.append(says(text="", reasoning="thinking at great length about it"))
 
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     assert "spent what it had on reasoning" in step_action().result["error"]
     assert "Maximum tokens" in step_action().result["error"], "and what to do about it"
@@ -2828,7 +2737,7 @@ def test_an_empty_answer_to_a_shape_fails_rather_than_flowing_on(run_setup, sett
     add_step(placeholder, settings)
     SCRIPT.append(says(json={}))
 
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     action = step_action()
     assert action.state == FAILED
@@ -2847,7 +2756,7 @@ def test_the_answer_format_reaches_the_model(run_setup, settings):
     add_step(placeholder, settings, system_prompt="Be brief.", answer_format="text")
     SCRIPT.append(says(text="An answer."))
 
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     system = observations_system(step_action())
     assert "Be brief." in system, "what the editor wrote stays the substance"
@@ -2862,7 +2771,7 @@ def test_no_answer_format_adds_nothing(run_setup, settings):
     add_step(placeholder, settings, system_prompt="Be brief.")
     SCRIPT.append(says(text="An answer."))
 
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     assert observations_system(step_action()) == "Be brief."
 
@@ -2874,7 +2783,7 @@ def test_a_format_alone_is_the_whole_instruction(run_setup, settings):
     add_step(placeholder, settings, answer_format="html")
     SCRIPT.append(says(text="<p>An answer.</p>"))
 
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     assert observations_system(step_action()).startswith("Write in HTML")
 
@@ -2890,7 +2799,7 @@ def test_the_answer_format_is_recorded_with_the_conversation(run_setup, settings
     add_step(placeholder, settings, answer_format="markdown")
     SCRIPT.append(says(text="## Heading"))
 
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     action = step_action()
     assert action.scratch["answer_format"] == "markdown"
@@ -2919,7 +2828,7 @@ def test_a_run_recorded_before_this_falls_back_to_the_step(run_setup, settings):
     trigger, placeholder = run_setup
     add_step(placeholder, settings, answer_format="markdown")
     SCRIPT.append(says(text="## Heading"))
-    trigger.trigger_execution(data=[{"seed": 1}])
+    trigger.trigger_execution(data={"seed": 1})
 
     action = step_action()
     scratch = {key: value for key, value in action.scratch.items() if key != "answer_format"}
@@ -2942,7 +2851,7 @@ def test_intent_comes_first_for_a_plain_action(settings):
 
     names = [str(name) for name, _options in plugin(plugin.model, django_admin.site).get_fieldsets(request, None)]
 
-    assert names == ["Intent", "Inputs", "Comment"]
+    assert names == ["Intent", "Inputs", "Output", "Comment"]
 
 
 @pytest.mark.django_db

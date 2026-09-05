@@ -19,10 +19,9 @@ The execute contract for plugins is::
     def execute(self, action, data, single_step=False, plugin_dict=None):
         return state, output
 
-where ``data`` is the normalized list of data rows flowing through the
-automation, ``state`` is one of the :mod:`.instances` state constants and
-``output`` is the data passed to subsequent actions (canonically a list of
-dict rows). Raising :class:`ActionPause` pauses the action until a given
+where ``data`` is one JSON object (the item), ``state`` is one of the
+:mod:`.instances` state constants and ``output`` is the item passed to
+subsequent actions when completed, or waiting/failure diagnostics otherwise. Raising :class:`ActionPause` pauses the action until a given
 time; any other exception fails the action and the automation instance.
 """
 
@@ -42,6 +41,8 @@ from django.db import models, transaction
 from django.db.models import Q
 from django.utils.timezone import now
 
+from .definitions import instance_plugins
+from .execution import item_data
 from .instances import (
     CANCELED,
     COMPLETED,
@@ -67,8 +68,8 @@ __all__ = [
     "claim_action",
     "enqueue_action",
     "fail_action",
+    "item_data",
     "maybe_finish_instance",
-    "normalize_rows",
     "notify_parent",
     "pause_action",
     "propagate_failure",
@@ -94,21 +95,6 @@ class ActionPause(Exception):
         self.until = until
         self.message = message
         super().__init__(message or f"Paused until {until}")
-
-
-def normalize_rows(data) -> list[dict]:
-    """Normalize automation data to the canonical list-of-rows shape.
-
-    ``None`` becomes ``[]``, a dict becomes a single-row list, and a list is
-    passed through. Any other value is wrapped in a ``{"value": ...}`` row.
-    """
-    if data is None:
-        return []
-    if isinstance(data, list):
-        return data
-    if isinstance(data, dict):
-        return [data] if data else []
-    return [{"value": data}]
 
 
 def _link_tree(plugins: list[CMSPlugin]) -> None:
@@ -214,6 +200,10 @@ def enqueue_action(action_id: int, data=None, single_step: bool = False) -> None
     action is marked FAILED with the rejection reason stored in its result.
     """
     from .tasks import execute_action
+
+    if data is not None:
+        data = item_data(data)
+        AutomationAction.objects.filter(pk=action_id, state=PENDING).update(input_data=data)
 
     def _do_enqueue():
         execute_action.enqueue(action_id, data=data, single_step=single_step)
@@ -464,7 +454,7 @@ def notify_parent_action(instance: AutomationInstance, status: str) -> bool:
     )
     if woken is None:
         return False
-    enqueue_action(caller.pk, data=instance.data or [])
+    enqueue_action(caller.pk, data=instance.data or {})
     return True
 
 
@@ -660,6 +650,8 @@ def _heartbeat_interval() -> float:
 
 def _resolve_timeout(plugin) -> int | None:
     """Resolve the execution timeout for a plugin, in seconds."""
+    if getattr(plugin, "_frozen_definition", False):
+        return plugin.timeout_seconds
     timeout = getattr(plugin, "timeout_seconds", None)
     if timeout is None:
         timeout = getattr(settings, "AUTOMATION_ACTION_TIMEOUT", None)
@@ -680,7 +672,11 @@ def run_action(action_id: int, data=None, single_step: bool = False) -> None:
     if pending is None:
         return
 
-    plugin_map = build_plugin_map(pending.automation_instance.automation_content_id)
+    try:
+        plugin_map = instance_plugins(pending.automation_instance)
+    except Exception as exc:  # noqa: BLE001 — unavailable executors must leave a durable failure
+        fail_action(pending, str(exc), exc=exc, allowed_from=(PENDING,))
+        return
     plugin = plugin_map.get(pending.plugin_ptr)
     # Nothing passed means this is the action coming back to itself — a join
     # waking, a paused action revived, an approval going ahead. What it had is
@@ -688,11 +684,11 @@ def run_action(action_id: int, data=None, single_step: bool = False) -> None:
     # so falling back to that would hand a second turn the input of the first
     # step, discarding everything produced since.
     if data is not None:
-        rows = normalize_rows(data)
+        item = item_data(data)
     elif pending.input_data is not None:
-        rows = normalize_rows(pending.input_data)
+        item = item_data(pending.input_data)
     else:
-        rows = normalize_rows(pending.automation_instance.data)
+        item = item_data(pending.automation_instance.data)
 
     claim_updates = None
     if plugin is not None:
@@ -700,7 +696,7 @@ def run_action(action_id: int, data=None, single_step: bool = False) -> None:
         claim_updates = {
             # The input this attempt was given, so a dead-lettered action can be
             # replayed with it rather than whatever the instance holds later.
-            "input_data": rows,
+            "input_data": item,
             "timeout_seconds": _resolve_timeout(plugin),
             # Lease recovery runs in the scheduler, which has no plugin instance
             # to ask, so the budget has to be on the row.
@@ -730,7 +726,7 @@ def run_action(action_id: int, data=None, single_step: bool = False) -> None:
 
     try:
         with _Heartbeat(action.pk, action.lease_id, _heartbeat_interval()):
-            state, output = plugin.execute(action, rows, single_step=single_step, plugin_dict=plugin_map)
+            state, output = plugin.execute(action, item, single_step=single_step, plugin_dict=plugin_map)
     except ActionPause as pause:
         pause_action(action, until=pause.until, message=pause.message, require_lease=lease)
         return
@@ -752,12 +748,12 @@ def run_action(action_id: int, data=None, single_step: bool = False) -> None:
             "interaction_permissions": action.interaction_permissions,
             "interaction_user_id": action.interaction_user_id,
             "interaction_group_id": action.interaction_group_id,
+            "writes": action.writes,
+            "context": action.context,
         },
     }
-    # Preserve existing branch/retry metadata when a plugin has no output.
-    # This matches the engine's behavior before transitions were introduced.
-    if output:
-        transition_kwargs["result"] = output
+    # An empty item is a real outcome, not a request to retain an older result.
+    transition_kwargs["result"] = output
     # Recording the outcome and scheduling what follows must be one unit. Split
     # across two commits, a worker dying in between leaves an action that is
     # finished with nothing queued behind it: the run stalls with no unfinished
@@ -778,8 +774,10 @@ def run_action(action_id: int, data=None, single_step: bool = False) -> None:
 
         next_actions = plugin.get_next_actions(action)
         if next_actions:
-            payload = plugin.get_next_payload(action, state, output, rows)
+            payload = plugin.get_next_payload(action, state, output, item)
             for next_action in next_actions:
+                next_action.context = plugin.next_context(action, next_action)
+                next_action.save(update_fields=["context"])
                 enqueue_action(next_action.pk, data=payload)
             return
 
@@ -789,6 +787,8 @@ def run_action(action_id: int, data=None, single_step: bool = False) -> None:
             else:
                 instance = action.automation_instance
                 instance.data = output
+                keys = instance.definition.get("output", [])
+                instance.output = {key: output[key] for key in keys if key in output} if keys else output
                 instance.save()
                 maybe_finish_instance(instance)
         elif state == WAITING:
@@ -800,8 +800,7 @@ def resume_action(action_id: int, user, data: dict | None = None) -> AutomationA
 
     :param user: The user resuming the action; must be permitted via
         :meth:`AutomationAction.get_users_with_permission`.
-    :param data: Optional extra data merged into the automation data as an
-        additional row.
+    :param data: A submitted JSON object, saved to the response destination.
     :raises PermissionError: If the user may not interact with this action.
     :raises ValueError: If the action is not waiting for interaction.
     """
@@ -816,13 +815,8 @@ def resume_action(action_id: int, user, data: dict | None = None) -> AutomationA
     # it hands the action the input of a step that came before everything —
     # discarding whatever the steps in between produced, which is usually the
     # very thing the person was asked to approve.
-    rows = normalize_rows(action.input_data if action.input_data is not None else action.automation_instance.data)
-    if data and not (action.scratch or {}).get("awaiting_approval"):
-        # Approving is a decision about the rows already there, not a
-        # contribution of another one. A resume form posting any field at all
-        # would otherwise append a row — and so a target — that nobody read
-        # and nobody approved.
-        rows = rows + [data]
+    item = item_data(action.input_data if action.input_data is not None else action.automation_instance.data)
+    data = item_data(data)
 
     # Reject a stale claim before doing anything else. The transition below is
     # still the authority under lock; this only keeps an action that is no
@@ -830,7 +824,7 @@ def resume_action(action_id: int, user, data: dict | None = None) -> AutomationA
     if action.state != WAITING:
         raise ValueError("Action is no longer waiting.")
 
-    plugin_map = build_plugin_map(action.automation_instance.automation_content_id)
+    plugin_map = instance_plugins(action.automation_instance)
     plugin = plugin_map.get(action.plugin_ptr)
     if plugin is None:
         # Fail from WAITING, before the resume. Completing first and failing
@@ -852,6 +846,9 @@ def resume_action(action_id: int, user, data: dict | None = None) -> AutomationA
     # retry, it has not failed at anything — and it runs again.
     if plugin.resume_reenters(action):
         with transaction.atomic():
+            locked = AutomationAction.objects.select_for_update().get(pk=action.pk)
+            if locked.state != WAITING:
+                raise ValueError("Action is no longer waiting.")
             plugin.on_resume(action, user, data)
             woken = transition_action(
                 action.pk,
@@ -859,13 +856,17 @@ def resume_action(action_id: int, user, data: dict | None = None) -> AutomationA
                 allowed_from=(WAITING,),
                 message="Resumed by user",
                 field_updates={"requires_interaction": False},
-                metadata={"resumed_by": getattr(user, "pk", None)},
+                metadata={"resumed_by": getattr(user, "pk", None), "submission": data},
                 continuation=True,
             )
             if woken is None:
                 raise ValueError("Action is no longer waiting.")
-            enqueue_action(action.pk, data=rows)
+            enqueue_action(action.pk, data=item)
         return woken
+
+    from .execution import place_results
+
+    item = place_results(plugin, action, item, {"submission": data}, record=False)
 
     # The resume and what follows it commit together, for the same reason as an
     # action's outcome: a resume that lands without its continuation leaves a
@@ -876,8 +877,9 @@ def resume_action(action_id: int, user, data: dict | None = None) -> AutomationA
             COMPLETED,
             allowed_from=(WAITING,),
             message="Resumed by user",
-            field_updates={"requires_interaction": False},
-            metadata={"resumed_by": getattr(user, "pk", None)},
+            field_updates={"requires_interaction": False, "writes": action.writes},
+            result=item,
+            metadata={"resumed_by": getattr(user, "pk", None), "submission": data},
         )
         if claimed is None:
             raise ValueError("Action is no longer waiting.")
@@ -886,12 +888,14 @@ def resume_action(action_id: int, user, data: dict | None = None) -> AutomationA
         next_actions = plugin.get_next_actions(action)
         if next_actions:
             for next_action in next_actions:
-                enqueue_action(next_action.pk, data=rows)
+                enqueue_action(next_action.pk, data=item)
         elif action.parent_id:
             notify_parent(action)
         else:
             instance = action.automation_instance
-            instance.data = rows
+            instance.data = item
+            keys = instance.definition.get("output", [])
+            instance.output = {key: item[key] for key in keys if key in item} if keys else item
             instance.save()
             maybe_finish_instance(instance)
     return action
@@ -965,10 +969,10 @@ def _recovery_policy(action: AutomationAction, plugin_maps: dict):
     removed from the automation since the action was created — the action is
     about to fail for that reason anyway.
     """
-    content_id = action.automation_instance.automation_content_id
+    content_id = action.automation_instance_id
     if content_id not in plugin_maps:
         try:
-            plugin_maps[content_id] = build_plugin_map(content_id)
+            plugin_maps[content_id] = instance_plugins(action.automation_instance)
         except Exception:
             logger.exception("automation.recovery.plugin_map_failed", extra={"automation_action_id": action.pk})
             plugin_maps[content_id] = {}
@@ -1075,7 +1079,7 @@ def _recover_one(action_id: int, timestamp: datetime.datetime, plugin_maps: dict
                 PENDING,
                 allowed_from=(RUNNING,),
                 message=f"Recovered: {reason}, retrying"[:MAX_FIELD_LENGTH],
-                metadata={"recovery": reason},
+                metadata={"recovery": reason, "external_outcome": "unknown"},
                 field_updates={"next_attempt_at": due, "paused_until": due},
                 require_lease=action.lease_id,
             )
@@ -1086,7 +1090,7 @@ def _recover_one(action_id: int, timestamp: datetime.datetime, plugin_maps: dict
                 allowed_from=(RUNNING,),
                 result={"error": f"Action {reason}"},
                 message=f"Recovered: {reason}, no attempts left"[:MAX_FIELD_LENGTH],
-                metadata={"recovery": reason},
+                metadata={"recovery": reason, "external_outcome": "unknown"},
                 require_lease=action.lease_id,
             )
         if transitioned is not None and transitioned.state == FAILED:
@@ -1242,10 +1246,13 @@ def replay_action(action_id: int) -> AutomationAction | None:
     # Most of what an action needs is its input, which is seeded below. A node
     # whose instruction lives on itself rather than in the data says so, and
     # says which part of it survives a replay.
-    plugin = build_plugin_map(original.automation_instance.automation_content_id).get(original.plugin_ptr)
+    plugin = instance_plugins(original.automation_instance).get(original.plugin_ptr)
     carried = plugin.scratch_for_replay(dict(original.scratch or {})) if plugin is not None else {}
 
     with transaction.atomic():
+        instance = AutomationInstance.objects.select_for_update().get(pk=original.automation_instance_id)
+        if instance.trace_redacted:
+            raise ValueError("Execution payloads were redacted; this run cannot be replayed.")
         replacement = AutomationAction.objects.create(
             previous=original.previous,
             parent=original.parent,
@@ -1254,6 +1261,8 @@ def replay_action(action_id: int) -> AutomationAction | None:
             max_attempts=original.max_attempts,
             replayed_from=original,
             scratch=carried,
+            context=original.context,
+            input_data=original.input_data,
             finished=None,
         )
         _reopen_ancestors(original, replacement.pk)
@@ -1445,7 +1454,7 @@ def fire_due_timers(timestamp: datetime.datetime | None = None, catch_up: int | 
                 # even if the config write is somehow lost.
                 with transaction.atomic():
                     trigger.trigger_execution(
-                        data=[{"scheduled_at": due.isoformat(), "fired_at": timestamp.isoformat()}],
+                        data={"scheduled_at": due.isoformat(), "fired_at": timestamp.isoformat()},
                         idempotency_key=f"timer:{trigger.pk}:{due.isoformat()}",
                     )
                     config["last_fired"] = due.isoformat()

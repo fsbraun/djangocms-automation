@@ -76,19 +76,14 @@ def test_create_model_action(run_setup, settings):
         settings,
     )
 
-    trigger.trigger_execution(
-        data=[
-            {"username": "alice", "email": "alice@example.com"},
-            {"username": "bob", "email": "bob@example.com"},
-        ],
-        start=True,
-    )
+    for name in ("alice", "bob"):
+        trigger.trigger_execution(data={"username": name, "email": f"{name}@example.com"})
 
     assert User.objects.filter(username__in=["alice", "bob"]).count() == 2
     instance = trigger.automation_content.automationinstance_set.first()
     action = AutomationAction.objects.get(automation_instance=instance)
     assert action.state == COMPLETED
-    assert all("_created_id" in row for row in action.result)
+    assert action.result["created_id"]
 
 
 @pytest.mark.django_db
@@ -101,7 +96,7 @@ def test_create_model_action_disallowed_model_fails(run_setup, settings):
         {"model": "auth.Group", "field_mapping": {"name": "name"}},
         settings,
     )
-    trigger.trigger_execution(data=[{"name": "g"}], start=True)
+    trigger.trigger_execution(data={"name": "g"}, start=True)
     instance = trigger.automation_content.automationinstance_set.first()
     action = AutomationAction.objects.get(automation_instance=instance)
     assert action.state == FAILED
@@ -124,13 +119,13 @@ def test_update_model_action(run_setup, settings):
         settings,
     )
 
-    trigger.trigger_execution(data=[{"username": "carol", "new_email": "new@example.com"}], start=True)
+    trigger.trigger_execution(data={"username": "carol", "new_email": "new@example.com"}, start=True)
 
     assert User.objects.get(username="carol").email == "new@example.com"
     instance = trigger.automation_content.automationinstance_set.first()
     action = AutomationAction.objects.get(automation_instance=instance)
     assert action.state == COMPLETED
-    assert action.result[0]["_updated"] == 1
+    assert action.result["updated_count"] == 1
 
 
 @pytest.mark.django_db
@@ -143,7 +138,7 @@ def test_update_without_filters_fails(run_setup, settings):
         {"model": "auth.User", "filters": {}, "field_mapping": {"email": "'x@example.com'"}},
         settings,
     )
-    trigger.trigger_execution(data=[{}], start=True)
+    trigger.trigger_execution(data={}, start=True)
     action = AutomationAction.objects.get(
         automation_instance=trigger.automation_content.automationinstance_set.first()
     )
@@ -169,15 +164,15 @@ def test_query_model_action(run_setup, settings, admin_user):
         settings,
     )
 
-    trigger.trigger_execution(data=[], start=True)
+    trigger.trigger_execution(data={}, start=True)
 
     action = AutomationAction.objects.get(
         automation_instance=trigger.automation_content.automationinstance_set.first()
     )
     assert action.state == COMPLETED
-    usernames = [row["username"] for row in action.result]
+    usernames = [row["username"] for row in action.result["records"]]
     assert usernames == sorted(usernames)
-    assert {"pk", "username", "email"} <= set(action.result[0])
+    assert {"pk", "username", "email"} <= set(action.result["records"][0])
 
 
 # ---------------------------------------------------------------------------
@@ -233,7 +228,7 @@ def test_unknown_model_field_fails_run(run_setup, settings):
         {"model": "auth.User", "field_mapping": {"nonexistent_field": "'x'"}},
         settings,
     )
-    trigger.trigger_execution(data=[{}], start=True)
+    trigger.trigger_execution(data={}, start=True)
     action = AutomationAction.objects.get(
         automation_instance=trigger.automation_content.automationinstance_set.first()
     )

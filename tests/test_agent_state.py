@@ -42,8 +42,9 @@ def action(automation_content, settings):
         slot="start",
     )[0]
     add_plugin(placeholder=placeholder, plugin_type="ActionPlugin", language=settings.LANGUAGE_CODE)
-    trigger.trigger_execution(data=[{"seed": 1}])
-    return AutomationAction.objects.latest("id")
+    trigger.trigger_execution(data={"seed": 1}, start=False)
+    action = AutomationAction.objects.latest("id")
+    return engine.claim_action(action.pk)
 
 
 def reply(text="", tool_calls=(), usage=None):
