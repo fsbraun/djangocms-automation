@@ -1,7 +1,17 @@
 {% load i18n %}
-{% if data_summary.uses or data_summary.produces %}
-<div class="automation-data-summary">
-    {% if data_summary.uses %}<div>{% translate "Uses" %}: {{ data_summary.uses }}</div>{% endif %}
-    {% if data_summary.produces %}<div>{% translate "Produces" %}: {{ data_summary.produces }}</div>{% endif %}
-</div>
+{% if data_summary.uses %}
+<details class="automation-detail automation-uses">
+    <summary aria-label="{% translate 'Uses' %}">
+        <svg width="16" height="16" aria-hidden="true"><use href="#bi-box-arrow-in-up"></use></svg>
+    </summary>
+    <div class="automation-detail-panel"><strong>{% translate "Uses" %}</strong><div>{{ data_summary.uses }}</div></div>
+</details>
+{% endif %}
+{% if data_summary.produces %}
+<details class="automation-detail automation-produces">
+    <summary aria-label="{% translate 'Produces' %}">
+        <svg width="16" height="16" aria-hidden="true"><use href="#bi-box-arrow-down"></use></svg>
+    </summary>
+    <div class="automation-detail-panel"><strong>{% translate "Produces" %}</strong><div>{{ data_summary.produces }}</div></div>
+</details>
 {% endif %}

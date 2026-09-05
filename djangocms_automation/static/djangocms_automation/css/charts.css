@@ -3,14 +3,6 @@ body {
     background: var(--dca-white);
 }
 
-.automation-data-summary {
-    margin: .5rem 0;
-    font-size: .85em;
-    line-height: 1.4;
-    overflow-wrap: anywhere;
-    color: var(--dca-gray);
-}
-
 .automation-container {
     .title-block {
         position: absolute;
@@ -95,6 +87,9 @@ body {
         display: inline-block;
         z-index: 1;
         box-shadow: 0 0 5px color-mix(in srgb,var(--dca-black) 20%,transparent);
+        &:has(.automation-detail[open]) {
+            z-index: 20;
+        }
         > svg {
             zoom: 150%;
             position: absolute;
@@ -220,28 +215,93 @@ body {
             color: orange;
         }
 
-        .automation-comment-trigger {
+        .automation-step-details {
             position: absolute;
-            top: -10px;
-            inset-inline-start: -10px;
-            width: 22px;
-            height: 22px;
-            padding: 3px;
-            display: grid;
-            place-items: center;
-            color: var(--dca-black);
-            background: var(--dca-white);
-            border: var(--dca-black) 1px solid;
-            border-radius: 50%;
-            cursor: help;
-            z-index: 20;
+            inset: 0;
+            pointer-events: none;
         }
 
-        .automation-comment-balloon {
+        .automation-detail {
             position: absolute;
-            display: none;
-            inset-inline-start: -1px;
-            bottom: calc(100% + 12px);
+            bottom: -8px;
+            pointer-events: auto;
+
+            &.automation-uses {
+                inset-inline-start: 10px;
+
+                > .automation-detail-panel {
+                    inset-inline-start: auto;
+                    inset-inline-end: -10px;
+
+                    &::after {
+                        inset-inline-start: auto;
+                        inset-inline-end: 12px;
+                    }
+                }
+            }
+
+            &.automation-produces {
+                inset-inline-end: 10px;
+            }
+
+            &.automation-uses, &.automation-produces {
+                > .automation-detail-panel {
+                    top: calc(100% + 8px);
+                    bottom: auto;
+
+                    &::after {
+                        top: 0;
+                        transform: translateY(-6px) rotate(225deg);
+                    }
+                }
+            }
+
+            &.automation-comment {
+                top: -8px;
+                bottom: auto;
+                inset-inline-end: 10px;
+            }
+
+            &[open] {
+                z-index: 20;
+            }
+
+            > summary {
+                width: 16px;
+                height: 16px;
+                padding: 0;
+                display: grid;
+                place-items: center;
+                list-style: none;
+                color: var(--dca-gray);
+                background: var(--dca-white);
+                border: 0;
+                border-radius: 0;
+                cursor: pointer;
+
+                &::-webkit-details-marker {
+                    display: none;
+                }
+
+                &:hover, &:focus-visible {
+                    color: var(--dca-black);
+                }
+
+                &:focus-visible {
+                    outline: 2px solid currentColor;
+                    outline-offset: 2px;
+                }
+            }
+
+            &[open] > summary {
+                color: var(--dca-black);
+            }
+        }
+
+        .automation-detail-panel {
+            position: absolute;
+            inset-inline-start: -8px;
+            bottom: calc(100% + 8px);
             box-sizing: border-box;
             width: max-content;
             max-width: min(300px, 80vw);
@@ -257,12 +317,13 @@ body {
             line-height: 1.4;
             text-align: start;
             white-space: pre-wrap;
+            overflow-wrap: anywhere;
             z-index: 19;
 
             &::after {
                 content: '';
                 position: absolute;
-                top: 100%;
+                bottom: -11px;
                 inset-inline-start: 10px;
                 width: 10px;
                 height: 10px;
@@ -273,10 +334,6 @@ body {
             }
         }
 
-        .automation-comment-trigger:hover + .automation-comment-balloon,
-        .automation-comment-trigger:focus-visible + .automation-comment-balloon {
-            display: block;
-        }
     }
     .automation-action {
         display: inline-flex;

@@ -24,8 +24,7 @@ and deleted like any other action.
         {% for tool in approval_tools %}
             {% include "djangocms_automation/includes/approval.html" with tool=tool %}
         {% endfor %}
+        {% include "djangocms_automation/includes/step_details.html" %}
         {% include "djangocms_automation/includes/actor.html" %}
-        {% include "djangocms_automation/includes/data_summary.html" %}
-        {% include "djangocms_automation/includes/comment_balloon.html" %}
     </div>
 </div>

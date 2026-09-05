@@ -11,11 +11,10 @@
                 </div>
             </div>
         </div>
+        {% include "djangocms_automation/includes/step_details.html" %}
         {% for modifier in instance.child_plugin_instances %}
             {% render_plugin modifier %}
         {% endfor %}
         {% include "djangocms_automation/includes/actor.html" %}
-        {% include "djangocms_automation/includes/data_summary.html" %}
-        {% include "djangocms_automation/includes/comment_balloon.html" %}
     </div>
 </div>

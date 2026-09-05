@@ -1,0 +1,6 @@
+{% if data_summary.uses or data_summary.produces or request.toolbar.edit_mode_active and instance.comment %}
+<div class="automation-step-details">
+    {% include "djangocms_automation/includes/data_summary.html" %}
+    {% include "djangocms_automation/includes/comment_balloon.html" %}
+</div>
+{% endif %}

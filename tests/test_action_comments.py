@@ -13,7 +13,7 @@ from djangocms_automation.models import (
 )
 
 
-def render_action(template, *, comment, edit_mode):
+def render_action(template, *, comment, edit_mode, uses="", produces=""):
     request = RequestFactory().get("/")
     request.user = None
     request.toolbar = SimpleNamespace(edit_mode_active=edit_mode)
@@ -29,7 +29,13 @@ def render_action(template, *, comment, edit_mode):
     )
     return render_to_string(
         template,
-        {"instance": instance, "title": "Action", "tools": [], "approval_tools": []},
+        {
+            "instance": instance,
+            "title": "Action",
+            "tools": [],
+            "approval_tools": [],
+            "data_summary": {"uses": uses, "produces": produces},
+        },
         request=request,
     )
 
@@ -42,14 +48,41 @@ def render_action(template, *, comment, edit_mode):
         "djangocms_automation/plugins/tool.html",
     ],
 )
-def test_action_comments_are_available_as_a_balloon_in_edit_mode(template):
+def test_action_comments_are_available_as_closed_click_details_in_edit_mode(template):
     comment = 'Explain "why" & keep <this> safe.'
 
     html = render_action(template, comment=comment, edit_mode=True)
 
     assert f'data-comment="{escape(comment)}"' in html
     assert 'class="automation-comment-trigger"' in html
-    assert 'class="automation-comment-balloon" role="tooltip"' in html
+    assert '<details class="automation-detail automation-comment">' in html
+    assert '<summary class="automation-comment-trigger" aria-label="Comment">' in html
+    assert f"<div>{escape(comment)}</div>" in html
+    assert 'role="tooltip"' not in html
+
+
+@pytest.mark.parametrize("plugin", ["action", "ai_step", "tool"])
+@pytest.mark.parametrize(
+    "field,label,icon",
+    [("uses", "Uses", "bi-box-arrow-in-up"), ("produces", "Produces", "bi-box-arrow-down")],
+)
+def test_data_details_are_closed_and_accessible_by_icon(plugin, field, label, icon):
+    value = 'input.customer <name> & "email"'
+    html = render_action(
+        f"djangocms_automation/plugins/{plugin}.html",
+        comment="",
+        edit_mode=False,
+        **{field: value},
+    )
+
+    details = html.split(f'<details class="automation-detail automation-{field}">', 1)[1].split("</details>", 1)[0]
+    summary, panel = details.split("</summary>", 1)
+    assert f'<summary aria-label="{label}">' in summary
+    assert f'<use href="#{icon}">' in summary
+    assert value not in summary
+    assert f"<strong>{label}</strong><div>{escape(value)}</div>" in panel
+    other_field = "produces" if field == "uses" else "uses"
+    assert f"automation-{other_field}" not in html
 
 
 @pytest.mark.parametrize("edit_mode", [False, None])
@@ -61,6 +94,7 @@ def test_action_comments_are_not_exposed_outside_edit_mode(edit_mode):
     assert "data-comment=" not in html
     assert comment not in html
     assert "automation-comment-trigger" not in html
+    assert "automation-step-details" not in html
 
 
 def test_blank_action_comments_do_not_create_an_indicator():
@@ -68,6 +102,7 @@ def test_blank_action_comments_do_not_create_an_indicator():
 
     assert "data-comment=" not in html
     assert "automation-comment-trigger" not in html
+    assert "automation-step-details" not in html
 
 
 @pytest.mark.parametrize(
