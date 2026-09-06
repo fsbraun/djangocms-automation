@@ -5,6 +5,7 @@ Supported forms:
 - Integer and float literals, for example ``42``, ``-3``, ``3.14`` or ``+0.5``.
 - Quoted string literals using single or double quotes, supporting the escape
   sequences ``\n``, ``\t``, ``\r``, ``\\``, ``\"`` and ``\'``.
+- JSON scalar literals ``true``, ``false`` and ``null``.
 - Variable references composed of dotted identifiers, for example
   ``user.profile.age``, resolved against a provided context dict. Each segment
   must match ``[A-Za-z_][A-Za-z0-9_]*``. Traversal follows dictionary keys;
@@ -29,6 +30,7 @@ __all__ = [
     "Literal",
     "is_number_literal",
     "is_string_literal",
+    "is_variable_reference",
     "resolve_expression",
     "validate_expression",
 ]
@@ -82,6 +84,16 @@ def is_string_literal(expr: str) -> bool:
     if len(expr) < 2:
         return False
     return (expr[0], expr[-1]) in (("'", "'"), ('"', '"'))
+
+
+def is_variable_reference(expr: str) -> bool:
+    """Whether *expr* is a safe dotted path rather than a literal."""
+    parts = str(expr).strip().split(".")
+    return (
+        bool(parts)
+        and bool(_IDENT_RE.fullmatch(parts[0]))
+        and all(_IDENT_RE.fullmatch(part) or part.isdigit() for part in parts[1:])
+    )
 
 
 def _parse_number(expr: str) -> int | float:
@@ -168,8 +180,9 @@ def validate_expression(expr: str) -> bool:
         return True
     if is_number_literal(expr):
         return True
-    parts = expr.split(".")
-    if not all(_IDENT_RE.match(p) or p.isdigit() for p in parts):
+    if expr in ("true", "false", "null"):
+        return True
+    if not is_variable_reference(expr):
         raise ExpressionError(f"Invalid identifier path: {expr}")
     return True
 
@@ -204,6 +217,12 @@ def resolve_expression(expr: str, context: dict[str, Any]) -> Any:
         return _parse_string(expr)
     if is_number_literal(expr):
         return _parse_number(expr)
+    if expr == "true":
+        return True
+    if expr == "false":
+        return False
+    if expr == "null":
+        return None
     # Variable path
     return _resolve_variable(expr, context)
 

@@ -1,5 +1,5 @@
 {% load i18n %}
-{% if data_summary.uses %}
+{% if data_summary.uses and False %}
 <details class="automation-detail automation-uses">
     <summary aria-label="{% translate 'Uses' %}">
         <svg width="16" height="16" aria-hidden="true"><use href="#bi-box-arrow-in-up"></use></svg>
@@ -7,7 +7,7 @@
     <div class="automation-detail-panel"><strong>{% translate "Uses" %}</strong><div>{{ data_summary.uses }}</div></div>
 </details>
 {% endif %}
-{% if data_summary.produces %}
+{% if data_summary.produces and False %}
 <details class="automation-detail automation-produces">
     <summary aria-label="{% translate 'Produces' %}">
         <svg width="16" height="16" aria-hidden="true"><use href="#bi-box-arrow-down"></use></svg>

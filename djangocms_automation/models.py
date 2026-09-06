@@ -592,7 +592,7 @@ class AutomationPluginModel(CMSPlugin):
 
 
 class ConditionalPluginModel(AutomationPluginModel):
-    """Plugin model for conditional branching based on evaluated expressions.
+    """Plugin model for conditional branching based on configured values.
 
     On first execution the condition is evaluated against the automation
     data and an action for the first plugin of the matching "Yes"/"No"
@@ -909,9 +909,9 @@ class LoopPluginModel(AutomationPluginModel):
         context = ExecutionContext(action, current)
         if self.plugin_type == "AutomationForEach":
             if "entries" not in action.scratch:
-                from .utilities.expressions import resolve_expression
+                from .utilities.templates import render_value
 
-                entries = resolve_expression(self.iterable, context.variables)
+                entries = render_value(self.iterable, context.variables)
                 if not isinstance(entries, list):
                     raise ValueError("For each requires a list field.")
                 save_working_state(action, {**action.scratch, "entries": entries})
@@ -1110,23 +1110,36 @@ class BaseActionPluginModel(ToolMixin, AutomationPluginModel):
     Concrete action behavior is implemented in proxy subclasses (see
     ``djangocms_automation.actions``) which override :meth:`perform`.
     Configuration entered through the plugin's ``data_form`` is persisted
-    in :attr:`config` as a mapping of field name to expression/template.
+    in :attr:`config` as a mapping of field name to configured value.
 
     Every action is also a *tool*: placed inside an AI step it can be offered
     to a model, with the fields below saying what the model may fill and what
-    stays bound to the editor's expressions. Outside an AI step none of that
+    stays bound to the editor's values. Outside an AI step none of that
     applies — see :mod:`djangocms_automation.tool_mixin`.
     """
 
     outputs = models.JSONField(default=dict, blank=True, verbose_name=_("Save result in"))
     default_outputs = {}
+    # Author-declared result shapes, separate from the editable destinations.
+    result_schemas = {}
     literal_fields = frozenset()
+
+    def get_result_schemas(self):
+        """Describe results using definitions only, never execution data.
+
+        Override for a shape determined by configuration. An empty schema
+        means unknown, not an empty object or a guarantee about its contents.
+        """
+        return {
+            name: self.result_schemas.get(name, {})
+            for name in dict.fromkeys((*self.default_outputs, *self.result_schemas, *(self.outputs or {})))
+        }
 
     config = models.JSONField(
         default=dict,
         blank=True,
         verbose_name=_("Configuration"),
-        help_text=_("Field values (expressions or templates) entered in the plugin form."),
+        help_text=_("Values entered in the plugin form; {{ field.name }} reads automation data."),
     )
 
     # -- wiring, when this action is a tool --------------------------------
@@ -1165,18 +1178,19 @@ class BaseActionPluginModel(ToolMixin, AutomationPluginModel):
         help_text=_("Written by the switches beside each input; not edited directly."),
     )
 
-    #: Config keys holding a mapping whose *values* this action resolves as
-    #: expressions. Empty for most actions. A caller supplying such an input as
+    #: Config keys holding a mapping whose *values* use value-template syntax.
+    #: Empty for most actions. A caller supplying such an input as
     #: literal values — a model calling this action as a tool — wraps each one
     #: so the resolver returns it untouched.
     expression_mappings: frozenset = frozenset()
 
     def _template_fields(self) -> set[str]:
-        """Get the config field names that hold templates (Textarea widgets).
+        """Get config fields that allow interpolation despite preserving their widget.
 
-        Fields declared with a ``Textarea`` widget in the plugin's
-        ``data_form`` are rendered with ``safe_render`` (``{{ path }}``
-        substitution); all other fields are resolved as expressions.
+        Every converted text field uses the same value-template syntax. This
+        distinction remains relevant for actions that preserve typed widgets:
+        their textareas may still interpolate data while other fields stay
+        typed literals.
         """
         from cms.plugin_pool import plugin_pool
         from django import forms as django_forms
@@ -1197,8 +1211,8 @@ class BaseActionPluginModel(ToolMixin, AutomationPluginModel):
         from cms.plugin_pool import plugin_pool
 
         from .execution import item_data
-        from .utilities.expressions import ExpressionError, Literal, resolve_expression
-        from .utilities.templates import VAR_PATTERN, safe_render
+        from .utilities.expressions import ExpressionError, resolve_expression
+        from .utilities.templates import render_value
 
         context = item_data(item)
         template_fields = self._template_fields()
@@ -1217,20 +1231,15 @@ class BaseActionPluginModel(ToolMixin, AutomationPluginModel):
                         raise
                     resolved[key] = value["default"]
             elif key in self.expression_mappings:
-                resolved[key] = {
-                    name: resolve_expression(expr if isinstance(expr, Literal) else str(expr), context)
-                    for name, expr in (value or {}).items()
-                }
+                resolved[key] = {name: render_value(expr, context) for name, expr in (value or {}).items()}
             elif key in template_fields and key not in getattr(self, "literal_fields", ()):
-                for path in VAR_PATTERN.findall(str(value or "")):
-                    resolve_expression(path, context)
-                resolved[key] = safe_render(str(value or ""), context)
+                resolved[key] = render_value(str(value or ""), context)
             elif not convert or key in getattr(self, "literal_fields", ()):
                 resolved[key] = value
             elif value is None or value == "":
                 resolved[key] = None
             else:
-                resolved[key] = resolve_expression(str(value), context)
+                resolved[key] = render_value(str(value), context)
         resolved.update(overrides)
         return resolved
 

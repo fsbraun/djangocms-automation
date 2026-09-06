@@ -122,8 +122,9 @@ class TestAutomationTriggerAdminForm:
         request = request_factory.get("/")
         fieldsets = admin.get_fieldsets(request, trigger)
 
-        # Should have base fieldset and timer config fieldset
-        assert len(fieldsets) == 2
+        # Configuration and the read-only field catalogue stay separate.
+        assert len(fieldsets) == 3
+        assert fieldsets[2][1]["fields"] == ("automation_fields",)
         assert fieldsets[0][1]["fields"] == ("automation_content", "type", "slot", "position")
 
         # Second fieldset should be timer config

@@ -261,11 +261,11 @@ def test_overrides_bypass_expression_resolution(settings):
 
     # A bare model instance has no registered plugin_type, so every input is
     # treated as an expression here; "static" is the literal form.
-    action = MailActionPluginModel(plugin_type="MailAction", config={"subject": "row_subject", "body": "static"})
+    action = MailActionPluginModel(plugin_type="MailAction", config={"subject": "{{ row_subject }}", "body": "static"})
     rows = {"row_subject": "From the data"}
 
     resolved = action.resolve_inputs(rows)
-    assert resolved["subject"] == "From the data", "an editor's expression still resolves"
+    assert resolved["subject"] == "From the data", "an editor's data reference still resolves"
 
     overridden = action.resolve_inputs(rows, overrides={"subject": "Hello"})
     assert overridden["subject"] == "Hello", "a model's literal is used as it stands"

@@ -229,7 +229,7 @@ def test_reference_webhook_ingest_runs_end_to_end(reference_setup, durable, mail
         language=durable.LANGUAGE_CODE,
         config={
             "model": "auth.User",
-            "field_mapping": {"username": "username", "email": "email"},
+            "field_mapping": {"username": "{{ username }}", "email": "{{ email }}"},
         },
     )
     add_plugin(
@@ -237,9 +237,9 @@ def test_reference_webhook_ingest_runs_end_to_end(reference_setup, durable, mail
         plugin_type="MailAction",
         language=durable.LANGUAGE_CODE,
         config={
-            "subject": '"Welcome"',
+            "subject": "Welcome",
             "body": "Hello {{ username }}",
-            "recipient_email": "email",
+            "recipient_email": "{{ email }}",
         },
     )
 
@@ -295,7 +295,7 @@ def test_reference_digest_queries_then_mails(automation_content, durable, mailou
         language=durable.LANGUAGE_CODE,
         config={
             "model": "auth.User",
-            "filters": {"username": '"reader"'},
+            "filters": {"username": "reader"},
             "fields": "username,email",
             "limit": 10,
         },
@@ -305,9 +305,9 @@ def test_reference_digest_queries_then_mails(automation_content, durable, mailou
         plugin_type="MailAction",
         language=durable.LANGUAGE_CODE,
         config={
-            "subject": '"Digest"',
+            "subject": "Digest",
             "body": "Latest: {{ records }}",
-            "recipient_email": '"editors@example.com"',
+            "recipient_email": "editors@example.com",
         },
     )
 

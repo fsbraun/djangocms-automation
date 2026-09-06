@@ -398,8 +398,8 @@ class ToolMixin:
         """Do the action's own work with the model's arguments in place.
 
         The action reads its inputs in one of two ways, so the values are put
-        where each kind will look. Actions whose editor inputs are expressions
-        over the automation's data go through ``resolve_inputs`` and take
+        where each kind will look. Actions whose editor inputs are value
+        templates go through ``resolve_inputs`` and take
         ``_input_overrides``: the override bypasses resolution, because a value
         the model supplied is already the literal and resolving "Ship it" would
         read it as a data path. Actions configured with literal values read

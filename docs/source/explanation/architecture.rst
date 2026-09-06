@@ -162,7 +162,7 @@ return named results; the engine saves them to explicit root-field destinations
 and preserves the rest of the item.
 
 **For each** captures a list and runs its body sequentially with
-``loop.entry`` and ``loop.index``. **Repeat while** carries the updated
+``{{ loop.entry }}`` and ``{{ loop.index }}``. **Repeat while** carries the updated
 item between condition checks. Parallel paths receive private copies and join
 only distinct explicit field writes; overlapping writes fail.
 
@@ -196,8 +196,9 @@ Actions
 Concrete actions live in ``djangocms_automation.actions`` as proxy models of
 :class:`~djangocms_automation.models.BaseActionPluginModel`, overriding
 ``perform(context, inputs) -> dict``. Inputs are declared on the CMS plugin via
-a ``data_form``; entered values (expressions or ``{{ path }}`` templates)
-are persisted in the plugin's ``config`` JSON field and resolved against the
+a ``data_form``; editable text uses literal-first value templates (plain text
+or ``{{ path }}`` references). Values are persisted in the plugin's ``config``
+JSON field and resolved against the
 automation data at runtime. Shipped actions:
 
 - **Send Email** — one email per item via Django's email framework.
@@ -219,7 +220,7 @@ descriptions and field information. Runtime state lives in
 ``djangocms_automation.engine``, and the task entry points in
 ``djangocms_automation.tasks``; see :doc:`../reference/instances` and
 :doc:`../reference/tasks` for runtime behaviour and examples. Helper
-utilities (expression resolution, ``{{ path }}`` templates, the condition
+utilities (literal-first values, safe ``{{ path }}`` resolution, the condition
 evaluator and JSON serialization helpers) are provided in
 ``djangocms_automation.utilities`` — see :doc:`../reference/utilities` for
 usage notes and edge cases.

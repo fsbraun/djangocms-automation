@@ -169,13 +169,13 @@ class AIStepForm(forms.Form):
         required=False,
         widget=forms.Textarea(attrs={"rows": 3}),
         validators=[validate_template],
-        help_text=_("Standing context. Supports {{ dotted.path }} substitution."),
+        help_text=_("Standing context. Insert automation data as {{ dotted.path }}."),
     )
     prompt = forms.CharField(
         label=_("Task"),
         widget=forms.Textarea(attrs={"rows": 6}),
         validators=[validate_template],
-        help_text=_("What to do this run. Supports {{ dotted.path }} substitution."),
+        help_text=_("What to do this run. Insert automation data as {{ dotted.path }}."),
     )
     output_schema = forms.JSONField(
         label=_("Output shape"),
@@ -185,7 +185,7 @@ class AIStepForm(forms.Form):
         error_messages={"invalid": _("Invalid JSON.")},
         help_text=_(
             "Describe the fields the answer must contain. Field descriptions are read by the model and shape "
-            "what it puts there. The answer becomes the new data rows."
+            "what it puts there. Save the answer in the selected item field; other fields are preserved."
         ),
     )
     max_turns = forms.IntegerField(
@@ -305,7 +305,26 @@ class AIStepPluginModel(BaseActionPluginModel):
         return depth
 
     default_outputs = {"answer": {"field": "answer"}}
+    result_schemas = {
+        "answer": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string"},
+                "model": {"type": "string"},
+                "turns": {"type": "integer"},
+                "usage": {"type": "object"},
+            },
+            "additionalProperties": False,
+        }
+    }
     literal_fields = frozenset({"model", "output_schema", "answer_format"})
+
+    def get_result_schemas(self):
+        # Output constraints are not sent to the provider when tools exist.
+        # Inspect definitions, not child_plugin_instances (a rendering cache).
+        has_tools = self.pk and BaseActionPluginModel.objects.filter(parent_id=self.pk).exists()
+        schema = self.output_schema() if not has_tools else None
+        return {**super().get_result_schemas(), "answer": schema or self.result_schemas["answer"]}
 
     def do_work(self, action, data, single_step=False, plugin_dict=None):
         """Take one turn."""

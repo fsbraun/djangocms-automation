@@ -48,7 +48,7 @@ def node(placeholder, kind="ItemValuePlugin", **kwargs):
 
 def test_item_preserves_fields_and_records_resolved_inputs(flow):
     trigger, placeholder = flow
-    node(placeholder, config={"value": "customer.age"})
+    node(placeholder, config={"value": "{{ customer.age }}"})
     run = trigger.trigger_execution({"customer": {"age": 7}})
     run.refresh_from_db()
     assert run.status == COMPLETED
@@ -59,7 +59,7 @@ def test_item_preserves_fields_and_records_resolved_inputs(flow):
 
 def test_frozen_definition_survives_plugin_deletion(flow):
     trigger, placeholder = flow
-    step = node(placeholder, config={"value": "42"})
+    step = node(placeholder, config={"value": "{{ 42 }}"})
     run = trigger.trigger_execution({"keep": True}, start=False)
     step.delete()
     engine.run_action(run.automationaction_set.get().pk)
@@ -83,11 +83,11 @@ def test_run_survives_deleting_authored_content(flow):
 
 def test_for_each_appends_and_preserves_original_item(flow):
     trigger, placeholder = flow
-    loop = node(placeholder, "AutomationForEach", iterable="entries")
+    loop = node(placeholder, "AutomationForEach", iterable="{{ entries }}")
     node(
         placeholder,
         target=loop,
-        config={"value": "loop.entry"},
+        config={"value": "{{ loop.entry }}"},
         outputs={"value": {"field": "results", "mode": "append"}},
     )
     run = trigger.trigger_execution({"entries": [3, 1, 2], "customer": "Alice"})
@@ -103,7 +103,7 @@ def test_parallel_paths_join_declared_writes(flow, conflict):
     split = node(placeholder, "AutomationSplit")
     for name in ("left", "left" if conflict else "right"):
         path = node(placeholder, "AutomationPath", target=split)
-        node(placeholder, target=path, config={"value": "1"}, outputs={"value": {"field": name}})
+        node(placeholder, target=path, config={"value": "{{ 1 }}"}, outputs={"value": {"field": name}})
     run = trigger.trigger_execution({"keep": True})
     run.refresh_from_db()
     assert run.status == (FAILED if conflict else COMPLETED)
@@ -159,7 +159,7 @@ def test_wait_records_submission_without_losing_item(flow, admin_user):
 def test_query_keeps_matches_in_list_field(flow, settings):
     settings.AUTOMATION_ALLOWED_MODELS = ["auth.User"]
     trigger, placeholder = flow
-    node(placeholder, "QueryModelAction", config={"model": "auth.User", "filters": {"username": "'not-present'"}})
+    node(placeholder, "QueryModelAction", config={"model": "auth.User", "filters": {"username": "not-present"}})
     run = trigger.trigger_execution({"name": "Alice"})
     run.refresh_from_db()
     assert run.status == COMPLETED
@@ -168,7 +168,11 @@ def test_query_keeps_matches_in_list_field(flow, settings):
 
 def test_append_is_one_value_and_duplicate_delivery_is_a_noop(flow):
     trigger, placeholder = flow
-    node(placeholder, config={"value": "entries"}, outputs={"value": {"field": "collected", "mode": "append"}})
+    node(
+        placeholder,
+        config={"value": "{{ entries }}"},
+        outputs={"value": {"field": "collected", "mode": "append"}},
+    )
     run = trigger.trigger_execution({"entries": [1, 2]})
     action = run.automationaction_set.get()
     count = action.trace.count()
@@ -180,8 +184,13 @@ def test_append_is_one_value_and_duplicate_delivery_is_a_noop(flow):
 
 def test_for_each_captures_list_before_body_changes_it(flow):
     trigger, placeholder = flow
-    loop = node(placeholder, "AutomationForEach", iterable="entries")
-    node(placeholder, target=loop, config={"value": "loop.entry"}, outputs={"value": {"field": "entries"}})
+    loop = node(placeholder, "AutomationForEach", iterable="{{ entries }}")
+    node(
+        placeholder,
+        target=loop,
+        config={"value": "{{ loop.entry }}"},
+        outputs={"value": {"field": "entries"}},
+    )
     run = trigger.trigger_execution({"entries": [4, 7]})
     run.refresh_from_db()
     assert run.status == COMPLETED
@@ -191,18 +200,18 @@ def test_for_each_captures_list_before_body_changes_it(flow):
 
 def test_nested_for_each_restores_outer_scope(flow):
     trigger, placeholder = flow
-    outer = node(placeholder, "AutomationForEach", iterable="groups")
-    inner = node(placeholder, "AutomationForEach", target=outer, iterable="loop.entry")
+    outer = node(placeholder, "AutomationForEach", iterable="{{ groups }}")
+    inner = node(placeholder, "AutomationForEach", target=outer, iterable="{{ loop.entry }}")
     node(
         placeholder,
         target=inner,
-        config={"value": "loop.entry"},
+        config={"value": "{{ loop.entry }}"},
         outputs={"value": {"field": "values", "mode": "append"}},
     )
     node(
         placeholder,
         target=outer,
-        config={"value": "loop.index"},
+        config={"value": "{{ loop.index }}"},
         outputs={"value": {"field": "indices", "mode": "append"}},
     )
     run = trigger.trigger_execution({"groups": [[4, 5], [6]]})
@@ -215,7 +224,7 @@ def test_definition_is_immutable_and_public_output_does_not_discard_item(flow):
     trigger, placeholder = flow
     trigger.automation_content.output_fields = ["value"]
     trigger.automation_content.save()
-    node(placeholder, config={"value": "7"})
+    node(placeholder, config={"value": "{{ 7 }}"})
     run = trigger.trigger_execution({"private": "retained"})
     run.refresh_from_db()
     assert run.output == {"value": 7}
@@ -233,8 +242,8 @@ def test_trace_retention_clears_scopes_and_refuses_replay(flow):
     from djangocms_automation.instances import AutomationInstance
 
     trigger, placeholder = flow
-    loop = node(placeholder, "AutomationForEach", iterable="entries")
-    node(placeholder, target=loop, config={"value": "loop.entry"})
+    loop = node(placeholder, "AutomationForEach", iterable="{{ entries }}")
+    node(placeholder, target=loop, config={"value": "{{ loop.entry }}"})
     run = trigger.trigger_execution({"entries": ["private-loop-entry"]})
     action = run.automationaction_set.filter(parent__isnull=False).get()
     assert action.trace.filter(scope__loop__entry="private-loop-entry").exists()
@@ -317,7 +326,7 @@ def test_destination_schema_is_frozen_and_validated(flow):
     content = trigger.automation_content
     content.data_fields = {"value": {"label": "Count", "schema": {"type": "integer"}}}
     content.save()
-    node(placeholder, config={"value": "'wrong type'"})
+    node(placeholder, config={"value": "wrong type"})
     run = trigger.trigger_execution({}, start=False)
     content.data_fields = {}
     content.save()
@@ -336,7 +345,7 @@ def test_redaction_winning_replay_race_cannot_restore_payloads(flow, monkeypatch
     from djangocms_automation.instances import AutomationInstance
 
     trigger, placeholder = flow
-    node(placeholder, config={"value": "missing"})
+    node(placeholder, config={"value": "{{ missing }}"})
     run = trigger.trigger_execution({"private": "do not restore"})
     action = run.automationaction_set.get()
     assert action.state == FAILED
@@ -365,7 +374,11 @@ def test_field_picker_and_summary_keep_literals_out(flow, rf, admin_user):
     trigger, placeholder = flow
     trigger.config = {"data_schema": {"type": "object", "properties": {"email": {"type": "string"}}}}
     trigger.save()
-    step = node(placeholder, "MailAction", config={"recipient_email": "email", "subject": "'Hi'", "body": "Hello"})
+    step = node(
+        placeholder,
+        "MailAction",
+        config={"recipient_email": "{{ email }}", "subject": "Hi", "body": "Hello"},
+    )
     request = rf.get("/")
     request.user = admin_user
     form = MailAction(MailAction.model, admin.site).get_form(request, step)

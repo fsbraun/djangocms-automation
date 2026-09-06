@@ -106,4 +106,68 @@ def test_automation_view_with_no_triggers_returns_empty(rf, automation_content):
 
     # No triggers and no placeholders created
     assert context["triggers"] == []
+    assert context["automation_io"]["uses"] == "No declared fields"
     assert not Placeholder.objects.filter(content_type=ct, object_id=automation_content.pk).exists()
+
+
+@pytest.mark.django_db
+def test_automation_title_context_describes_inputs_and_selected_outputs(rf, automation_content):
+    automation_content.data_fields = {
+        "email": {"label": "Customer email"},
+        "receipt": {"label": "Delivery receipt"},
+    }
+    automation_content.output_fields = ["receipt"]
+    automation_content.save()
+    AutomationTrigger.objects.create(
+        automation_content=automation_content,
+        slot="start",
+        type="code",
+        position=0,
+        config={
+            "data_schema": {
+                "type": "object",
+                "properties": {
+                    "email": {"type": "string"},
+                    "order_id": {"type": "integer", "title": "Order number"},
+                },
+                "additionalProperties": False,
+            }
+        },
+    )
+
+    request = rf.get("/automation/")
+    response = AutomationView.as_view()(request, automation_content)
+
+    assert response.context_data["automation_io"] == {
+        "uses": "Customer email, Order number",
+        "produces": "Delivery receipt",
+    }
+
+
+@pytest.mark.django_db
+def test_automation_title_calls_an_open_boundary_human_readably(rf, automation_content):
+    AutomationTrigger.objects.create(
+        automation_content=automation_content,
+        slot="start",
+        type="click",
+        position=0,
+    )
+    request = rf.get("/automation/")
+    response = AutomationView.as_view()(request, automation_content)
+
+    summary = response.context_data["automation_io"]
+    assert "Element id" in summary["uses"]
+    assert summary["uses"].endswith("Other fields accepted")
+    assert summary["produces"] == "Complete final item"
+
+
+def test_automation_io_is_rendered_in_the_page_title_block():
+    from django.template.loader import get_template
+
+    source = get_template("djangocms_automation/automation_detail.html").template.source
+    title_start = source.index('<div class="title-block">')
+    title_end = source.index("{% endrender_model_block %}", title_start)
+
+    assert source.index('class="automation-io"', title_start, title_end)
+    assert "{{ automation_io.uses }}" in source[title_start:title_end]
+    assert "{{ automation_io.produces }}" in source[title_start:title_end]

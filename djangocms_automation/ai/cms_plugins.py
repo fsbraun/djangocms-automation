@@ -62,9 +62,12 @@ class AIStep(ActionPlugin):
     can_be_tool = True
 
     fieldsets = (
-        (_("Intent"), {"fields": ("intent",)}),
-        (None, {"fields": ("model", "prompt", "system_prompt")}),
-        (_("Answer"), {"classes": ("collapse",), "fields": ("answer_format", "output_schema", "outputs")}),
+        (_("Intent"), {"fields": ("intent", "model")}),
+        (_("Uses"), {"classes": ("collapse",), "fields": ("prompt", "system_prompt")}),
+        (
+            _("Produces"),
+            {"classes": ("collapse",), "fields": ("answer_format", "output_schema", "outputs")},
+        ),
         (
             _("Limits"),
             {

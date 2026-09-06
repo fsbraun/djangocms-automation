@@ -18,10 +18,7 @@ class UserInputActionForm(forms.Form):
         required=False,
         widget=forms.Textarea(attrs={"rows": 3}),
         validators=[validate_template],
-        help_text=_(
-            "Shown to the user who resumes this task. Supports {{ dotted.path }} substitution "
-            "against the automation data."
-        ),
+        help_text=_("Shown to the user who resumes this task. Insert {{ dotted.path }} against the automation data."),
     )
     permissions = forms.CharField(
         label=_("Required permissions"),
@@ -42,6 +39,7 @@ class UserInputActionPluginModel(BaseActionPluginModel):
     """
 
     default_outputs = {"submission": {"field": "response"}}
+    result_schemas = {"submission": {"type": "object"}}
     literal_fields = frozenset({"permissions"})
 
     class Meta:

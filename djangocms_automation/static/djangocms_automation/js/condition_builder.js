@@ -119,32 +119,37 @@
                 const conditionDiv = document.createElement('div');
                 conditionDiv.className = 'condition-row';
 
+                const sourceSelectFor = (input, key, prompt) => {
+                    const sourceSelect = document.createElement('select');
+                    sourceSelect.setAttribute('aria-label', prompt);
+                    const emptySource = document.createElement('option');
+                    emptySource.value = '';
+                    emptySource.textContent = prompt + '…';
+                    sourceSelect.appendChild(emptySource);
+                    Object.entries(JSON.parse(this.container.dataset.fields || '{}')).forEach(([path, label]) => {
+                        const option = document.createElement('option');
+                        option.value = path;
+                        option.textContent = label;
+                        sourceSelect.appendChild(option);
+                    });
+                    sourceSelect.addEventListener('change', () => {
+                        if (sourceSelect.value) {
+                            const expression = '{{ ' + sourceSelect.value + ' }}';
+                            input.value = expression;
+                            this.updateCondition(index, key, expression);
+                            sourceSelect.value = '';
+                        }
+                    });
+                    return sourceSelect;
+                };
+
                 // Field input
                 const fieldInput = document.createElement('input');
                 fieldInput.type = 'text';
                 fieldInput.setAttribute('code', '');
                 fieldInput.value = condition.field;
-                fieldInput.placeholder = 'Field name';
-                const sourceSelect = document.createElement('select');
-                sourceSelect.setAttribute('aria-label', 'Use data from');
-                const emptySource = document.createElement('option');
-                emptySource.value = '';
-                emptySource.textContent = 'Use data from…';
-                sourceSelect.appendChild(emptySource);
-                Object.entries(JSON.parse(this.container.dataset.fields || '{}')).forEach(([path, label]) => {
-                    const option = document.createElement('option');
-                    option.value = path;
-                    option.textContent = label;
-                    sourceSelect.appendChild(option);
-                });
-                sourceSelect.addEventListener('change', () => {
-                    if (sourceSelect.value) {
-                        fieldInput.value = sourceSelect.value;
-                        this.updateCondition(index, 'field', sourceSelect.value);
-                        sourceSelect.value = '';
-                    }
-                });
-                conditionDiv.appendChild(sourceSelect);
+                fieldInput.placeholder = '{{ field.name }}';
+                conditionDiv.appendChild(sourceSelectFor(fieldInput, 'field', 'Use data from'));
                 fieldInput.addEventListener('input', (e) => {
                     this.updateCondition(index, 'field', e.target.value);
                 });
@@ -175,7 +180,7 @@
                 valueInput.type = 'text';
                 valueInput.setAttribute('code', '');
                 valueInput.value = condition.value;
-                valueInput.placeholder = 'Value';
+                valueInput.placeholder = 'Text or {{ value }}';
                 valueInput.addEventListener('input', (e) => {
                     this.updateCondition(index, 'value', e.target.value);
                 });
@@ -188,6 +193,7 @@
 
                 conditionDiv.appendChild(fieldInput);
                 conditionDiv.appendChild(operatorSelect);
+                conditionDiv.appendChild(sourceSelectFor(valueInput, 'value', 'Compare with data'));
                 conditionDiv.appendChild(valueInput);
                 conditionDiv.appendChild(removeBtn);
 

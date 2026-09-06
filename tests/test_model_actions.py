@@ -72,7 +72,7 @@ def test_create_model_action(run_setup, settings):
         placeholder,
         "CreateModelAction",
         CreateModelActionModel,
-        {"model": "auth.User", "field_mapping": {"username": "username", "email": "email"}},
+        {"model": "auth.User", "field_mapping": {"username": "{{ username }}", "email": "{{ email }}"}},
         settings,
     )
 
@@ -93,7 +93,7 @@ def test_create_model_action_disallowed_model_fails(run_setup, settings):
         placeholder,
         "CreateModelAction",
         CreateModelActionModel,
-        {"model": "auth.Group", "field_mapping": {"name": "name"}},
+        {"model": "auth.Group", "field_mapping": {"name": "{{ name }}"}},
         settings,
     )
     trigger.trigger_execution(data={"name": "g"}, start=True)
@@ -113,8 +113,8 @@ def test_update_model_action(run_setup, settings):
         UpdateModelActionModel,
         {
             "model": "auth.User",
-            "filters": {"username": "username"},
-            "field_mapping": {"email": "new_email"},
+            "filters": {"username": "{{ username }}"},
+            "field_mapping": {"email": "{{ new_email }}"},
         },
         settings,
     )
@@ -135,7 +135,7 @@ def test_update_without_filters_fails(run_setup, settings):
         placeholder,
         "UpdateModelAction",
         UpdateModelActionModel,
-        {"model": "auth.User", "filters": {}, "field_mapping": {"email": "'x@example.com'"}},
+        {"model": "auth.User", "filters": {}, "field_mapping": {"email": "x@example.com"}},
         settings,
     )
     trigger.trigger_execution(data={}, start=True)
@@ -156,7 +156,7 @@ def test_query_model_action(run_setup, settings, admin_user):
         QueryModelActionModel,
         {
             "model": "auth.User",
-            "filters": {"email__endswith": "'@example.com'"},
+            "filters": {"email__endswith": "@example.com"},
             "fields": "username, email",
             "order_by": "username",
             "limit": 10,
@@ -190,14 +190,14 @@ def test_model_action_forms_validate(settings):
 
     settings.AUTOMATION_ALLOWED_MODELS = ["auth.User"]
 
-    form = CreateModelActionForm(data={"model": "auth.User", "field_mapping": '{"email": "user.email"}'})
+    form = CreateModelActionForm(data={"model": "auth.User", "field_mapping": '{"email": "{{ user.email }}"}'})
     assert form.is_valid(), form.errors
-    assert form.cleaned_data["field_mapping"] == {"email": "user.email"}
+    assert form.cleaned_data["field_mapping"] == {"email": "{{ user.email }}"}
 
-    # Invalid expression inside the mapping.
-    form = CreateModelActionForm(data={"model": "auth.User", "field_mapping": '{"email": "not valid!!"}'})
+    # Plain text is valid; malformed interpolation is not.
+    form = CreateModelActionForm(data={"model": "auth.User", "field_mapping": '{"email": "{{ not valid!! }}"}'})
     assert not form.is_valid()
-    assert "Invalid expression" in str(form.errors["field_mapping"])
+    assert "Invalid value" in str(form.errors["field_mapping"])
 
     # Mapping must be a JSON object.
     form = CreateModelActionForm(data={"model": "auth.User", "field_mapping": '["a"]'})
@@ -210,7 +210,7 @@ def test_model_action_forms_validate(settings):
 
     # Update requires filters + mapping; query limit is capped.
     form = UpdateModelActionForm(
-        data={"model": "auth.User", "filters": '{"pk": "1"}', "field_mapping": '{"email": "\'x@y.z\'"}'}
+        data={"model": "auth.User", "filters": '{"pk": "{{ 1 }}"}', "field_mapping": '{"email": "x@y.z"}'}
     )
     assert form.is_valid(), form.errors
     form = QueryModelActionForm(data={"model": "auth.User", "limit": 99999})
@@ -225,7 +225,7 @@ def test_unknown_model_field_fails_run(run_setup, settings):
         placeholder,
         "CreateModelAction",
         CreateModelActionModel,
-        {"model": "auth.User", "field_mapping": {"nonexistent_field": "'x'"}},
+        {"model": "auth.User", "field_mapping": {"nonexistent_field": "x"}},
         settings,
     )
     trigger.trigger_execution(data={}, start=True)

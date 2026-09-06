@@ -7,8 +7,7 @@ from . import forms, models
 from .actions import mail as actions_mail
 from .actions import model_actions, user_input
 from .constants import Module
-from .utilities.expressions import validate_expression
-from .utilities.templates import validate_template
+from .utilities.templates import validate_value_template
 
 automation_plugins = []
 action_plugins = []
@@ -221,10 +220,10 @@ class ActionPlugin(AutomationPlugin):
     :class:`djangocms_automation.instances.AutomationAction`.
 
     Subclasses declare a ``data_form`` (a plain form whose declared fields
-    define the action's inputs). Each field is rendered as an expression
-    input — or a template textarea for ``Textarea`` widgets — and the
-    entered values are persisted in the plugin model's ``config`` JSON
-    field, from which the action resolves its inputs at runtime.
+    define the action's inputs). Text fields use one value syntax: plain text
+    is literal and ``{{ field.name }}`` reads automation data. Textareas allow
+    the same references inline. Entered values are persisted in the plugin
+    model's ``config`` JSON field and resolved at runtime.
     """
 
     name = _("Example action")
@@ -253,11 +252,24 @@ class ActionPlugin(AutomationPlugin):
 
     #: Fields the wiring section adds when this action sits inside an AI step.
     tool_fields = ("tool_name", "tool_description", "requires_approval")
+    readonly_fields = ("result_structure",)
     fieldsets = [
         (_("Intent"), {"fields": ("intent",)}),
-        (_("Output"), {"fields": ("outputs",)}),
+        (_("Produces"), {"classes": ("collapse",), "fields": ("result_structure", "outputs")}),
         (_("Comment"), {"classes": ("collapse",), "fields": ("comment",)}),
     ]
+
+    def result_structure(self, obj=None):
+        from django.template.loader import render_to_string
+
+        from .data_editor import result_fields
+
+        return render_to_string(
+            "djangocms_automation/includes/field_catalogue.html",
+            {"fields": result_fields(obj or self.model()), "empty_message": _("No fields produced.")},
+        )
+
+    result_structure.short_description = _("Result structure")
 
     def get_form(self, request, obj=None, **kwargs):
         """Use data_form if defined for additional data fields."""
@@ -281,7 +293,7 @@ class ActionPlugin(AutomationPlugin):
             required=False,
             initial=outputs,
             validators=[validate_outputs],
-            widget=OutputWidget(self.model.default_outputs, choices.items()),
+            widget=OutputWidget((obj or self.model()).get_result_schemas(), choices.items()),
         )
         data_form_fields["Media"] = type(
             "Media", (), {"js": (), "css": {"all": ("djangocms_automation/css/plugin_data_form.css",)}}
@@ -298,8 +310,8 @@ class ActionPlugin(AutomationPlugin):
         return super().get_form(request, obj=obj, **kwargs)
 
     # When False, the declared data_form fields are used as-is (choice
-    # fields, JSON fields, ...) instead of being converted to expression /
-    # template inputs.
+    # fields, JSON fields, ...) instead of being converted to value-template
+    # inputs.
     convert_data_form = True
 
     #: Prefix of the companion switch rendered beside each input when this
@@ -341,15 +353,15 @@ class ActionPlugin(AutomationPlugin):
     def get_data_form_fields(self, request, obj=None):
         """Build the dynamic config fields from the declared data_form.
 
-        Values are seeded from the plugin's stored ``config``. Fields
-        declared with a ``Textarea`` widget are treated as templates
-        (``{{ path }}`` substitution); all others as expressions.
+        Values are seeded from the plugin's stored ``config``. Converted text
+        fields all use literal-first value templates; textareas merely differ
+        by allowing references to be inserted into surrounding prose.
 
         Inside an AI step each input also gets a switch saying whether the
         model fills it. Flipping it on is what stops the input asking for a
         value, because it would never use one — the switch and the requirement
         are the same decision, and splitting them is what produces a form that
-        demands an expression in order to discard it.
+        demands a configured value in order to discard it.
         """
         if not self.data_form:
             return {}
@@ -377,12 +389,12 @@ class ActionPlugin(AutomationPlugin):
             fields[f_name] = django_forms.CharField(
                 label=declared.label or f_name,
                 help_text=declared.help_text,
-                initial=config.get(f_name, f_name if not is_template else ""),
+                initial=config.get(f_name, f"{{{{ {f_name} }}}}" if not is_template else ""),
                 # Not required while wired: whether a value is needed depends on
                 # the switch beside it, which is not known until the form is
                 # cleaned. The form checks it there instead.
                 required=declared.required and not wired,
-                validators=[validate_template if is_template else validate_expression],
+                validators=[validate_value_template],
                 widget=(
                     django_forms.Textarea(attrs={"rows": 4})
                     if is_template
@@ -423,7 +435,7 @@ class ActionPlugin(AutomationPlugin):
     def _add_wiring_switch(self, fields, name, wired, exposed):
         """The companion switch for one input.
 
-        Added for literal-valued actions as well as expression-valued ones:
+        Added for typed-literal actions as well as value-template ones:
         ``get_fieldsets`` pairs *every* declared input with its switch, so an
         action that skipped them asked the admin for fields that did not exist
         and raised ``FieldError`` before its form could render.
@@ -434,7 +446,7 @@ class ActionPlugin(AutomationPlugin):
             label=_("The model decides"),
             required=False,
             initial=name in exposed,
-            help_text=_("Leave off to bind this input to an expression the model never sees."),
+            help_text=_("Leave off to use the configured value; the model never sees it."),
         )
 
     def save_model(self, request, obj, form, change):
@@ -442,7 +454,7 @@ class ActionPlugin(AutomationPlugin):
 
         An input the model fills has no configured value, so it is left out of
         the config entirely rather than stored empty — the action would
-        otherwise try to resolve an empty expression on any run where the model
+        otherwise try to resolve an empty value on any run where the model
         sent nothing.
         """
         exposed = []
@@ -471,7 +483,7 @@ class ActionPlugin(AutomationPlugin):
 
     def get_fieldsets(self, request, obj=None):
         """Return fieldsets including data_form fields if defined."""
-        fieldsets = super().get_fieldsets(request, obj)
+        fieldsets = list(super().get_fieldsets(request, obj))
         wired = self.is_tool(request, obj)
         if wired:
             tool_fieldset = (
@@ -487,7 +499,6 @@ class ActionPlugin(AutomationPlugin):
             )
             # Intent is the first decision for every step. Tool wiring is a
             # property of this use of the action, so it follows that name.
-            fieldsets = list(fieldsets)
             fieldsets[1:1] = [tool_fieldset]
         if self.data_form:
             # Only the inputs the plugin has not placed itself. An action that
@@ -502,33 +513,57 @@ class ActionPlugin(AutomationPlugin):
                 # invisible, so nothing could be exposed to the model.
                 fieldsets = self._pair_placed_fields(fieldsets)
             data_fields = [name for name in self.data_form.base_fields if name not in placed]
-            if not data_fields:
-                return fieldsets
-            if wired:
+            if wired and data_fields:
                 # Each input beside its own switch, so the decision is made
                 # where the input is.
                 data_fields = [(name, self.MODEL_FILLS + name) for name in data_fields]
-            fieldsets = list(fieldsets)
             # Intent stays first; configuration follows the tool wiring when
             # present and otherwise follows the intent directly. The optional
             # comment remains last.
+            if data_fields:
+                fieldsets.insert(
+                    2 if wired else 1,
+                    (
+                        _("Uses"),
+                        {
+                            "fields": data_fields,
+                            "classes": ("collapse",),
+                            "description": _(
+                                "<p>Enter fixed text directly. Wrap a data field or typed value in double curly braces. "
+                                "A whole wrapped value keeps its type; wrapped values inside text are inserted as text.</p>"
+                                "<p>Examples:</p>"
+                                "<p><code>info@django-cms.org</code> (fixed text)<br>"
+                                "<code>{{ 42 }}</code> (number)<br>"
+                                "<code>{{ user.email }}</code> (data field)<br>"
+                                "<code>Hello {{ user.name }}</code> (text with data)</p>"
+                            ),
+                        },
+                    ),
+                )
+
+        labels = {str(label) for label, _options in fieldsets if label is not None}
+        if str(_("Uses")) not in labels:
             fieldsets.insert(
                 2 if wired else 1,
                 (
-                    _("Inputs"),
+                    _("Uses"),
                     {
-                        "fields": data_fields,
+                        "fields": (),
                         "classes": ("collapse",),
                         "description": _(
-                            "<p>Each field is a data source for this action. Enter the value for the action either as a numeric or string literal "
-                            "or as dotted path navigating the automation's data object.</p>"
-                            "<p>Examples:</p>"
-                            '<p><code>"info@django-cms.org"</code> (string literal)<br>'
-                            "<code>42</code> (numeric literal)<br>"
-                            "<code>user.email</code> (data path)</p>"
+                            "Inputs are configured in the other sections." if self.data_form else "No inputs needed."
                         ),
                     },
                 ),
+            )
+        if str(_("Produces")) not in labels:
+            comment_index = next(
+                (index for index, (label, _options) in enumerate(fieldsets) if str(label) == str(_("Comment"))),
+                len(fieldsets),
+            )
+            fieldsets.insert(
+                comment_index,
+                (_("Produces"), {"classes": ("collapse",), "fields": ("result_structure", "outputs")}),
             )
         return fieldsets
 

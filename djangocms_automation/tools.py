@@ -1,8 +1,8 @@
 """The tool contract: exposing automation actions to a model as callable tools.
 
-An action and a tool are the same thing seen from two sides. An action's inputs
-are filled in by an editor, as expressions over the automation's data; a tool's
-are filled in by a model, as literal values. Everything else — what it does, what
+An action and a tool are the same thing seen from two sides. An action's text
+inputs use literal-first values with optional ``{{ field }}`` references; a
+tool's are filled in by a model as literal values. Everything else — what it does, what
 it needs, what it returns — is identical, which is why a tool here is an
 existing action plus a description of which of its inputs the model may supply.
 
@@ -474,7 +474,7 @@ def as_literal_config(arguments: dict, mappings: frozenset) -> dict:
     """Put a model's arguments into the vocabulary an action's config uses.
 
     Almost all of them go across unchanged. The exception is a mapping whose
-    *values* the action resolves as expressions: each is wrapped so the resolver
+    *values* the action resolves as value templates: each is wrapped so the resolver
     hands it back rather than reading it as a path into the data. That is the
     difference between a filter meaning ``ann`` and one meaning "whatever is at
     ``ann``", which is nothing, and which looks like no match rather than like a

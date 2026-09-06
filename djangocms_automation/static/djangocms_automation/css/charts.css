@@ -18,6 +18,19 @@ body {
         .title {
             text-transform: uppercase;
         }
+        .automation-io {
+            margin-top: 0.65em;
+            color: var(--dca-gray);
+            font-size: 75%;
+            font-weight: normal;
+            line-height: 1.35;
+            overflow-wrap: anywhere;
+
+            strong {
+                color: var(--dca-black);
+                font-weight: 600;
+            }
+        }
     }
     .title {
         font-size: 1em;

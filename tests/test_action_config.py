@@ -17,28 +17,31 @@ def rf_request(admin_user):
 
 
 @pytest.mark.django_db
-def test_data_form_fields_expression_and_template_modes(rf_request):
+def test_data_form_fields_share_literal_first_value_syntax(rf_request):
     plugin = plugin_pool.get_plugin("MailAction")(model=MailActionPluginModel, admin_site=None)
     fields = plugin.get_data_form_fields(rf_request, obj=None)
 
     assert set(fields) >= {"subject", "body", "recipient_email", "from_email"}
-    # body is declared with a Textarea -> template mode
+    # Body is still a textarea, but it shares the same value syntax.
     assert isinstance(fields["body"].widget, forms.Textarea)
     assert isinstance(fields["subject"].widget, forms.TextInput)
 
-    # Template validator accepts template text that is not a valid expression.
+    # Plain text and interpolated text are both valid in every text control.
     fields["body"].validators[0]("Hello {{ user.name }}!")
-    # Expression validator rejects free text.
+    fields["subject"].validators[0]("not a data reference")
+    # Only malformed interpolation is rejected.
     with pytest.raises(ValidationError):
-        fields["subject"].validators[0]("not a valid expression!!")
+        fields["subject"].validators[0]("{{ not a valid expression!! }}")
+
+    assert fields["subject"].initial == "{{ subject }}"
 
 
 @pytest.mark.django_db
 def test_config_values_seed_initials(rf_request):
-    model = MailActionPluginModel(config={"subject": "'Hi'", "body": "Hello {{ name }}"})
+    model = MailActionPluginModel(config={"subject": "Hi", "body": "Hello {{ name }}"})
     plugin = plugin_pool.get_plugin("MailAction")(model=MailActionPluginModel, admin_site=None)
     fields = plugin.get_data_form_fields(rf_request, obj=model)
-    assert fields["subject"].initial == "'Hi'"
+    assert fields["subject"].initial == "Hi"
     assert fields["body"].initial == "Hello {{ name }}"
 
 
@@ -48,9 +51,9 @@ def test_save_model_persists_config(rf_request):
 
     class FakeForm:
         cleaned_data = {
-            "subject": "'Welcome'",
+            "subject": "Welcome",
             "body": "Hi {{ name }}",
-            "recipient_email": "email",
+            "recipient_email": "{{ email }}",
             "from_email": "",
             "comment": "irrelevant",
         }
@@ -69,8 +72,8 @@ def test_save_model_persists_config(rf_request):
         plugin.save_model(rf_request, obj, FakeForm(), change=False)
 
     assert saved["config"] == {
-        "subject": "'Welcome'",
+        "subject": "Welcome",
         "body": "Hi {{ name }}",
-        "recipient_email": "email",
+        "recipient_email": "{{ email }}",
         "from_email": "",
     }

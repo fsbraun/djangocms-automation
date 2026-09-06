@@ -37,10 +37,9 @@ def _compose(*, subject: str, body: str, html: bool, from_email, recipient: str)
 class MailActionPluginModel(BaseActionPluginModel):
     """Send an email per data row using the configured ``EMAIL_BACKEND``.
 
-    Config fields (from ``MailActionDataForm``): ``subject``,
-    ``recipient_email`` and optional ``from_email`` are expressions;
-    ``body`` is a template rendered with ``{{ dotted.path }}``
-    substitution against the current row.
+    All text config fields use literal-first value templates. Plain text is
+    fixed; ``{{ dotted.path }}`` reads from the current item and can be mixed
+    into the subject or body.
 
     Returns the named ``delivery`` result. The engine saves it in the selected
     field while preserving the incoming item. Delivery errors fail the action.
@@ -51,6 +50,14 @@ class MailActionPluginModel(BaseActionPluginModel):
         app_label = "djangocms_automation"
 
     default_outputs = {"delivery": {"field": "delivery", "mode": "replace"}}
+    result_schemas = {
+        "delivery": {
+            "type": "object",
+            "properties": {"sent": {"type": "boolean"}, "recipient": {"type": "string"}},
+            "required": ["sent", "recipient"],
+            "additionalProperties": False,
+        }
+    }
 
     def perform(self, context, inputs) -> dict:
         recipient = inputs.get("recipient_email")

@@ -10,29 +10,29 @@ DATA = {"status": "active", "count": 5, "name": "Alice", "tags": ["a", "b"]}
 @pytest.mark.parametrize(
     "field, operator, value, expected",
     [
-        # equality (with literal quoting and numeric coercion)
-        ("status", "==", "'active'", True),
-        ("status", "==", "'inactive'", False),
-        ("status", "!=", "'inactive'", True),
-        ("count", "==", "5", True),
-        ("count", "!=", "5", False),
+        # equality with literal-first values
+        ("{{ status }}", "==", "active", True),
+        ("{{ status }}", "==", "inactive", False),
+        ("{{ status }}", "!=", "inactive", True),
+        ("{{ count }}", "==", "{{ 5 }}", True),
+        ("{{ count }}", "!=", "{{ 5 }}", False),
         # ordering with numeric coercion
-        ("count", ">", "3", True),
-        ("count", "<", "3", False),
-        ("count", ">=", "5", True),
-        ("count", "<=", "4", False),
+        ("{{ count }}", ">", "{{ 3 }}", True),
+        ("{{ count }}", "<", "{{ 3 }}", False),
+        ("{{ count }}", ">=", "{{ 5 }}", True),
+        ("{{ count }}", "<=", "{{ 4 }}", False),
         # string operators
-        ("name", "contains", "'lic'", True),
-        ("name", "not_contains", "'xyz'", True),
-        ("name", "starts_with", "'Al'", True),
-        ("name", "ends_with", "'ce'", True),
-        ("name", "starts_with", "'ce'", False),
+        ("{{ name }}", "contains", "lic", True),
+        ("{{ name }}", "not_contains", "xyz", True),
+        ("{{ name }}", "starts_with", "Al", True),
+        ("{{ name }}", "ends_with", "ce", True),
+        ("{{ name }}", "starts_with", "ce", False),
         # membership (comma-separated literals)
-        ("status", "in", "'active, pending'", True),
-        ("status", "not_in", "'archived, deleted'", True),
-        ("count", "in", "'1, 5, 9'", True),
+        ("{{ status }}", "in", "active, pending", True),
+        ("{{ status }}", "not_in", "archived, deleted", True),
+        ("{{ count }}", "in", "1, 5, 9", True),
         # field resolved against list value
-        ("tags.0", "==", "'a'", True),
+        ("{{ tags.0 }}", "==", "a", True),
     ],
 )
 def test_operators(field, operator, value, expected):
@@ -44,8 +44,8 @@ def test_and_logic():
     condition = {
         "logic": "and",
         "conditions": [
-            {"field": "status", "operator": "==", "value": "'active'"},
-            {"field": "count", "operator": ">", "value": "10"},
+            {"field": "{{ status }}", "operator": "==", "value": "active"},
+            {"field": "{{ count }}", "operator": ">", "value": "{{ 10 }}"},
         ],
     }
     assert evaluate(condition, DATA) is False
@@ -55,23 +55,26 @@ def test_or_logic():
     condition = {
         "logic": "or",
         "conditions": [
-            {"field": "status", "operator": "==", "value": "'active'"},
-            {"field": "count", "operator": ">", "value": "10"},
+            {"field": "{{ status }}", "operator": "==", "value": "active"},
+            {"field": "{{ count }}", "operator": ">", "value": "{{ 10 }}"},
         ],
     }
     assert evaluate(condition, DATA) is True
 
 
 def test_missing_field_is_falsy():
-    condition = {"logic": "and", "conditions": [{"field": "missing", "operator": ">", "value": "1"}]}
+    condition = {"logic": "and", "conditions": [{"field": "{{ missing }}", "operator": ">", "value": "{{ 1 }}"}]}
     assert evaluate(condition, DATA) is False
     # ...but equality against a missing field can match a missing value expression
-    condition = {"logic": "and", "conditions": [{"field": "missing", "operator": "==", "value": "also_missing"}]}
+    condition = {
+        "logic": "and",
+        "conditions": [{"field": "{{ missing }}", "operator": "==", "value": "{{ also_missing }}"}],
+    }
     assert evaluate(condition, DATA) is True  # None == None
 
 
 def test_full_data_accessible_via_data_key():
-    condition = {"logic": "and", "conditions": [{"field": "data.0.name", "operator": "==", "value": "'Alice'"}]}
+    condition = {"logic": "and", "conditions": [{"field": "{{ data.0.name }}", "operator": "==", "value": "Alice"}]}
     assert evaluate(condition, {"data": [DATA]}) is True
 
 
@@ -81,12 +84,12 @@ def test_empty_or_invalid_conditions_pass_through(condition):
 
 
 def test_json_string_condition():
-    condition = '{"logic": "and", "conditions": [{"field": "count", "operator": ">=", "value": "5"}]}'
+    condition = '{"logic": "and", "conditions": [{"field": "{{ count }}", "operator": ">=", "value": "{{ 5 }}"}]}'
     assert evaluate(condition, DATA) is True
 
 
 def test_empty_data():
-    condition = {"logic": "and", "conditions": [{"field": "status", "operator": "==", "value": "'active'"}]}
+    condition = {"logic": "and", "conditions": [{"field": "{{ status }}", "operator": "==", "value": "active"}]}
     assert evaluate(condition, {}) is False
 
 
@@ -94,19 +97,19 @@ def test_empty_data():
     "field, operator, value, expected",
     [
         # unknown operator is safely falsy
-        ("status", "regex", "'a.*'", False),
+        ("{{ status }}", "regex", "a.*", False),
         # missing operator defaults to equality
-        ("status", None, "'active'", True),
+        ("{{ status }}", None, "active", True),
         # string ordering fallback (both sides non-numeric)
-        ("name", "<", "'Bob'", True),
+        ("{{ name }}", "<", "Bob", True),
         # booleans follow Python equality (True == 1); for ordering they
         # fall back to string comparison ("True" > "0")
-        ("flag", "==", "1", True),
-        ("flag", ">", "0", True),
+        ("{{ flag }}", "==", "{{ 1 }}", True),
+        ("{{ flag }}", ">", "{{ 0 }}", True),
         # membership against a non-list, non-string value
-        ("count", "in", "5", True),
+        ("{{ count }}", "in", "{{ 5 }}", True),
         # field expression is None
-        (None, "==", "'x'", False),
+        (None, "==", "x", False),
     ],
 )
 def test_operator_edges(field, operator, value, expected):
@@ -119,6 +122,6 @@ def test_operator_edges(field, operator, value, expected):
 
 
 def test_non_object_item_is_rejected():
-    condition = {"logic": "and", "conditions": [{"field": "data.0", "operator": "==", "value": "'x'"}]}
+    condition = {"logic": "and", "conditions": [{"field": "{{ data.0 }}", "operator": "==", "value": "x"}]}
     with pytest.raises(ValueError, match="one item"):
         evaluate(condition, ["x"])

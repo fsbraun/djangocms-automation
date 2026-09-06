@@ -1,9 +1,10 @@
-"""Tests for the {{ dotted.path }} template utilities (utilities.templates)."""
+"""Tests for literal-first value templates (utilities.templates)."""
 
 import pytest
 from django.forms import ValidationError
 
-from djangocms_automation.utilities.templates import resolve_path, safe_render, validate_template
+from djangocms_automation.utilities.expressions import ExpressionError
+from djangocms_automation.utilities.templates import referenced_paths, resolve_path, safe_render, validate_template
 
 CONTEXT = {
     "user": {"name": "Alice", "age": 30},
@@ -44,17 +45,44 @@ class TestSafeRender:
         result = safe_render("{{ user.name }} is {{ user.age }}", CONTEXT)
         assert result == "Alice is 30"
 
-    def test_missing_variable_renders_empty(self):
-        assert safe_render("Hi {{ user.missing }}!", CONTEXT) == "Hi !"
+    def test_missing_variable_raises(self):
+        with pytest.raises(ExpressionError, match="missing"):
+            safe_render("Hi {{ user.missing }}!", CONTEXT)
 
     def test_plain_text_passthrough(self):
         assert safe_render("no variables here", CONTEXT) == "no variables here"
+        assert safe_render("welcome", CONTEXT) == "welcome"
+        assert safe_render("42", CONTEXT) == "42"
+
+    @pytest.mark.parametrize(
+        "value, expected",
+        [
+            ("{{ 42 }}", 42),
+            ("{{ -3.5 }}", -3.5),
+            ("{{ true }}", True),
+            ("{{ false }}", False),
+            ("{{ null }}", None),
+        ],
+    )
+    def test_whole_expression_preserves_scalar_type(self, value, expected):
+        assert safe_render(value, CONTEXT) == expected
+
+    def test_mixed_value_is_always_text(self):
+        assert safe_render("Count: {{ count }}", CONTEXT) == "Count: 5"
+        assert safe_render("Value: {{ null }}", CONTEXT) == "Value: "
+
+    def test_escaped_open_braces_are_literal(self):
+        assert safe_render(r"Write \{{ subject }}", CONTEXT) == "Write {{ subject }}"
+
+
+def test_referenced_paths_only_returns_data_references():
+    assert referenced_paths("{{ user.name }} / {{ 42 }} / {{ true }}") == {"user.name"}
 
 
 class TestValidateTemplate:
     @pytest.mark.parametrize(
         "template",
-        ["plain text", "Hello {{ user.name }}", "{{ a }} and {{ b.c }}", ""],
+        ["plain text", "Hello {{ user.name }}", "{{ a }} and {{ b.c }}", "{{ 42 }}", "{{ true }}", ""],
     )
     def test_valid(self, template):
         assert validate_template(template) is True

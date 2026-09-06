@@ -418,6 +418,7 @@ def test_a_form_submission_arrives_as_its_fields(content):
     renders, so the payload's own ``data`` key was shadowed and every reference
     to it came back empty — silently, since a missing path renders as nothing.
     """
+    from djangocms_automation.utilities.expressions import ExpressionError
     from djangocms_automation.utilities.templates import safe_render
 
     flat = {"name": "Ada", "email": "ada@example.com", "message": "My invoice is wrong", "user_id": 1}
@@ -428,4 +429,5 @@ def test_a_form_submission_arrives_as_its_fields(content):
 
     nested = [{"data": {"message": "My invoice is wrong"}, "user_id": 1}]
     shadowed = {**nested[0], "data": nested}
-    assert str(safe_render("{{ data.message }}", shadowed)) == "", "which is what it used to do"
+    with pytest.raises(ExpressionError, match="Segment 'message' not found"):
+        safe_render("{{ data.message }}", shadowed)

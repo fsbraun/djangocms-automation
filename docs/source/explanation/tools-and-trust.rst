@@ -15,7 +15,8 @@ Two sides of one thing
 An action and a tool are the same object seen from different directions.
 
 An action's inputs are filled in by an editor, before the automation runs, as
-expressions over the automation's data: ``customer.email``, ``{{ order.total }}``.
+literal-first values: ``support@example.com``, ``{{ customer.email }}``, or
+``Order {{ order.number }}``.
 A tool's inputs are filled in by a model, while it runs, as literal values:
 ``"ada@example.com"``, ``42``. What the thing *does* — send the mail, write the
 record — is identical either way.
@@ -59,20 +60,19 @@ Exposed and bound
 
 Because inputs are per-field, a tool does not have to offer all of them. Each
 input is either *exposed* — the model may fill it — or *bound* by the editor to
-an expression the model never sees.
+a configured value the model never sees.
 
 This is the useful part. A *Send Email* tool can bind the recipient to
-``trigger.from`` and expose only the subject and body: the model writes the
+``{{ trigger.from }}`` and expose only the subject and body: the model writes the
 message, and cannot choose who receives it. A *Query Records* tool can bind the
 model and expose only the search terms and the row limit. The blast radius of a
 tool call is whatever the person who added the tool decided to open, and no
 wider — enforced on this side, not requested in a prompt.
 
 Exposing a field has to actually change what the action does, which is less
-obvious than it sounds. Actions read their inputs in two ways. Most take
-expressions over the automation's data and resolve them at run time; the model
-actions and the human-in-the-loop pause take literal values and read them
-straight from their stored configuration. A value from a model is a literal
+obvious than it sounds. Actions read their inputs in two ways. Most resolve
+value templates at run time; typed controls and literal configuration read
+their stored values directly. A value from a model is a literal
 either way, so it goes to both places: as an override that skips resolution for
 the first kind, and as configuration for the second. Reaching only one of them
 is a quiet failure rather than a loud one — the argument is validated, accepted,
@@ -80,16 +80,16 @@ and then the action does what the editor configured instead, which looks like
 success.
 
 The same distinction goes one level deeper, in the place it is easiest to miss.
-A *Query Records* filter is a mapping, and its **values** are expressions too:
-an editor writes ``{"email": "customer.email"}`` meaning *look this up in the
+A *Query Records* filter is a mapping, and its **values** use the same syntax:
+an editor writes ``{"email": "{{ customer.email }}"}`` meaning *look this up in the
 data*. A model writing ``{"username": "ann"}`` means ann. Resolved as a path,
 that finds nothing — and an empty result is indistinguishable from an honest no
 match, so the tool reports success and the agent concludes there is no such
-user. Actions therefore declare which of their inputs are mappings of
-expressions, and each value a model supplies for one is wrapped as a
+user. Actions therefore declare which of their inputs are mappings of value
+templates, and each value a model supplies for one is wrapped as a
 :class:`~djangocms_automation.utilities.expressions.Literal`, which the resolver
-returns untouched. The editor's expression validator is set aside for those
-fields at the same time: it asks whether the text is valid expression syntax,
+returns untouched. The editor's template-syntax validator is set aside for those
+fields at the same time: it asks whether references are well formed,
 which is the wrong question to put to something supplying values — ``ann smith``
 is a perfectly good value and not a valid expression.
 

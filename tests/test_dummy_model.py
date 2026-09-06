@@ -93,7 +93,7 @@ def test_a_directive_makes_it_call_a_tool(run_setup, settings):
         tool_description="Reply to the customer.",
         exposed_fields=["subject", "body"],
         requires_approval=False,
-        config={"recipient_email": "'to@example.com'", "subject": "'x'", "body": "x"},
+        config={"recipient_email": "to@example.com", "subject": "x", "body": "x"},
     )
 
     trigger.trigger_execution(data={"seed": 1})
@@ -117,7 +117,7 @@ def test_a_directive_reaches_the_approval_gate(run_setup, settings):
         tool_name="reply",
         tool_description="Reply.",
         exposed_fields=["subject"],
-        config={"recipient_email": "'to@example.com'", "subject": "'x'", "body": "x"},
+        config={"recipient_email": "to@example.com", "subject": "x", "body": "x"},
     )
 
     trigger.trigger_execution(data={"seed": 1})

@@ -41,8 +41,8 @@ def test_condition_builder_widget_renders_and_extracts():
     value = {
         "logic": "and",
         "conditions": [
-            {"field": "status", "operator": "==", "value": "active"},
-            {"field": "count", "operator": ">", "value": "5"},
+            {"field": "{{ status }}", "operator": "==", "value": "active"},
+            {"field": "{{ count }}", "operator": ">", "value": "{{ 5 }}"},
         ],
     }
     html = widget.render("condition", value)

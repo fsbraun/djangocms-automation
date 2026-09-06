@@ -13,14 +13,15 @@ Utility helpers for JSON-serializable conversions used by triggers and actions.
    :undoc-members:
    :show-inheritance:
 
-Safe expression resolver (literals and dotted data paths).
+Safe parser for the small expressions allowed inside ``{{ ... }}``.
 
 .. automodule:: djangocms_automation.utilities.templates
    :members:
    :undoc-members:
    :show-inheritance:
 
-``{{ dotted.path }}`` template rendering.
+Literal-first value rendering. Plain text is fixed, a whole ``{{ dotted.path }}``
+preserves its type, and references embedded in surrounding text produce text.
 
 .. automodule:: djangocms_automation.utilities.conditions
    :members:

@@ -208,8 +208,8 @@ class ConditionBuilderWidget(forms.Widget):
     {
         "logic": "and|or",
         "conditions": [
-            {"field": "status", "operator": "==", "value": "active"},
-            {"field": "count", "operator": ">", "value": "5"}
+            {"field": "{{ status }}", "operator": "==", "value": "active"},
+            {"field": "{{ count }}", "operator": ">", "value": "{{ 5 }}"}
         ]
     }
     """

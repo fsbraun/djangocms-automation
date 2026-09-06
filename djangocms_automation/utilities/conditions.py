@@ -5,13 +5,14 @@ The widget stores conditions as JSON::
     {
         "logic": "and" | "or",
         "conditions": [
-            {"field": "status", "operator": "==", "value": "'active'"},
-            {"field": "count", "operator": ">", "value": "5"}
+            {"field": "{{ status }}", "operator": "==", "value": "active"},
+            {"field": "{{ count }}", "operator": ">", "value": "{{ 5 }}"}
         ]
     }
 
-``field`` and ``value`` are expressions (see :mod:`.expressions`): number or
-string literals, or dotted paths resolved against the automation data. A
+``field`` and ``value`` use literal-first value templates (see
+:mod:`.templates`). Plain text is a string; ``{{ dotted.path }}`` reads
+automation data and a whole ``{{ 42 }}`` preserves its numeric type. A
 missing path resolves to ``None`` instead of raising, so conditions never
 crash a running automation.
 
@@ -25,17 +26,18 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from .expressions import ExpressionError, resolve_expression
+from .expressions import ExpressionError
+from .templates import render_value
 
 __all__ = ["evaluate"]
 
 
 def _resolve(expr: Any, context: dict[str, Any]) -> Any:
-    """Resolve an expression, returning ``None`` for missing paths/invalid input."""
+    """Resolve a value template, returning ``None`` for invalid input."""
     if expr is None:
         return None
     try:
-        return resolve_expression(str(expr), context)
+        return render_value(str(expr), context)
     except ExpressionError:
         return None
 

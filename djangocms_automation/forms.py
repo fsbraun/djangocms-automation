@@ -163,9 +163,9 @@ class LoopPluginForm(forms.ModelForm):
 class MailActionDataForm(forms.Form):
     """Data form for MailAction plugin with email-specific fields.
 
-    ``subject``, ``recipient_email`` and ``from_email`` are expressions
-    (literal or data path); ``body`` is a template (Textarea widget) with
-    ``{{ dotted.path }}`` substitution.
+    All text fields use literal-first value templates: plain text is fixed and
+    ``{{ dotted.path }}`` reads automation data. The body textarea allows those
+    references inside surrounding prose.
     """
 
     subject = forms.CharField(label=_("Email Subject"), max_length=255, required=True)

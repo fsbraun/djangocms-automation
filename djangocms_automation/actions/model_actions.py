@@ -10,15 +10,48 @@ from __future__ import annotations
 from django import forms
 from django.apps import apps as django_apps
 from django.conf import settings
+from django.core.exceptions import FieldDoesNotExist
 from django.db import transaction
 from django.utils.translation import gettext_lazy as _
 
 from ..models import BaseActionPluginModel
 from ..tools import EXPRESSION_SYNTAX_CHECK
-from ..utilities.expressions import ExpressionError, Literal, resolve_expression, validate_expression
+from ..utilities.expressions import ExpressionError
 from ..utilities.json import model_to_row
+from ..utilities.templates import render_value, validate_value_template
 
 MAX_QUERY_LIMIT = 1000
+
+
+def _field_schema(field):
+    """The serializer's shape, inferred from model metadata, never model rows."""
+    if field.many_to_many or field.one_to_many:
+        return {}
+    if field.is_relation:
+        return _field_schema(field.target_field)
+    kind = field.get_internal_type()
+    if kind in {
+        "AutoField",
+        "BigAutoField",
+        "SmallAutoField",
+        "IntegerField",
+        "BigIntegerField",
+        "SmallIntegerField",
+        "PositiveIntegerField",
+        "PositiveSmallIntegerField",
+        "PositiveBigIntegerField",
+    }:
+        value_type = "integer"
+    elif kind == "BooleanField":
+        value_type = "boolean"
+    elif kind == "FloatField":
+        value_type = "number"
+    elif kind == "JSONField":
+        # model_to_row stringifies containers, while leaving scalar values alone.
+        return {}
+    else:
+        value_type = "string"
+    return {"type": [value_type, "null"] if field.null else value_type}
 
 
 def get_allowed_model_labels() -> list[str]:
@@ -48,16 +81,16 @@ def _model_choices():
 
 
 def _validate_expression_mapping(value):
-    """Validate a ``{name: expression}`` JSON mapping."""
+    """Validate a ``{name: value template}`` JSON mapping."""
     if value in (None, ""):
         return
     if not isinstance(value, dict):
-        raise forms.ValidationError(_("Enter a JSON object mapping field names to expressions."))
+        raise forms.ValidationError(_("Enter a JSON object mapping field names to values."))
     for key, expr in value.items():
         try:
-            validate_expression(str(expr))
+            validate_value_template(str(expr))
         except ExpressionError as exc:
-            raise forms.ValidationError(_("Invalid expression for '%(key)s': %(error)s") % {"key": key, "error": exc})
+            raise forms.ValidationError(_("Invalid value for '%(key)s': %(error)s") % {"key": key, "error": exc})
 
 
 # The one question a model cannot be asked: it supplies values, not paths into
@@ -67,12 +100,7 @@ setattr(_validate_expression_mapping, EXPRESSION_SYNTAX_CHECK, True)
 
 
 def _resolve_mapping(mapping: dict, context: dict) -> dict:
-    # A Literal is passed through rather than stringified: it is already the
-    # value, and ``str()`` would lose the marker that says so.
-    return {
-        name: resolve_expression(expr if isinstance(expr, Literal) else str(expr), context)
-        for name, expr in (mapping or {}).items()
-    }
+    return {name: render_value(expr, context) for name, expr in (mapping or {}).items()}
 
 
 def _validate_model_fields(model, names, *, lookups: bool = False) -> None:
@@ -99,7 +127,9 @@ class CreateModelActionForm(ModelActionBaseForm):
     field_mapping = forms.JSONField(
         label=_("Field mapping"),
         validators=[_validate_expression_mapping],
-        help_text=_('JSON object mapping model fields to expressions, e.g. {"email": "user.email", "active": "1"}.'),
+        help_text=_(
+            'JSON object mapping model fields to values, e.g. {"email": "{{ user.email }}", "active": "{{ true }}"}.'
+        ),
     )
 
 
@@ -107,12 +137,12 @@ class UpdateModelActionForm(ModelActionBaseForm):
     filters = forms.JSONField(
         label=_("Filters"),
         validators=[_validate_expression_mapping],
-        help_text=_('JSON object mapping lookups to expressions, e.g. {"email": "user.email"}.'),
+        help_text=_('JSON object mapping lookups to values, e.g. {"email": "{{ user.email }}"}.'),
     )
     field_mapping = forms.JSONField(
         label=_("Field mapping"),
         validators=[_validate_expression_mapping],
-        help_text=_("JSON object mapping model fields to expressions with the new values."),
+        help_text=_("JSON object mapping model fields to their new values."),
     )
 
 
@@ -121,7 +151,7 @@ class QueryModelActionForm(ModelActionBaseForm):
         label=_("Filters"),
         required=False,
         validators=[_validate_expression_mapping],
-        help_text=_("JSON object mapping lookups to expressions. Empty matches all rows (up to the limit)."),
+        help_text=_("JSON object mapping lookups to values. Empty matches all rows (up to the limit)."),
     )
     fields = forms.CharField(
         label=_("Fields"),
@@ -141,13 +171,21 @@ class QueryModelActionForm(ModelActionBaseForm):
 class CreateModelActionModel(BaseActionPluginModel):
     """Create one model instance per data row."""
 
-    #: Config keys holding a mapping whose *values* are expressions rather than
-    #: values. What an editor writes there is a path into the automation's data;
+    #: Config keys holding a mapping whose *values* use value-template syntax.
+    #: What an editor writes there may refer to the automation's data;
     #: what a model supplies is the value itself. See
     #: :class:`~djangocms_automation.utilities.expressions.Literal`.
     expression_mappings = frozenset({"field_mapping"})
     default_outputs = {"id": {"field": "created_id"}}
     literal_fields = frozenset({"model"})
+
+    def get_result_schemas(self):
+        schemas = super().get_result_schemas()
+        try:
+            model = get_allowed_model((self.config or {}).get("model"))
+        except ValueError:
+            return schemas
+        return {**schemas, "id": _field_schema(model._meta.pk)}
 
     class Meta:
         proxy = True
@@ -165,12 +203,13 @@ class CreateModelActionModel(BaseActionPluginModel):
 class UpdateModelActionModel(BaseActionPluginModel):
     """Update model instances matching per-row filters."""
 
-    #: Config keys holding a mapping whose *values* are expressions rather than
-    #: values. What an editor writes there is a path into the automation's data;
+    #: Config keys holding a mapping whose *values* use value-template syntax.
+    #: What an editor writes there may refer to the automation's data;
     #: what a model supplies is the value itself. See
     #: :class:`~djangocms_automation.utilities.expressions.Literal`.
     expression_mappings = frozenset({"filters", "field_mapping"})
     default_outputs = {"count": {"field": "updated_count"}}
+    result_schemas = {"count": {"type": "integer"}}
     literal_fields = frozenset({"model"})
 
     class Meta:
@@ -193,13 +232,38 @@ class UpdateModelActionModel(BaseActionPluginModel):
 class QueryModelActionModel(BaseActionPluginModel):
     """Query model instances and return them as the records list result."""
 
-    #: Config keys holding a mapping whose *values* are expressions rather than
-    #: values. What an editor writes there is a path into the automation's data;
+    #: Config keys holding a mapping whose *values* use value-template syntax.
+    #: What an editor writes there may refer to the automation's data;
     #: what a model supplies is the value itself. See
     #: :class:`~djangocms_automation.utilities.expressions.Literal`.
     expression_mappings = frozenset({"filters"})
     default_outputs = {"records": {"field": "records"}}
+    result_schemas = {"records": {"type": "array", "items": {"type": "object"}}}
     literal_fields = frozenset({"model", "fields", "order_by", "limit"})
+
+    def get_result_schemas(self):
+        schemas = super().get_result_schemas()
+        config = self.config or {}
+        try:
+            model = get_allowed_model(config.get("model"))
+            names = [name.strip() for name in (config.get("fields") or "").split(",") if name.strip()]
+            fields = [model._meta.get_field(name) for name in names] if names else model._meta.concrete_fields
+        except (ValueError, FieldDoesNotExist):
+            return schemas
+        properties = {"pk": _field_schema(model._meta.pk)}
+        for field in fields:
+            properties[f"{field.name}_id" if field.is_relation else field.name] = _field_schema(field)
+        return {
+            **schemas,
+            "records": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": properties,
+                    "additionalProperties": False,
+                },
+            },
+        }
 
     class Meta:
         proxy = True

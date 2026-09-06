@@ -155,7 +155,10 @@ def build_loop(placeholder, settings, condition, body_plugins=("CountdownPlugin"
 
 
 #: "remaining > 0" in the ConditionBuilderWidget's schema.
-GREATER_THAN_ZERO = {"logic": "and", "conditions": [{"field": "remaining", "operator": ">", "value": "0"}]}
+GREATER_THAN_ZERO = {
+    "logic": "and",
+    "conditions": [{"field": "{{ remaining }}", "operator": ">", "value": "{{ 0 }}"}],
+}
 
 
 def loop_action():
@@ -520,7 +523,7 @@ def test_a_body_of_only_leaf_plugins_is_not_empty(run_setup, settings):
 
 
 #: "flag > 0" — used to steer a conditional down its Else branch.
-FLAG_SET = {"logic": "and", "conditions": [{"field": "flag", "operator": ">", "value": "0"}]}
+FLAG_SET = {"logic": "and", "conditions": [{"field": "{{ flag }}", "operator": ">", "value": "{{ 0 }}"}]}
 
 
 @pytest.mark.django_db

@@ -62,27 +62,18 @@ def test_action_comments_are_available_as_closed_click_details_in_edit_mode(temp
 
 
 @pytest.mark.parametrize("plugin", ["action", "ai_step", "tool"])
-@pytest.mark.parametrize(
-    "field,label,icon",
-    [("uses", "Uses", "bi-box-arrow-in-up"), ("produces", "Produces", "bi-box-arrow-down")],
-)
-def test_data_details_are_closed_and_accessible_by_icon(plugin, field, label, icon):
+def test_data_summary_is_not_printed_inside_individual_action_titles(plugin):
     value = 'input.customer <name> & "email"'
     html = render_action(
         f"djangocms_automation/plugins/{plugin}.html",
         comment="",
         edit_mode=False,
-        **{field: value},
+        uses=value,
+        produces="delivery",
     )
 
-    details = html.split(f'<details class="automation-detail automation-{field}">', 1)[1].split("</details>", 1)[0]
-    summary, panel = details.split("</summary>", 1)
-    assert f'<summary aria-label="{label}">' in summary
-    assert f'<use href="#{icon}">' in summary
-    assert value not in summary
-    assert f"<strong>{label}</strong><div>{escape(value)}</div>" in panel
-    other_field = "produces" if field == "uses" else "uses"
-    assert f"automation-{other_field}" not in html
+    assert "automation-title-data" not in html
+    assert escape(value) not in html
 
 
 @pytest.mark.parametrize("edit_mode", [False, None])

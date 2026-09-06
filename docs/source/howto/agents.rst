@@ -100,17 +100,17 @@ Inside an AI step, every input on an action's form grows a switch beside it:
 
 .. code-block:: text
 
-    Email Subject      ( ) expression   (o) the model decides
-    Email Body         ( ) expression   (o) the model decides
-    Recipient Email    (o) expression   ( ) the model decides    trigger.from
-    Sender Email       (o) expression   ( ) the model decides    'support@example.com'
+    Email Subject      ( ) configured value   (o) the model decides
+    Email Body         ( ) configured value   (o) the model decides
+    Recipient Email    (o) configured value   ( ) the model decides    {{ trigger.from }}
+    Sender Email       (o) configured value   ( ) the model decides    support@example.com
 
 Flip an input to **the model decides** and it stops asking you for a value,
-because it would never use one. Leave it on **expression** and it stays bound to
+because it would never use one. Leave it on **configured value** and it stays bound to
 what you wrote — and the model is never shown that the input exists.
 
 So a *Send Email* tool can let the model write the subject and body while the
-recipient stays pinned to ``trigger.from``. Not by instruction: the field is
+recipient stays pinned to ``{{ trigger.from }}``. Not by instruction: the field is
 absent from what the model is given, and refused if it sends one anyway.
 
 Start with the smallest set that lets the tool do its job.
@@ -300,14 +300,14 @@ Their writes must have distinct root-field destinations; overlaps fail instead
 of choosing whichever call happened to finish last. Calls on later turns can
 update fields produced by earlier turns.
 
-Fields that hold expressions
-----------------------------
+Fields that hold value mappings
+-------------------------------
 
-An action reading a config field as a mapping of expressions — a filter, a field
-mapping — names it in ``expression_mappings``, and the form's validator for it
-demands expression syntax. That is the editor's question. A model supplies
-values, and ``ann smith`` is a good value and not an expression, so the check is
-set aside when the field is offered to a model.
+An action reading a config field as a mapping of value templates — a filter or
+field mapping — names it in ``expression_mappings``. An editor can write plain
+text or a reference such as ``{{ customer.email }}``. A model already supplies
+literal values, so the editor-only template syntax check is set aside when the
+field is offered to a model.
 
 Only that check. The field itself is the action's own, copied — so its
 ``validate``, its ``to_python`` and every other validator on it still apply. A

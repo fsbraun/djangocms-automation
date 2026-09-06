@@ -4,6 +4,30 @@ Reading an automation
 Read each step's **intent** to understand what it achieves and its **actor** to
 see who does the work. Follow the paths to see the order of work, decisions,
 and repeated steps. **Uses** and **Produces** show the step's data connections.
+The automation title block repeats **Uses** for trigger-declared fields and
+**Produces** for public fields returned to callers; it never displays execution
+values.
+
+The trigger's field overview
+----------------------------
+
+Open a trigger to see **Automation fields**: its starting field names plus
+the declared fields produced along its own path. Nested structures show dotted
+paths; ``receipts[].sent`` describes a field of each list entry. ``[]`` is
+overview notation, not a usable reference; use **For each** and
+``{{ loop.entry.sent }}``
+to read entries.
+
+The overview contains known types, producing actions, and availability—not
+values from runs, examples, or defaults. It does not change what the trigger
+requires as starting data. Fields from other trigger paths are excluded.
+
+This is a catalogue of possibilities, not a promise that all those fields
+exist at every step. A branch or tool may not run; an empty loop may write
+nothing. Unknown structures are marked dynamic. Multiple producers of the
+same field retain their separate declarations, so differing types remain
+visible. Automation-level field declarations do not initialize values.
+Save configuration changes to refresh the overview.
 
 One instance, one item
 ----------------------
@@ -42,9 +66,9 @@ selects or creates a destination field. **Replace value** changes that field;
 one nested list, not flattened. Appending to a non-list fails.
 
 Fields have stable machine keys (such as ``customer``) and optional display
-labels. Changing a label does not change bindings. Nested expressions such as
-``customer.email`` read part of a field; output writes target root fields.
-A missing expression fails input resolution unless an explicit default is
+labels. Changing a label does not change bindings. Nested references such as
+``{{ customer.email }}`` read part of a field; output writes target root fields.
+A missing reference fails input resolution unless an explicit default is
 configured. Fields produced only on another path may not be available.
 
 An automation can select public output fields through ``output_fields``.
@@ -55,12 +79,18 @@ Repeating and branching
 -----------------------
 
 **Repeat while** tests its condition before each iteration and carries the
-updated item into the next one. **For each** captures a list when it starts,
-then visits its entries sequentially. Use ``loop.entry`` for the current entry
-and ``loop.index`` for its zero-based index. Changes to the source list do not
+updated item into the next one. **For each** captures a list selected with a
+reference such as ``{{ orders }}``, then visits its entries sequentially. Use
+``{{ loop.entry }}`` for the current entry and ``{{ loop.index }}`` for its
+zero-based index. Changes to the source list do not
 change the captured iteration sequence. Both loops have an iteration limit;
 reaching it before finishing fails visibly. Nested loops restore the outer
 loop's scope when the inner loop finishes.
+
+Conditions use the same value syntax as actions. For example, compare
+``{{ status }}`` with the fixed text ``ready``, or compare ``{{ attempt }}``
+with the number ``{{ 3 }}``. The picker can insert a data reference on either
+side of a condition.
 
 To collect results, choose **Append to list** on an action inside the loop.
 The list stays in the same item. Entries do not have independent instances,

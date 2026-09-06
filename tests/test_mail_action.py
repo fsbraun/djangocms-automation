@@ -53,9 +53,9 @@ def test_mail_action_sends_per_instance(mail_setup, settings):
     )
     model = MailActionPluginModel.objects.get(pk=plugin.pk)
     model.config = {
-        "subject": "'Welcome'",
+        "subject": "Welcome",
         "body": "Hello {{ name }}, your order is {{ order_id }}.",
-        "recipient_email": "email",
+        "recipient_email": "{{ email }}",
         "from_email": "",
     }
     model.save()
@@ -91,9 +91,9 @@ def test_mail_action_failure_is_isolated_between_instances(mail_setup, settings)
     )
     model = MailActionPluginModel.objects.get(pk=plugin.pk)
     model.config = {
-        "subject": "'Hi'",
+        "subject": "Hi",
         "body": "Hi {{ name }}",
-        "recipient_email": "email",
+        "recipient_email": "{{ email }}",
     }
     model.save()
 
@@ -120,9 +120,9 @@ def test_mail_action_total_failure_fails_action_and_instance(mail_setup, setting
     )
     model = MailActionPluginModel.objects.get(pk=plugin.pk)
     model.config = {
-        "subject": "'Hi'",
+        "subject": "Hi",
         "body": "Hi",
-        "recipient_email": "email",  # never resolvable
+        "recipient_email": "{{ email }}",  # never resolvable
     }
     model.save()
 
@@ -154,10 +154,10 @@ def test_an_html_body_arrives_in_both_forms(mail_setup, settings):
         placeholder,
         settings,
         {
-            "recipient_email": "'to@example.com'",
-            "subject": "'Digest'",
+            "recipient_email": "to@example.com",
+            "subject": "Digest",
             "body": "<p>Hello <b>Ada</b></p>",
-            "body_format": "'html'",
+            "body_format": "html",
         },
     )
 
@@ -176,7 +176,7 @@ def test_a_plain_body_stays_one_part(mail_setup, settings):
     _send(
         placeholder,
         settings,
-        {"recipient_email": "'to@example.com'", "subject": "'Digest'", "body": "Hello <not markup>"},
+        {"recipient_email": "to@example.com", "subject": "Digest", "body": "Hello <not markup>"},
     )
 
     trigger.trigger_execution(data={"seed": 1})

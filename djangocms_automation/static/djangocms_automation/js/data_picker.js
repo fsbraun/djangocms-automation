@@ -5,12 +5,13 @@ document.addEventListener("change", (event) => {
     if (selector && selector.value) {
         const wrapper = selector.closest(".automation-data-input");
         const input = wrapper.querySelector("input, textarea");
+        const expression = "{{ " + selector.value + " }}";
         if (wrapper.dataset.template === "true") {
             const start = input.selectionStart ?? input.value.length;
             const end = input.selectionEnd ?? start;
-            input.setRangeText("{{ " + selector.value + " }}", start, end, "end");
+            input.setRangeText(expression, start, end, "end");
         } else {
-            input.value = selector.value;
+            input.value = expression;
         }
         input.dispatchEvent(new Event("change", {bubbles: true}));
         input.focus();

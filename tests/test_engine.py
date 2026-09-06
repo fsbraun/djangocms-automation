@@ -168,7 +168,7 @@ def test_split_branch_failure_fails_split_and_instance(run_setup, settings):
     from djangocms_automation.actions.mail import MailActionPluginModel
 
     failing_model = MailActionPluginModel.objects.get(pk=failing.pk)
-    failing_model.config = {"subject": "'s'", "body": "b", "recipient_email": "missing"}
+    failing_model.config = {"subject": "s", "body": "b", "recipient_email": "{{ missing }}"}
     failing_model.save()
 
     trigger.trigger_execution(data={}, start=True)

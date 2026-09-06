@@ -139,4 +139,7 @@ class AutomationView(DetailView):
 
         triggers = list(triggers)
         context["triggers"] = triggers
+        from .data_editor import automation_io_summary
+
+        context["automation_io"] = automation_io_summary(obj, triggers)
         return context

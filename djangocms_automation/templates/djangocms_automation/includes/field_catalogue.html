@@ -1,0 +1,13 @@
+{% load i18n %}
+{% if fields %}
+<table class="automation-field-catalogue">
+    <thead><tr><th scope="col">{% translate "Field" %}</th><th scope="col">{% translate "Type" %}</th>{% if show_sources %}<th scope="col">{% translate "Source" %}</th><th scope="col">{% translate "Availability" %}</th>{% endif %}</tr></thead>
+    <tbody>
+    {% for field in fields %}
+        <tr><td><code>{{ field.name }}</code></td><td>{{ field.type }}</td>{% if show_sources %}<td>{{ field.source }}</td><td>{{ field.availability }}</td>{% endif %}</tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p>{{ empty_message }}</p>
+{% endif %}

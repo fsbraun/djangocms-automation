@@ -52,6 +52,12 @@ batch intake are deferred; those terms reserve wording for later work.
       A saved selection connecting an action input to a source field or part of
       a field. The editor label is **Use data from**.
 
+   Value template
+      The common syntax for editable text inputs. Plain text is fixed text;
+      ``{{ field.name }}`` reads item data; and a whole ``{{ 42 }}``,
+      ``{{ true }}`` or ``{{ null }}`` keeps its native type. A reference mixed
+      into surrounding text produces text.
+
    Output destination
       The field in which an action saves its result. The editor label
       is **Save result in**, with **Replace value** or **Append to list** as
@@ -60,6 +66,16 @@ batch intake are deferred; those terms reserve wording for later work.
    Schema
       A description of data's structure, types, and required fields. A sample
       shows particular values; it is not a guarantee of every future value.
+
+   Result structure
+      The names and types an action returns, before they are saved into item
+      fields. Fixed actions declare it; configurable actions such as Ask a
+      Model let the editor define it with a schema.
+
+   Automation fields
+      A read-only catalogue at the trigger: starting fields and possible
+      output fields in its path, with known types and sources but no values.
+      Listing a field does not guarantee its presence during execution.
 
    Parallel paths
       Branches performing separate work on the same original item in private copies. The plugin type is Split.

@@ -213,7 +213,7 @@ def test_a_tool_call_runs_the_action(run_setup, settings):
         plugin_type="MailAction",
         tool_name="reply",
         exposed_fields=["subject", "body"],
-        config={"recipient_email": "'to@example.com'", "subject": "'x'", "body": "x"},
+        config={"recipient_email": "to@example.com", "subject": "x", "body": "x"},
         requires_approval=False,
     )
     SCRIPT.append(says(calls=[ToolCall(id="c1", name="reply", arguments={"subject": "Ship it", "body": "Now"})]))
@@ -236,7 +236,7 @@ def test_an_action_outside_a_step_is_unaffected(run_setup, settings):
         placeholder=placeholder,
         plugin_type="MailAction",
         language=settings.LANGUAGE_CODE,
-        config={"recipient_email": "'to@example.com'", "subject": "'Hello'", "body": "Hi"},
+        config={"recipient_email": "to@example.com", "subject": "Hello", "body": "Hi"},
     )
 
     trigger.trigger_execution(data={"seed": 1})
@@ -274,7 +274,7 @@ def test_an_approved_call_actually_runs(run_setup, settings, admin_user):
         plugin_type="MailAction",
         tool_name="reply",
         exposed_fields=["subject"],
-        config={"recipient_email": "'to@example.com'", "subject": "'x'", "body": "x"},
+        config={"recipient_email": "to@example.com", "subject": "x", "body": "x"},
         requires_approval=True,
     )
     SCRIPT.append(says(calls=[ToolCall(id="c1", name="reply", arguments={"subject": "Ship it"})]))
@@ -446,7 +446,7 @@ def test_replaying_a_call_keeps_the_call_it_was(run_setup, settings):
         plugin_type="MailAction",
         tool_name="reply",
         exposed_fields=["subject"],
-        config={"recipient_email": "'to@example.com'", "subject": "'x'", "body": "x"},
+        config={"recipient_email": "to@example.com", "subject": "x", "body": "x"},
         requires_approval=True,
     )
     SCRIPT.append(says(calls=[ToolCall(id="c1", name="reply", arguments={"subject": "Ship it"})]))
@@ -521,7 +521,7 @@ def test_an_action_draws_as_a_tool_inside_a_step_and_as_a_step_outside_one(run_s
         placeholder=placeholder,
         plugin_type="MailAction",
         language=settings.LANGUAGE_CODE,
-        config={"recipient_email": "'to@example.com'", "subject": "'x'", "body": "x"},
+        config={"recipient_email": "to@example.com", "subject": "x", "body": "x"},
     )
 
     plugin_class = plugin_pool.get_plugin("MailAction")
@@ -741,7 +741,7 @@ def test_a_step_does_not_ask_for_the_same_field_twice(run_setup, settings):
 
     That is right for an action with no layout of its own, which is nearly all
     of them. The AI step arranges its own — budgets collapsed away from the
-    prompt — and so was shown every field a second time under *Inputs*.
+    prompt — and so was shown every field a second time under *Uses*.
     """
     from cms.plugin_pool import plugin_pool
     from django.contrib.admin.sites import AdminSite
@@ -783,7 +783,7 @@ def test_the_inputs_come_second(run_setup, settings):
     wired = RequestFactory().get(f"/?plugin_parent={ai.pk}")
     wired.user = None
     labels = [str(label) for label, _opts in plugin.get_fieldsets(wired, None)]
-    assert labels == ["Intent", "As a tool", "Inputs", "Output", "Comment"]
+    assert labels == ["Intent", "As a tool", "Uses", "Produces", "Comment"]
 
 
 def test_no_icon_is_defined_twice_in_the_sprite():
@@ -881,7 +881,7 @@ def mail_tool(placeholder, ai, settings, exposed, **kwargs):
         tool_name=kwargs.pop("tool_name", "reply"),
         exposed_fields=exposed,
         requires_approval=kwargs.pop("requires_approval", False),
-        config={"recipient_email": "'to@example.com'", "subject": "'x'", "body": "x"},
+        config={"recipient_email": "to@example.com", "subject": "x", "body": "x"},
         **kwargs,
     )
 
@@ -1561,7 +1561,7 @@ def test_a_bound_expression_is_resolved_before_the_form_sees_it(run_setup, setti
         plugin_type="MailAction",
         tool_name="reply",
         exposed_fields=["subject"],
-        config={"recipient_email": "customer.email", "subject": "'x'", "body": "x"},
+        config={"recipient_email": "{{ customer.email }}", "subject": "x", "body": "x"},
     )
     instance = plugin_pool.get_plugin("MailAction").model.objects.get(pk=tool.pk)
     instance.exposed_fields = ["subject"]
@@ -1631,7 +1631,7 @@ def test_approval_resumes_with_the_step_s_own_data(run_setup, settings, django_u
         plugin_type="QueryModelAction",
         language=settings.LANGUAGE_CODE,
         # Filter values are expressions, so the literal is quoted.
-        config={"model": "auth.User", "filters": {"username": "'ada'"}, "fields": "email", "limit": 1},
+        config={"model": "auth.User", "filters": {"username": "ada"}, "fields": "email", "limit": 1},
     )
     ai = add_step(placeholder, settings)
     add_tool(
@@ -1642,7 +1642,7 @@ def test_approval_resumes_with_the_step_s_own_data(run_setup, settings, django_u
         tool_name="reply",
         exposed_fields=["subject"],
         requires_approval=True,
-        config={"recipient_email": "records.0.email", "subject": "'x'", "body": "x"},
+        config={"recipient_email": "{{ records.0.email }}", "subject": "x", "body": "x"},
     )
     SCRIPT.append(says(calls=[ToolCall(id="c1", name="reply", arguments={"subject": "Ship it"})]))
 
@@ -1725,7 +1725,7 @@ def test_a_second_turn_keeps_what_the_first_one_had(run_setup, settings, django_
         placeholder=placeholder,
         plugin_type="QueryModelAction",
         language=settings.LANGUAGE_CODE,
-        config={"model": "auth.User", "filters": {"username": "'ada'"}, "fields": "email", "limit": 1},
+        config={"model": "auth.User", "filters": {"username": "ada"}, "fields": "email", "limit": 1},
     )
     ai = add_step(placeholder, settings)
     add_tool(placeholder, ai, settings, tool_name="look")
@@ -1737,7 +1737,7 @@ def test_a_second_turn_keeps_what_the_first_one_had(run_setup, settings, django_
         tool_name="reply",
         exposed_fields=["subject"],
         requires_approval=False,
-        config={"recipient_email": "records.0.email", "subject": "'x'", "body": "x"},
+        config={"recipient_email": "{{ records.0.email }}", "subject": "x", "body": "x"},
     )
 
     # Two turns: something harmless, then the one that needs the queried row.
@@ -1779,7 +1779,7 @@ def test_an_action_can_still_speak_to_the_model_on_purpose(run_setup, settings):
         tool_name="reply",
         exposed_fields=["subject"],
         requires_approval=False,
-        config={"recipient_email": "'to@example.com'", "subject": "'x'", "body": "x"},
+        config={"recipient_email": "to@example.com", "subject": "x", "body": "x"},
     )
     SCRIPT.append(says(calls=[ToolCall(id="c1", name="reply", arguments={"subject": "Hi"})]))
     SCRIPT.append(says(text="Understood."))
@@ -1866,7 +1866,7 @@ def test_a_delivery_failure_does_not_carry_its_message(run_setup, settings):
         tool_name="reply",
         exposed_fields=["subject"],
         requires_approval=False,
-        config={"recipient_email": "'ada@example.com'", "subject": "'Hi'", "body": "Hello"},
+        config={"recipient_email": "ada@example.com", "subject": "Hi", "body": "Hello"},
     )
     SCRIPT.extend(
         [says(calls=[ToolCall(id="c1", name="reply", arguments={"subject": "Hi"})]), says(text="Could not send.")]
@@ -1900,7 +1900,7 @@ def test_a_call_reports_what_it_produced_not_what_it_was_given(run_setup, settin
         tool_name="reply",
         exposed_fields=["subject"],
         requires_approval=False,
-        config={"recipient_email": "'to@example.com'", "subject": "'x'", "body": "x"},
+        config={"recipient_email": "to@example.com", "subject": "x", "body": "x"},
     )
     SCRIPT.append(says(calls=[ToolCall(id="c1", name="reply", arguments={"subject": "Ship it"})]))
     SCRIPT.append(says(text="Sent."))
@@ -1962,7 +1962,7 @@ def test_an_approver_sees_what_the_call_will_act_on(run_setup, settings):
         tool_name="reply",
         exposed_fields=["subject"],
         requires_approval=True,
-        config={"recipient_email": "customer.email", "subject": "'x'", "body": "x"},
+        config={"recipient_email": "{{ customer.email }}", "subject": "x", "body": "x"},
     )
     SCRIPT.append(says(calls=[ToolCall(id="c1", name="reply", arguments={"subject": "Ship it"})]))
 
@@ -2027,7 +2027,7 @@ def test_tool_result_reports_declared_values_even_when_unchanged(run_setup, sett
         tool_name="reply",
         exposed_fields=["subject"],
         requires_approval=False,
-        config={"recipient_email": "'ada@example.com'", "subject": "'Hi'", "body": "Hi"},
+        config={"recipient_email": "ada@example.com", "subject": "Hi", "body": "Hi"},
     )
     SCRIPT.extend([says(calls=[ToolCall(id="c1", name="reply", arguments={"subject": "Hi"})]), says(text="Done.")])
     trigger.trigger_execution(
@@ -2052,7 +2052,7 @@ def test_lookup_reports_its_declared_records(run_setup, settings, django_user_mo
         tool_name="find_users",
         exposed_fields=[],
         requires_approval=False,
-        config={"model": "auth.User", "filters": {"username": "'ada'"}, "fields": "email", "limit": 5},
+        config={"model": "auth.User", "filters": {"username": "ada"}, "fields": "email", "limit": 5},
     )
     SCRIPT.extend([says(calls=[ToolCall(id="c1", name="find_users", arguments={})]), says(text="Found.")])
     trigger.trigger_execution(data={"token": "sk-do-not-share"})
@@ -2224,7 +2224,7 @@ def test_a_call_that_changed_while_waiting_is_put_back_for_approval(run_setup, s
         plugin_type="MailAction",
         tool_name="reply",
         exposed_fields=["subject"],
-        config={"recipient_email": "'ada@example.com'", "subject": "'x'", "body": "x"},
+        config={"recipient_email": "ada@example.com", "subject": "x", "body": "x"},
         requires_approval=True,
     )
     SCRIPT.append(says(calls=[ToolCall(id="c1", name="reply", arguments={"subject": "Ship it"})]))
@@ -2237,7 +2237,7 @@ def test_a_call_that_changed_while_waiting_is_put_back_for_approval(run_setup, s
     # The editor changes their mind about the recipient while it waits.
     model = plugin_pool.get_plugin("MailAction").model
     instance = model.objects.get(pk=tool.pk)
-    instance.config = {**instance.config, "recipient_email": "'someone-else@example.com'"}
+    instance.config = {**instance.config, "recipient_email": "someone-else@example.com"}
     instance.save()
 
     sent_before = len(mail.outbox)
@@ -2270,7 +2270,7 @@ def test_approving_does_not_add_a_row_of_its_own(run_setup, settings, admin_user
         plugin_type="MailAction",
         tool_name="reply",
         exposed_fields=["subject"],
-        config={"recipient_email": "'to@example.com'", "subject": "'x'", "body": "x"},
+        config={"recipient_email": "to@example.com", "subject": "x", "body": "x"},
         requires_approval=True,
     )
     SCRIPT.append(says(calls=[ToolCall(id="c1", name="reply", arguments={"subject": "Ship it"})]))
@@ -2328,7 +2328,7 @@ def test_turning_approval_off_does_not_wave_a_pending_call_through(run_setup, se
         plugin_type="MailAction",
         tool_name="reply",
         exposed_fields=["subject"],
-        config={"recipient_email": "'ada@example.com'", "subject": "'x'", "body": "x"},
+        config={"recipient_email": "ada@example.com", "subject": "x", "body": "x"},
         requires_approval=True,
     )
     SCRIPT.append(says(calls=[ToolCall(id="c1", name="reply", arguments={"subject": "Ship it"})]))
@@ -2340,7 +2340,7 @@ def test_turning_approval_off_does_not_wave_a_pending_call_through(run_setup, se
     # The recipient is repointed *and* the gate is switched off while it waits.
     model = plugin_pool.get_plugin("MailAction").model
     instance = model.objects.get(pk=tool.pk)
-    instance.config = {**instance.config, "recipient_email": "'someone-else@example.com'"}
+    instance.config = {**instance.config, "recipient_email": "someone-else@example.com"}
     instance.requires_approval = False
     instance.save()
 
@@ -2851,7 +2851,7 @@ def test_intent_comes_first_for_a_plain_action(settings):
 
     names = [str(name) for name, _options in plugin(plugin.model, django_admin.site).get_fieldsets(request, None)]
 
-    assert names == ["Intent", "Inputs", "Output", "Comment"]
+    assert names == ["Intent", "Uses", "Produces", "Comment"]
 
 
 @pytest.mark.django_db
@@ -2872,4 +2872,4 @@ def test_tool_wiring_and_inputs_follow_intent(run_setup, settings):
 
     names = [str(name) for name, _options in plugin(plugin.model, django_admin.site).get_fieldsets(request, instance)]
 
-    assert names[:3] == ["Intent", "As a tool", "Inputs"]
+    assert names[:3] == ["Intent", "As a tool", "Uses"]

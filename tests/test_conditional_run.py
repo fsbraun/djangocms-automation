@@ -74,7 +74,7 @@ def _build_conditional(placeholder, settings, condition, with_else=True, with_fo
     return conditional, then_action, else_action, follow_up
 
 
-CONDITION = {"logic": "and", "conditions": [{"field": "score", "operator": ">", "value": "10"}]}
+CONDITION = {"logic": "and", "conditions": [{"field": "{{ score }}", "operator": ">", "value": "{{ 10 }}"}]}
 
 
 @pytest.mark.django_db
@@ -154,7 +154,7 @@ def test_conditional_failing_branch_fails_conditional_and_instance(run_setup, se
         placeholder=placeholder, plugin_type="MailAction", language=settings.LANGUAGE_CODE, target=then_branch
     )
     failing_model = MailActionPluginModel.objects.get(pk=failing.pk)
-    failing_model.config = {"subject": "'s'", "body": "b", "recipient_email": "missing"}
+    failing_model.config = {"subject": "s", "body": "b", "recipient_email": "{{ missing }}"}
     failing_model.save()
 
     trigger.trigger_execution(data={"score": 99}, start=True)  # condition true -> Then branch

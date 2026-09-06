@@ -40,6 +40,11 @@ def test_number_literals(expr, expected, context):
     assert resolve_expression(expr, context) == expected
 
 
+@pytest.mark.parametrize("expr, expected", [("true", True), ("false", False), ("null", None)])
+def test_json_scalar_literals(expr, expected, context):
+    assert resolve_expression(expr, context) is expected
+
+
 @pytest.mark.parametrize(
     "expr, expected",
     [

@@ -820,6 +820,25 @@ class AutomationTriggerAdmin(ChangeListActionsMixin, admin.ModelAdmin):
 
     name = _("Trigger")
     form = AutomationTriggerAdminForm
+    readonly_fields = ("automation_fields",)
+
+    @admin.display(description=_("Field names"))
+    def automation_fields(self, obj):
+        from django.template.loader import render_to_string
+
+        from .data_editor import automation_fields
+
+        if obj is None or not obj.pk:
+            return _("Save the trigger to view its automation fields.")
+        return render_to_string(
+            "djangocms_automation/includes/field_catalogue.html",
+            {
+                "fields": automation_fields(trigger=obj),
+                "show_sources": True,
+                "empty_message": _("No fields declared."),
+            },
+        )
+
     change_form_template = "admin/djangocms_automation/automationtrigger/change_form.html"
     list_display = (
         "__str__",
@@ -994,6 +1013,20 @@ class AutomationTriggerAdmin(ChangeListActionsMixin, admin.ModelAdmin):
                     },
                 )
             )
+        base_fieldsets.append(
+            (
+                _("Automation fields"),
+                {
+                    "fields": ("automation_fields",),
+                    "description": _(
+                        "This trigger's starting fields and all declared outputs in its path. "
+                        "Names and types only, never execution values. Branches, loops and tool calls "
+                        "may leave fields absent. [] denotes list entries. This catalogue does not "
+                        "change the trigger's starting-data schema. Save changes to refresh it."
+                    ),
+                },
+            )
+        )
         return base_fieldsets
 
     def get_form(self, request, obj=None, **kwargs):
