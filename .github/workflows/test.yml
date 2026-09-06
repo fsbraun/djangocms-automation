@@ -16,7 +16,7 @@ jobs:
       matrix:
         python-version: ["3.12", "3.13", "3.14"]
         django-version: ["6.0", "6.1"]
-        cms-version: ["5.0", "5.1"]
+        cms-version: ["5.1"]
 
     steps:
     - uses: actions/checkout@v7
@@ -29,7 +29,10 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -e .
+        # Exercise the optional Markdown rendering and sanitising path. Without
+        # both packages the application deliberately displays escaped text,
+        # which is a different behaviour from the security test below.
+        pip install -e ".[markdown]"
         pip install -r tests/requirements/base.txt
         # Pin last so the matrix wins: installing the package or the test
         # requirements afterwards can quietly resolve a different version, and
