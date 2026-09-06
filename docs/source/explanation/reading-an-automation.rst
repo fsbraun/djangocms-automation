@@ -71,9 +71,15 @@ labels. Changing a label does not change bindings. Nested references such as
 A missing reference fails input resolution unless an explicit default is
 configured. Fields produced only on another path may not be available.
 
-An automation can select public output fields through ``output_fields``.
-An empty selection returns the complete final item. The internal final item
-remains available for debugging even when the public output is smaller.
+The automation's data catalogue is derived from trigger schemas and action
+output mappings. It is not another field in the Automation form: changing a
+trigger or an action changes the catalogue.
+
+**Produces** controls the public result returned to a caller. Keep **Produce
+the complete final item** for an ordinary fire-and-forget automation. Select
+individual fields only when another automation or integration consumes the
+result. This selection does not restrict what actions inside the automation
+can use, and the internal final item remains available for debugging.
 
 Repeating and branching
 -----------------------

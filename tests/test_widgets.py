@@ -3,9 +3,15 @@
 import json
 
 import pytest
+from django.core.exceptions import ValidationError
 
 from djangocms_automation.triggers import trigger_registry
-from djangocms_automation.widgets import ConditionBuilderWidget, SchemaWidget, TriggerSelectWidget
+from djangocms_automation.widgets import (
+    ConditionBuilderWidget,
+    OutputFieldsWidget,
+    SchemaWidget,
+    TriggerSelectWidget,
+)
 
 
 def test_trigger_select_widget_renders_choices_and_description():
@@ -100,6 +106,113 @@ def test_schema_widget_declares_its_assets():
 
     assert "djangocms_automation/js/schema_widget.js" in media._js
     assert "djangocms_automation/css/schema_widget.css" in media._css["all"]
+
+
+def test_output_fields_widget_carries_its_derived_catalogue():
+    widget = OutputFieldsWidget({"receipt": {"label": "Delivery receipt"}})
+
+    html = widget.render(
+        "content__output_fields",
+        ["receipt"],
+        attrs={"id": "id_content__output_fields"},
+    )
+
+    assert html.count('name="content__output_fields"') == 1
+    assert "Delivery receipt" in html
+    assert "data-catalogue=" in html
+    assert "Produce the complete final item" in html
+    assert "Produce only selected fields" in html
+    assert "output_fields_widget.js" in str(widget.media)
+
+
+@pytest.mark.django_db
+def test_automation_content_only_exposes_the_output_widget(rf, admin_user):
+    from django.contrib import admin
+
+    from djangocms_automation.models import Automation
+
+    request = rf.get("/")
+    request.user = admin_user
+    model_admin = admin.site._registry[Automation]
+    form_class = model_admin.get_form(request)
+
+    output = form_class.base_fields["content__output_fields"]
+    assert "content__data_fields" not in form_class.base_fields
+    assert isinstance(output.widget, OutputFieldsWidget)
+    assert output.label == "Produces"
+    assert "another automation or integration" in output.help_text
+    assert "does not affect what actions" in output.help_text
+
+    with pytest.raises(ValidationError, match="must be a JSON list"):
+        output.clean({"not": "a list"})
+
+
+def test_automation_admin_groups_definition_before_execution():
+    from django.contrib import admin
+
+    from djangocms_automation.models import Automation
+
+    fieldsets = admin.site._registry[Automation].fieldsets
+    assert fieldsets[0][1]["fields"] == ("name", "content__description", "content__output_fields")
+    assert fieldsets[1][0] == "Execution"
+    assert fieldsets[1][1]["fields"] == ("is_active",)
+
+
+@pytest.mark.django_db
+def test_automation_change_page_only_carries_the_output_selector(admin_client, admin_user):
+    from django.urls import reverse
+
+    from djangocms_automation.models import Automation, AutomationContent
+
+    automation = Automation.objects.create(name="Data editors", is_active=True)
+    content = AutomationContent.objects.with_user(admin_user).create(
+        automation=automation,
+        data_fields={"receipt": {"label": "Delivery receipt"}},
+        output_fields=["receipt"],
+    )
+
+    url = reverse("admin:djangocms_automation_automation_change", args=[automation.pk])
+    html = admin_client.get(f"{url}?cms_content={content.pk}").content.decode()
+
+    assert "catalogue_widget.js" not in html and "output_fields_widget.js" in html
+    assert "output_fields_widget.css" in html
+    assert 'class="catalogue-widget"' not in html
+    assert 'class="output-fields-widget"' in html
+    assert "Delivery receipt" in html
+    assert "another automation or integration" in html
+
+
+@pytest.mark.django_db
+def test_saving_produces_does_not_replace_the_hidden_catalogue(rf, admin_user):
+    from django.contrib import admin
+
+    from djangocms_automation.models import Automation, AutomationContent
+
+    automation = Automation.objects.create(name="Preserve catalogue", is_active=True)
+    content = AutomationContent.objects.with_user(admin_user).create(
+        automation=automation,
+        description="Description",
+        data_fields={"receipt": {"label": "Delivery receipt"}},
+    )
+    request = rf.post("/")
+    request.user = admin_user
+    model_admin = admin.site._registry[Automation]
+    form_class = model_admin.get_form(request, automation)
+    form = form_class(
+        data={
+            "name": automation.name,
+            "is_active": "on",
+            "content__description": content.description,
+            "content__output_fields": '["receipt"]',
+        },
+        instance=automation,
+    )
+
+    assert form.is_valid(), form.errors
+    model_admin.save_model(request, automation, form, change=True)
+    content.refresh_from_db()
+    assert content.data_fields == {"receipt": {"label": "Delivery receipt"}}
+    assert content.output_fields == ["receipt"]
 
 
 def test_both_schema_fields_use_the_same_json_widget(settings):

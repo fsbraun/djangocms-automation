@@ -356,9 +356,15 @@ Without a default, missing paths in configured values fail.
 
 ``AutomationContent.data_fields`` maps stable keys to labels and optional JSON
 schemas, for example ``{"count": {"label": "Count", "schema": {"type": "integer"}}}``.
-Configured destination schemas are frozen with the run and validated on writes.
-``AutomationContent.output_fields`` selects public output fields; an empty list
-returns the complete final item. ``loop`` is reserved for execution scope.
+This catalogue is derived from trigger schemas and action output mappings and
+is not edited separately in the Automation form. Configured destination schemas
+are frozen with the run and validated on writes.
+
+``AutomationContent.output_fields`` is edited as **Produces**, using fields from
+that catalogue. An empty list means **Produce the complete final item**. Choose
+a smaller public result only when another automation or integration consumes
+it; the selection does not change the data available to actions within the
+automation. ``loop`` is reserved for execution scope.
 
 Custom executor code must remain compatible with its recorded
 ``execution_version`` (default 1). Increment that version for incompatible

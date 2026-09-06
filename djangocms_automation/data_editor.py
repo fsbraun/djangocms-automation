@@ -300,3 +300,13 @@ def validate_outputs(value):
         targets.add(key)
         if binding.get("mode", "replace") not in ("replace", "append"):
             raise forms.ValidationError("Choose Replace value or Append to list.")
+
+
+def validate_output_fields(value):
+    """The public boundary is an ordered selection of stable root fields."""
+    if not isinstance(value, list) or any(not isinstance(name, str) for name in value):
+        raise forms.ValidationError("Produced fields must be a JSON list of field names.")
+    if len(set(value)) != len(value):
+        raise forms.ValidationError("Each produced field may be selected only once.")
+    if any(not name.isidentifier() or name == "loop" for name in value):
+        raise forms.ValidationError("Use stable field keys containing letters, numbers, and underscores.")

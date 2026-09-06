@@ -196,6 +196,51 @@ class SchemaWidget(forms.Textarea):
         return mark_safe(textarea + container)
 
 
+class OutputFieldsWidget(forms.Textarea):
+    """Select the public result fields from the adjacent data catalogue."""
+
+    class Media:
+        js = ("djangocms_automation/js/output_fields_widget.js",)
+        css = {"all": ("djangocms_automation/css/output_fields_widget.css",)}
+
+    def __init__(self, catalogue=None, attrs=None):
+        self.catalogue = catalogue or {}
+        defaults = {"rows": 4, "class": "output-fields-widget-source"}
+        if attrs:
+            supplied = dict(attrs)
+            if supplied.get("class"):
+                defaults["class"] = f"{defaults['class']} {supplied.pop('class')}"
+            defaults.update(supplied)
+        super().__init__(defaults)
+
+    def format_value(self, value):
+        if value is None or (isinstance(value, str) and value.strip() in ("", "null")):
+            return "[]"
+        if isinstance(value, str):
+            return value
+        return json.dumps(value, indent=2, ensure_ascii=False)
+
+    def render(self, name, value, attrs=None, renderer=None):
+        textarea_attrs = self.build_attrs(self.attrs, attrs)
+        textarea_attrs["name"] = name
+        textarea = f"<textarea{forms.utils.flatatt(textarea_attrs)}>{escape(self.format_value(value))}</textarea>"
+        source_id = textarea_attrs.get("id", name)
+        container_attrs = {
+            "id": f"{source_id}_selector",
+            "class": "output-fields-widget",
+            "data-catalogue": json.dumps(self.catalogue, ensure_ascii=False),
+            "data-complete-label": str(_("Produce the complete final item")),
+            "data-selected-label": str(_("Produce only selected fields")),
+            "data-empty-label": str(_("Add fields to the data catalogue before selecting them here.")),
+            "data-missing-label": str(_("not in the catalogue")),
+            "data-selection-required": str(_("Select at least one field, or produce the complete final item.")),
+            "data-invalid-label": str(
+                _("This value is not a list of unique field names. Correct it as JSON before using the selector.")
+            ),
+        }
+        return mark_safe(textarea + f"<div{forms.utils.flatatt(container_attrs)}></div>")
+
+
 class ConditionBuilderWidget(forms.Widget):
     """Widget for building JSON-based conditions with field/operator/value triplets.
 

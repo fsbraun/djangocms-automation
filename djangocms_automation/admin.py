@@ -34,11 +34,37 @@ from .triggers import trigger_registry
 class AutomationAdmin(GrouperModelAdmin):
     content_model = AutomationContent
     grouper_field_name = "automation"
+    fieldsets = (
+        (None, {"fields": ("name", "content__description", "content__output_fields")}),
+        (_("Execution"), {"fields": ("is_active",)}),
+    )
     # Whether an automation runs at all is the one thing about it worth seeing
     # without opening it — an inactive one looks exactly like an active one in
     # a list of names, and "why did nothing happen" is the question it answers.
     list_display = ("__str__", "is_active")
     list_filter = ("is_active",)
+
+    def get_form(self, request, obj=None, **kwargs):
+        """Give the versioned content fields editors matching their meaning."""
+        from .data_editor import validate_output_fields
+        from .widgets import OutputFieldsWidget
+
+        form_class = super().get_form(request, obj, **kwargs)
+        # The catalogue is derived from trigger schemas and action outputs. It
+        # is not another source of truth for editors to maintain here.
+        form_class.base_fields.pop("content__data_fields", None)
+        output = form_class.base_fields.get("content__output_fields")
+        if output:
+            content = self.get_content_obj(obj)
+            output.label = _("Produces")
+            output.help_text = _(
+                "Choose fields only when another automation or integration consumes this automation's result. "
+                "Leave this at the default to return the complete final item. This does not affect what actions "
+                "inside the automation can use."
+            )
+            output.widget = OutputFieldsWidget(getattr(content, "data_fields", {}) or {})
+            output.validators.append(validate_output_fields)
+        return form_class
 
     def save_related(self, request, form, formsets, change):
         """After saving automation content, ensure it has a default trigger."""
