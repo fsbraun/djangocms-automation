@@ -86,9 +86,9 @@ ini_options.markers = [
 ini_options.DJANGO_SETTINGS_MODULE = "tests.settings"
 
 [tool.coverage]
-run.omit = [
-  "djangocms_automation/migrations/*",
-]
 run.source = [
   "djangocms_automation",
+]
+run.omit = [
+  "djangocms_automation/migrations/*",
 ]
