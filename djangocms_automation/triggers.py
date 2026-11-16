@@ -578,8 +578,7 @@ if apps.is_installed("djangocms_form_builder"):
                 contents__isnull=False,
                 contents__triggers__type="form_submission",
             ).distinct()
-            if args:
-                self.fields["trigger"].queryset = qs
+            self.fields["trigger"].queryset = qs
 
         def execute(self, form, request):
             from .models import AutomationTrigger

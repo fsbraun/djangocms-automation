@@ -114,6 +114,17 @@ class TestFormBuilderAutomationAction:
         assert "trigger" in FormAutomationAction.base_fields
         assert isinstance(FormAutomationAction.base_fields["trigger"], forms.ModelChoiceField)
 
+    @pytest.mark.django_db
+    def test_unbound_form_has_trigger_queryset(self):
+        """The plugin's unbound admin form must be renderable on GET."""
+        from djangocms_form_builder.cms_plugins.ajax_plugins import FormPlugin
+
+        plugin = FormPlugin(model=FormPlugin.model, admin_site=None)
+        form = plugin.get_form(request=None)()
+
+        assert form.fields["trigger"].queryset is not None
+        str(form["trigger"])
+
     def test_automation_action_has_entangled_config(self):
         """AutomationAction should have proper entangled fields configuration."""
         from djangocms_automation.triggers import AutomationAction as FormAutomationAction
