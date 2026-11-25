@@ -2093,3 +2093,109 @@ def test_redaction_reaches_a_run_whose_payload_was_already_taken(run_setup, sett
 
     # And nothing is left to do on the next run.
     assert AutomationInstance.redact_payloads(days=30) == 0
+
+
+# --------------------------------------------------------------------------
+# Scheduler loop mode
+# --------------------------------------------------------------------------
+
+RUNAUTOMATIONS = "djangocms_automation.management.commands.runautomations"
+
+
+@pytest.fixture
+def loop_ticks(monkeypatch):
+    """Replace the tick of ``runautomations`` and record each call.
+
+    ``close_old_connections`` is replaced as well: inside a test transaction it
+    would close the connection the test itself is using.
+    """
+    from djangocms_automation.management.commands import runautomations
+
+    calls = {"ticks": 0, "closed": 0, "on_tick": lambda command, n: None}
+
+    def run_once(self, **options):
+        calls["ticks"] += 1
+        calls["on_tick"](self, calls["ticks"])
+
+    def close():
+        calls["closed"] += 1
+
+    monkeypatch.setattr(runautomations.Command, "_run_once", run_once)
+    monkeypatch.setattr(runautomations, "close_old_connections", close)
+    return calls
+
+
+def test_loop_repeats_ticks_until_stopped(loop_ticks, capsys):
+    def on_tick(command, n):
+        if n == 3:
+            command._stop = True
+
+    loop_ticks["on_tick"] = on_tick
+    call_command("runautomations", "--loop", "0.01")
+
+    assert loop_ticks["ticks"] == 3
+    assert loop_ticks["closed"] == 3
+    assert "Scheduler loop stopped." in capsys.readouterr().out
+
+
+def test_loop_survives_a_failing_tick(loop_ticks, capsys, caplog):
+    def on_tick(command, n):
+        if n == 1:
+            raise RuntimeError("database went away")
+        command._stop = True
+
+    loop_ticks["on_tick"] = on_tick
+    call_command("runautomations", "--loop", "0.01")
+
+    assert loop_ticks["ticks"] == 2
+    assert "database went away" in capsys.readouterr().err
+    assert "Automation tick failed" in caplog.text
+
+
+def test_loop_stops_on_sigterm_and_restores_handlers(loop_ticks):
+    import os
+    import signal
+
+    before = signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGINT)
+    loop_ticks["on_tick"] = lambda command, n: os.kill(os.getpid(), signal.SIGTERM)
+
+    # A long interval: only the signal can end this in reasonable time.
+    call_command("runautomations", "--loop", "60")
+
+    assert loop_ticks["ticks"] == 1
+    assert (signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGINT)) == before
+
+
+def test_loop_keeps_its_interval_from_the_start_of_a_tick(loop_ticks):
+    import itertools
+    import time
+
+    starts = []
+
+    def on_tick(command, n):
+        starts.append(time.monotonic())
+        time.sleep(0.1)  # a slow tick must not push the next one back
+        if n == 3:
+            command._stop = True
+
+    loop_ticks["on_tick"] = on_tick
+    call_command("runautomations", "--loop", "0.3")
+
+    # 0.3 when measured from the start of a tick; 0.4 if the wait were added
+    # on top of the time the tick took.
+    gaps = [later - earlier for earlier, later in itertools.pairwise(starts)]
+    assert all(0.29 <= gap < 0.38 for gap in gaps), gaps
+
+
+def test_loop_rejects_a_non_positive_interval(loop_ticks):
+    from django.core.management.base import CommandError
+
+    with pytest.raises(CommandError):
+        call_command("runautomations", "--loop", "0")
+    assert loop_ticks["ticks"] == 0
+
+
+def test_without_loop_a_single_tick_runs(loop_ticks):
+    call_command("runautomations")
+    assert loop_ticks["ticks"] == 1
+    assert loop_ticks["closed"] == 0

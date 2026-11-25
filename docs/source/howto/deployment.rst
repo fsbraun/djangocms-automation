@@ -77,6 +77,20 @@ Running the processes
     # Scheduler — every minute
     * * * * * cd /path/to/project && python manage.py runautomations
 
+Some hosts cannot schedule a job every minute (a platform cron that runs at
+most every ten minutes, for example). There, run the scheduler as a long-lived
+process:
+
+.. code-block:: bash
+
+    python manage.py runautomations --loop 60
+
+It starts a tick every 60 seconds, measured from the start of the previous one.
+A tick that fails is logged and the loop carries on. On ``SIGTERM`` or
+``SIGINT`` it finishes the tick in progress and exits, so a platform restart is
+clean. Because every tick takes the scheduler lock, running a second loop
+process, or a loop alongside cron, does not fire anything twice.
+
 The worker accepts ``--queue`` (repeatable), ``--sleep``, ``--lease-seconds``,
 ``--max-tasks`` (exit after N tasks, to recycle long-lived processes) and
 ``--once`` (drain what is ready and exit, for CI).
