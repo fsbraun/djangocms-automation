@@ -1322,13 +1322,19 @@ class scheduler_lock:
         self.name = name
         self.ttl_seconds = ttl_seconds
         self.token = None
+        #: Whether another scheduler took the lock while this block held it.
+        self.lost = False
         self._renewed_at = 0.0
         self._context_token = None
 
     def __enter__(self):
+        # Read the clock before the database call, here and in keep_alive: the
+        # lease runs from when the statement was built, so time spent waiting
+        # on the database has already been used up and must count as such.
+        started = time.monotonic()
         self.token = SchedulerLock.acquire(self.name, self.ttl_seconds)
         if self.token is not None:
-            self._renewed_at = time.monotonic()
+            self._renewed_at = started
             self._context_token = _active_scheduler_lock.set(self)
         return self
 
@@ -1338,7 +1344,12 @@ class scheduler_lock:
     def __exit__(self, exc_type, exc, tb):
         if self.token is not None:
             _active_scheduler_lock.reset(self._context_token)
-            SchedulerLock.release(self.name, self.token)
+            released = SchedulerLock.release(self.name, self.token)
+            if not released and not self.lost:
+                # The last unit of work outlasted the lease and nothing after
+                # it called keep_alive, so this is the only place to notice.
+                self.lost = True
+                logger.error("automation.scheduler.lock_lost", extra={"lock_name": self.name})
         return False
 
     def keep_alive(self) -> None:
@@ -1348,10 +1359,12 @@ class scheduler_lock:
         """
         if self.token is None or time.monotonic() - self._renewed_at < self.ttl_seconds / 3:
             return
+        started = time.monotonic()
         if not SchedulerLock.renew(self.name, self.token, self.ttl_seconds):
+            self.lost = True
             logger.error("automation.scheduler.lock_lost", extra={"lock_name": self.name})
             raise SchedulerLockLost(f"Scheduler lock {self.name!r} was taken over by another scheduler.")
-        self._renewed_at = time.monotonic()
+        self._renewed_at = started
 
 
 def keep_scheduler_lock() -> None:

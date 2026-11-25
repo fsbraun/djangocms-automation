@@ -187,6 +187,13 @@ class Command(BaseCommand):
                     "Lost the scheduler lock to another scheduler during this tick; stopped it early. "
                     "A single step ran longer than --lock-seconds."
                 )
+                return
+        if lock.lost:
+            # Only seen on release: the tick's last step outlasted the lease.
+            self.stderr.write(
+                "Lost the scheduler lock to another scheduler during the last step of this tick. "
+                "That step ran longer than --lock-seconds."
+            )
 
     def _tick(self, **options):
         recovered = reconciled = 0

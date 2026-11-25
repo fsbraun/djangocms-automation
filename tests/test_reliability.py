@@ -575,10 +575,12 @@ def _take_over(name):
 @pytest.mark.django_db
 def test_lock_renewal_extends_the_lease_for_its_holder_only():
     token = SchedulerLock.acquire("test-lock", ttl_seconds=10)
-    before = SchedulerLock.objects.get(name="test-lock").locked_until
 
+    # The full lease must be granted, counted from no earlier than the call.
+    asked_at = now()
     assert SchedulerLock.renew("test-lock", token, ttl_seconds=600)
-    assert SchedulerLock.objects.get(name="test-lock").locked_until > before + datetime.timedelta(seconds=500)
+    renewed_until = SchedulerLock.objects.get(name="test-lock").locked_until
+    assert asked_at + datetime.timedelta(seconds=600) <= renewed_until <= now() + datetime.timedelta(seconds=600)
 
     assert not SchedulerLock.renew("test-lock", uuid.uuid4(), ttl_seconds=6000)
     assert SchedulerLock.objects.get(name="test-lock").holder == token
@@ -620,6 +622,61 @@ def test_keeping_a_lock_another_scheduler_took_raises_and_leaves_it_theirs():
 
     # Leaving the block must not release a lock that is no longer ours.
     assert SchedulerLock.objects.get(name="test-lock").holder == other
+
+
+@pytest.mark.django_db
+def test_time_spent_waiting_on_the_database_counts_against_the_lease(monkeypatch):
+    """The lease runs from when it was asked for, not from when the answer came."""
+    clock = [1000.0]
+    monkeypatch.setattr(engine.time, "monotonic", lambda: clock[0])
+
+    def slow(method):
+        def call(*args, **kwargs):
+            result = method(*args, **kwargs)
+            clock[0] += 50
+            return result
+
+        return call
+
+    monkeypatch.setattr(SchedulerLock, "acquire", slow(SchedulerLock.acquire))
+    monkeypatch.setattr(SchedulerLock, "renew", slow(SchedulerLock.renew))
+
+    with engine.scheduler_lock("test-lock", ttl_seconds=300) as lock:
+        assert lock._renewed_at == 1000.0
+        clock[0] = 1100.0
+        engine.keep_scheduler_lock()
+        assert lock._renewed_at == 1100.0
+
+
+@pytest.mark.django_db
+def test_a_lock_lost_during_the_last_step_is_noticed_on_release(caplog):
+    with caplog.at_level("ERROR"), engine.scheduler_lock("test-lock") as lock:
+        other = _take_over("test-lock")
+
+    assert lock.lost
+    assert [record.message for record in caplog.records] == ["automation.scheduler.lock_lost"]
+    assert SchedulerLock.objects.get(name="test-lock").holder == other
+
+
+@pytest.mark.django_db
+def test_a_lock_lost_and_already_reported_is_not_reported_again_on_release(caplog):
+    with caplog.at_level("ERROR"), pytest.raises(engine.SchedulerLockLost), engine.scheduler_lock("test-lock") as lock:
+        _take_over("test-lock")
+        _age_lease(lock)
+        engine.keep_scheduler_lock()
+
+    assert lock.lost
+    assert len(caplog.records) == 1
+
+
+@pytest.mark.django_db
+def test_management_command_reports_a_lock_lost_during_the_last_step(monkeypatch, capsys):
+    from djangocms_automation.management.commands import runautomations
+
+    monkeypatch.setattr(runautomations.Command, "_tick", lambda self, **options: _take_over("runautomations"))
+    call_command("runautomations")
+
+    assert "during the last step" in capsys.readouterr().err
 
 
 @pytest.mark.django_db
