@@ -20,7 +20,7 @@ up as one-off Python that only a developer can change, or in a separate
 automation service with its own interface, logins and copy of your data. Here
 it stays in your Django project, and runs durably there.
 
-![An automation edited in the django CMS frontend editor](automations.jpg)
+![An automation edited in the django CMS frontend editor](https://raw.githubusercontent.com/fsbraun/djangocms-automation/main/automations.jpg)
 
 - **The page editor is the workflow editor.** Triggers, conditions and actions
   are CMS plugins, so the structure board, drag & drop and plugin forms work
@@ -42,8 +42,8 @@ it stays in your Django project, and runs durably there.
   Every run keeps its frozen definition and execution trace.
 
 **Documentation:** <https://djangocms-automation.readthedocs.io/> ·
-[Getting started](docs/source/tutorials/getting-started.rst) ·
-[Deployment](docs/source/howto/deployment.rst)
+[Getting started](https://djangocms-automation.readthedocs.io/en/latest/tutorials/getting-started.html) ·
+[Deployment](https://djangocms-automation.readthedocs.io/en/latest/howto/deployment.html)
 
 **Status:** pre-alpha (0.1.0) and not yet on PyPI. It needs Python 3.12+,
 Django 6.0+ and django CMS 5.1+. Calling an external HTTP API from an
@@ -111,7 +111,7 @@ are dead-lettered and can be replayed from the admin without editing the
 database. Running executions can be canceled. The scheduler may run on several
 hosts — it takes a database lock, so exactly one tick happens at a time.
 
-See the [deployment guide](docs/source/howto/deployment.rst) for the full
+See the [deployment guide](https://djangocms-automation.readthedocs.io/en/latest/howto/deployment.html) for the full
 contract, settings, retention, and health signals.
 
 ### Trying it out
@@ -155,7 +155,7 @@ Two notes so this does not read as more than it is:
   — anything can start an automation over HTTP — but there is no HTTP action, so
   an automation cannot yet call a service back. Until there is, that half is a
   Python action you write (see *Writing your own action* in the
-  [actions guide](docs/source/howto/actions.rst)).
+  [actions guide](https://djangocms-automation.readthedocs.io/en/latest/howto/actions.html)).
 
 ### Running one by hand
 
@@ -248,8 +248,8 @@ and save named results into explicit destinations. Batches and batch intake are
 deferred. Completed runs retain their frozen definition and execution trace for
 debugging, subject to retention.
 
-See [Reading an automation](docs/source/explanation/reading-an-automation.rst)
-and the [glossary](docs/source/glossary.rst).
+See [Reading an automation](https://github.com/fsbraun/djangocms-automation/blob/main/docs/source/explanation/reading-an-automation.rst)
+and the [glossary](https://github.com/fsbraun/djangocms-automation/blob/main/docs/source/glossary.rst).
 
 Documentation
 -------------
