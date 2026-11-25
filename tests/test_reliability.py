@@ -2106,8 +2106,8 @@ RUNAUTOMATIONS = "djangocms_automation.management.commands.runautomations"
 def loop_ticks(monkeypatch):
     """Replace the tick of ``runautomations`` and record each call.
 
-    ``close_old_connections`` is replaced as well: inside a test transaction it
-    would close the connection the test itself is using.
+    The connection handler is replaced as well: closing every connection
+    inside a test transaction would take away the one the test itself is using.
     """
     from djangocms_automation.management.commands import runautomations
 
@@ -2117,11 +2117,13 @@ def loop_ticks(monkeypatch):
         calls["ticks"] += 1
         calls["on_tick"](self, calls["ticks"])
 
-    def close():
-        calls["closed"] += 1
+    class Connections:
+        @staticmethod
+        def close_all():
+            calls["closed"] += 1
 
     monkeypatch.setattr(runautomations.Command, "_run_once", run_once)
-    monkeypatch.setattr(runautomations, "close_old_connections", close)
+    monkeypatch.setattr(runautomations, "connections", Connections)
     return calls
 
 
@@ -2148,6 +2150,8 @@ def test_loop_survives_a_failing_tick(loop_ticks, capsys, caplog):
     call_command("runautomations", "--loop", "0.01")
 
     assert loop_ticks["ticks"] == 2
+    # The failed tick's connection is dropped too, so the next one starts clean.
+    assert loop_ticks["closed"] == 2
     assert "database went away" in capsys.readouterr().err
     assert "Automation tick failed" in caplog.text
 
@@ -2187,11 +2191,12 @@ def test_loop_keeps_its_interval_from_the_start_of_a_tick(loop_ticks):
     assert all(0.29 <= gap < 0.38 for gap in gaps), gaps
 
 
-def test_loop_rejects_a_non_positive_interval(loop_ticks):
+@pytest.mark.parametrize("interval", ["0", "-5", "nan", "inf", "-inf"])
+def test_loop_rejects_an_unusable_interval(loop_ticks, interval):
     from django.core.management.base import CommandError
 
     with pytest.raises(CommandError):
-        call_command("runautomations", "--loop", "0")
+        call_command("runautomations", f"--loop={interval}")
     assert loop_ticks["ticks"] == 0
 
 

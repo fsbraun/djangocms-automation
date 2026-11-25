@@ -25,11 +25,12 @@ process harmless.
 """
 
 import logging
+import math
 import signal
 import time
 
 from django.core.management.base import BaseCommand, CommandError
-from django.db import close_old_connections
+from django.db import connections
 
 from djangocms_automation import engine
 from djangocms_automation.instances import AutomationInstance
@@ -108,8 +109,10 @@ class Command(BaseCommand):
         if interval is None:
             self._run_once(**options)
             return
-        if interval <= 0:
-            raise CommandError("--loop needs a positive number of seconds.")
+        # "nan" and "inf" both parse as floats: the first would crash the wait
+        # between ticks, the second would never reach a second tick.
+        if not math.isfinite(interval) or interval <= 0:
+            raise CommandError("--loop needs a positive, finite number of seconds.")
         self._loop(interval, **options)
 
     def _loop(self, interval, **options):
@@ -121,9 +124,6 @@ class Command(BaseCommand):
                 # Measured from the start of the tick, so a slow tick shortens
                 # the wait that follows instead of pushing every later one back.
                 next_tick = time.monotonic() + interval
-                # A long-lived process outlives its database connections; drop
-                # the ones the server closed or that passed CONN_MAX_AGE.
-                close_old_connections()
                 try:
                     self._run_once(**options)
                 except Exception as exc:
@@ -131,6 +131,13 @@ class Command(BaseCommand):
                     # retries would silently stop until someone restarted it.
                     logger.exception("Automation tick failed")
                     self.stderr.write(f"Automation tick failed: {exc!r}; continuing.")
+                finally:
+                    # Hold no connection across the wait. The server may drop an
+                    # idle one, and Django only finds out when the next tick's
+                    # first query fails, which would cost that whole tick. A
+                    # reconnect per tick is cheap at this cadence, and it is
+                    # what a cron-started process does anyway.
+                    connections.close_all()
                 while not self._stop:
                     remaining = next_tick - time.monotonic()
                     if remaining <= 0:
