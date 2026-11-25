@@ -61,7 +61,7 @@ class AgentState:
     def load(cls, action) -> AgentState:
         """Read the state from an action, tolerating a node that has none yet."""
         raw = action.scratch if isinstance(action.scratch, dict) else {}
-        known = {f for f in cls.__dataclass_fields__}
+        known = {*cls.__dataclass_fields__}
         return cls(**{key: value for key, value in raw.items() if key in known})
 
     def save(self, action) -> None:

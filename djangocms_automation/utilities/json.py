@@ -74,7 +74,7 @@ def model_to_row(instance: models.Model, fields: list[str] | None = None) -> dic
     if fields:
         model_fields = [meta.get_field(name) for name in fields]
     else:
-        model_fields = [f for f in meta.concrete_fields]
+        model_fields = [*meta.concrete_fields]
 
     row: dict[str, Any] = {"pk": instance.pk}
     for field in model_fields:
