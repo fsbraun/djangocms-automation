@@ -44,6 +44,12 @@ jobs:
       run: |
         python -c "import sys, django, cms; print(f'python {sys.version.split()[0]} | django {django.get_version()} | cms {cms.__version__}')"
 
+    - name: Check for missing migrations
+      run: |
+        # A model change without its migration makes "makemigrations --check"
+        # fail in every project that installs the package.
+        python -m django makemigrations --check --dry-run --settings tests.settings
+
     - name: Run tests with coverage
       run: |
         pytest --cov=djangocms_automation --cov-report=xml --cov-report=term-missing
