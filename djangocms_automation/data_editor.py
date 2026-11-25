@@ -283,6 +283,20 @@ class OutputWidget(forms.Textarea):
         )
 
 
+class OutputsField(forms.JSONField):
+    """A JSON field that survives being bound to an already-parsed value.
+
+    django CMS adds a plugin whose ``show_add_form`` is off by posting each
+    field's raw ``initial`` — here a dict, not its JSON text. Cleaning accepts
+    that, but re-rendering an invalid form would try to parse the dict as JSON.
+    """
+
+    def bound_data(self, data, initial):
+        if isinstance(data, (dict, list)):
+            return data
+        return super().bound_data(data, initial)
+
+
 def validate_outputs(value):
     if not isinstance(value, dict):
         raise forms.ValidationError("Output mappings must be a JSON object.")

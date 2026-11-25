@@ -234,6 +234,11 @@ class ActionPlugin(AutomationPlugin):
 
     render_template = "djangocms_automation/plugins/action.html"
 
+    # Every action has a required intent, so it cannot be added without its
+    # form. Left off, django CMS posts the form's raw initial values instead,
+    # which can never validate.
+    show_add_form = True
+
     allow_children = True
     child_classes = modifier_plugins
     data_form = None
@@ -274,7 +279,7 @@ class ActionPlugin(AutomationPlugin):
     def get_form(self, request, obj=None, **kwargs):
         """Use data_form if defined for additional data fields."""
         data_form_fields = self.get_data_form_fields(request, obj)
-        from .data_editor import DataInputWidget, OutputWidget, available_fields, validate_outputs
+        from .data_editor import DataInputWidget, OutputsField, OutputWidget, available_fields, validate_outputs
 
         choices = available_fields(obj)
         for name, field in data_form_fields.items():
@@ -288,7 +293,7 @@ class ActionPlugin(AutomationPlugin):
             if self.convert_data_form or template:
                 field.widget = DataInputWidget(choices.items(), template=template)
         outputs = (obj.outputs or obj.default_outputs) if obj else self.model.default_outputs
-        data_form_fields["outputs"] = django_forms.JSONField(
+        data_form_fields["outputs"] = OutputsField(
             label=_("Save result in"),
             required=False,
             initial=outputs,

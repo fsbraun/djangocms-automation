@@ -4,7 +4,10 @@ requires = [ "setuptools", "setuptools-scm" ]
 
 [project]
 name = "djangocms-automation"
-description = "Automation tools for django CMS projects"
+description = """\
+  Workflow automation for django CMS: build workflows from plugins in the frontend editor, run them durably with \
+  retries and replay\
+  """
 readme = "README.md"
 license = "BSD-3-Clause"
 authors = [
@@ -32,7 +35,7 @@ optional-dependencies.llm = [
   # Capped deliberately: litellm ships around 35 releases a month and has made
   # breaking changes inside 1.x. The upper bound is a decision to review the
   # wrapper's contract test before moving, not a claim that 1.110 breaks.
-  "litellm>=1.98,<1.110",
+  "litellm>=1.98,<1.111",
 ]
 # Rendering a model's Markdown in the admin. Both halves are required: the
 # renderer turns the text into HTML, and the sanitiser is what makes showing it
@@ -47,6 +50,7 @@ optional-dependencies.test = [
   "pytest",
   "pytest-django",
 ]
+urls.Documentation = "https://djangocms-automation.readthedocs.io/"
 urls.Homepage = "https://github.com/fsbraun/djangocms-automation"
 urls.Issues = "https://github.com/fsbraun/djangocms-automation/issues"
 
