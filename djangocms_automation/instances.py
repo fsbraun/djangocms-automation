@@ -772,6 +772,18 @@ class SchedulerLock(models.Model):
         return token if taken else None
 
     @classmethod
+    def renew(cls, name: str, token, ttl_seconds: int = 300) -> bool:
+        """Extend the named lock if ``token`` still holds it.
+
+        :returns: ``False`` when the lock is no longer this holder's: its lease
+            ran out and another scheduler took it. A lease that ran out but
+            which nobody else took is still renewed, because the holder never
+            changed and so no one else has been working under it.
+        """
+        expiry = now() + datetime.timedelta(seconds=ttl_seconds)
+        return bool(cls.objects.filter(name=name, holder=token).update(locked_until=expiry))
+
+    @classmethod
     def release(cls, name: str, token) -> bool:
         """Release the named lock if ``token`` still holds it."""
         return bool(cls.objects.filter(name=name, holder=token).update(holder=None, locked_until=None))

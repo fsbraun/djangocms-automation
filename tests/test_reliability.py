@@ -560,6 +560,192 @@ def test_management_command_respects_the_lock(run_setup, settings, capsys):
     assert "Another scheduler holds the lock" in capsys.readouterr().out
 
 
+def _age_lease(lock, seconds=None):
+    """Pretend ``seconds`` have passed since the lock was last renewed."""
+    lock._renewed_at -= lock.ttl_seconds if seconds is None else seconds
+
+
+def _take_over(name):
+    """Let another scheduler take the named lock, as after an expired lease."""
+    other = uuid.uuid4()
+    SchedulerLock.objects.filter(name=name).update(holder=other, locked_until=now() + datetime.timedelta(seconds=300))
+    return other
+
+
+@pytest.mark.django_db
+def test_lock_renewal_extends_the_lease_for_its_holder_only():
+    token = SchedulerLock.acquire("test-lock", ttl_seconds=10)
+
+    # The full lease must be granted, counted from no earlier than the call.
+    asked_at = now()
+    assert SchedulerLock.renew("test-lock", token, ttl_seconds=600)
+    renewed_until = SchedulerLock.objects.get(name="test-lock").locked_until
+    assert asked_at + datetime.timedelta(seconds=600) <= renewed_until <= now() + datetime.timedelta(seconds=600)
+
+    assert not SchedulerLock.renew("test-lock", uuid.uuid4(), ttl_seconds=6000)
+    assert SchedulerLock.objects.get(name="test-lock").holder == token
+
+
+@pytest.mark.django_db
+def test_an_expired_lease_nobody_took_can_still_be_renewed():
+    token = SchedulerLock.acquire("test-lock", ttl_seconds=300)
+    SchedulerLock.objects.filter(name="test-lock").update(locked_until=now() - datetime.timedelta(seconds=1))
+
+    assert SchedulerLock.renew("test-lock", token)
+    assert SchedulerLock.acquire("test-lock") is None
+
+
+@pytest.mark.django_db
+def test_keeping_the_lock_writes_only_once_a_third_of_the_lease_is_used():
+    with engine.scheduler_lock("test-lock", ttl_seconds=300) as lock:
+        granted = SchedulerLock.objects.get(name="test-lock").locked_until
+
+        engine.keep_scheduler_lock()
+        assert SchedulerLock.objects.get(name="test-lock").locked_until == granted
+
+        _age_lease(lock, seconds=101)
+        engine.keep_scheduler_lock()
+        assert SchedulerLock.objects.get(name="test-lock").locked_until > granted
+
+        # Renewing starts the clock again.
+        renewed = SchedulerLock.objects.get(name="test-lock").locked_until
+        engine.keep_scheduler_lock()
+        assert SchedulerLock.objects.get(name="test-lock").locked_until == renewed
+
+
+@pytest.mark.django_db
+def test_keeping_a_lock_another_scheduler_took_raises_and_leaves_it_theirs():
+    with pytest.raises(engine.SchedulerLockLost), engine.scheduler_lock("test-lock") as lock:
+        other = _take_over("test-lock")
+        _age_lease(lock)
+        engine.keep_scheduler_lock()
+
+    # Leaving the block must not release a lock that is no longer ours.
+    assert SchedulerLock.objects.get(name="test-lock").holder == other
+
+
+@pytest.mark.django_db
+def test_time_spent_waiting_on_the_database_counts_against_the_lease(monkeypatch):
+    """The lease runs from when it was asked for, not from when the answer came."""
+    clock = [1000.0]
+    monkeypatch.setattr(engine.time, "monotonic", lambda: clock[0])
+
+    def slow(method):
+        def call(*args, **kwargs):
+            result = method(*args, **kwargs)
+            clock[0] += 50
+            return result
+
+        return call
+
+    monkeypatch.setattr(SchedulerLock, "acquire", slow(SchedulerLock.acquire))
+    monkeypatch.setattr(SchedulerLock, "renew", slow(SchedulerLock.renew))
+
+    with engine.scheduler_lock("test-lock", ttl_seconds=300) as lock:
+        assert lock._renewed_at == 1000.0
+        clock[0] = 1100.0
+        engine.keep_scheduler_lock()
+        assert lock._renewed_at == 1100.0
+
+
+@pytest.mark.django_db
+def test_a_lock_lost_during_the_last_step_is_noticed_on_release(caplog):
+    with caplog.at_level("ERROR"), engine.scheduler_lock("test-lock") as lock:
+        other = _take_over("test-lock")
+
+    assert lock.lost
+    assert [record.message for record in caplog.records] == ["automation.scheduler.lock_lost"]
+    assert SchedulerLock.objects.get(name="test-lock").holder == other
+
+
+@pytest.mark.django_db
+def test_a_lock_lost_and_already_reported_is_not_reported_again_on_release(caplog):
+    with caplog.at_level("ERROR"), pytest.raises(engine.SchedulerLockLost), engine.scheduler_lock("test-lock") as lock:
+        _take_over("test-lock")
+        _age_lease(lock)
+        engine.keep_scheduler_lock()
+
+    assert lock.lost
+    assert len(caplog.records) == 1
+
+
+@pytest.mark.django_db
+def test_management_command_reports_a_lock_lost_during_the_last_step(monkeypatch, capsys):
+    from djangocms_automation.management.commands import runautomations
+
+    monkeypatch.setattr(runautomations.Command, "_tick", lambda self, **options: _take_over("runautomations"))
+    call_command("runautomations")
+
+    assert "during the last step" in capsys.readouterr().err
+
+
+@pytest.mark.django_db
+def test_keeping_the_lock_is_a_no_op_outside_a_tick():
+    engine.keep_scheduler_lock()  # no lock held at all
+
+    with engine.scheduler_lock("test-lock") as first, engine.scheduler_lock("test-lock") as second:
+        assert first and not second
+        # The lock that was not taken must not displace the one that was.
+        _age_lease(first)
+        engine.keep_scheduler_lock()
+    engine.keep_scheduler_lock()  # and none is left behind afterwards
+    assert SchedulerLock.objects.get(name="test-lock").holder is None
+
+
+@pytest.mark.django_db
+def test_timers_stop_firing_once_the_lock_is_lost(run_setup, settings):
+    """A tick that lost its lock must not fire what the new holder will fire."""
+    trigger, placeholder = run_setup
+    add_plugin(placeholder=placeholder, plugin_type="ActionPlugin", language=settings.LANGUAGE_CODE)
+    trigger.type = "timer"
+    trigger.config = {
+        "scheduled_at": (now() - datetime.timedelta(hours=3)).isoformat(),
+        "recurrence_frequency": "hourly",
+        "recurrence_interval": 1,
+    }
+    trigger.save()
+
+    with pytest.raises(engine.SchedulerLockLost), engine.scheduler_lock("runautomations") as lock:
+        _take_over("runautomations")
+        _age_lease(lock)
+        engine.fire_due_timers(catch_up=4)
+
+    trigger.refresh_from_db()
+    assert "fired_count" not in trigger.config
+
+
+@pytest.mark.django_db
+def test_a_long_tick_keeps_its_lock_while_firing_timers(run_setup, settings):
+    trigger, placeholder = run_setup
+    add_plugin(placeholder=placeholder, plugin_type="ActionPlugin", language=settings.LANGUAGE_CODE)
+    trigger.type = "timer"
+    trigger.config = {
+        "scheduled_at": (now() - datetime.timedelta(hours=3)).isoformat(),
+        "recurrence_frequency": "hourly",
+        "recurrence_interval": 1,
+    }
+    trigger.save()
+
+    with engine.scheduler_lock("runautomations", ttl_seconds=300) as lock:
+        granted = SchedulerLock.objects.get(name="runautomations").locked_until
+        _age_lease(lock, seconds=200)
+        assert engine.fire_due_timers(catch_up=4) == 4
+        assert SchedulerLock.objects.get(name="runautomations").locked_until > granted
+
+
+@pytest.mark.django_db
+def test_management_command_stops_quietly_when_the_lock_is_lost(monkeypatch, capsys):
+    from djangocms_automation.management.commands import runautomations
+
+    def tick(self, **options):
+        raise engine.SchedulerLockLost("taken over")
+
+    monkeypatch.setattr(runautomations.Command, "_tick", tick)
+    call_command("runautomations")
+
+    assert "Lost the scheduler lock" in capsys.readouterr().err
+
+
 # --------------------------------------------------------------------------
 # 0.4 Dead letter and replay
 # --------------------------------------------------------------------------
