@@ -1,0 +1,54 @@
+name: Publish to TestPyPI
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build distributions
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Set up Python
+      uses: actions/setup-python@v7
+      with:
+        python-version: "3.13"
+
+    - name: Build sdist and wheel
+      run: |
+        python -m pip install --upgrade build twine
+        python -m build
+        twine check --strict dist/*
+
+    - uses: actions/upload-artifact@v7
+      with:
+        name: dist
+        path: dist/
+
+  publish:
+    name: Upload to TestPyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/djangocms-automation
+    permissions:
+      id-token: write  # trusted publishing
+    steps:
+    - uses: actions/download-artifact@v8
+      with:
+        name: dist
+        path: dist/
+
+    - uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        repository-url: https://test.pypi.org/legacy/
+        # The version only changes on a release, so most pushes to main carry
+        # one TestPyPI already has. That is not a failure.
+        skip-existing: true
