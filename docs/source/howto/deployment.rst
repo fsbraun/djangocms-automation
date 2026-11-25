@@ -101,6 +101,14 @@ work. The scheduler may also be installed on several hosts — it takes a
 database-backed lock, so exactly one host performs each tick and the others skip
 it. There is no separate coordinator to deploy.
 
+The lock is a lease of ``--lock-seconds`` (300 by default). A tick extends it
+as it works through recovery, timers, revival and retention, so a tick longer
+than the lease still keeps other schedulers out. The one case left is a single
+step, such as one retention statement, that alone outlasts the whole lease:
+another scheduler can then take the lock, and the first one stops its tick as
+soon as it notices and says so on stderr. If you see that message, raise
+``--lock-seconds``.
+
 Health and readiness
 --------------------
 

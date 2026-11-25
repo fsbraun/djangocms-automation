@@ -27,9 +27,11 @@ time; any other exception fails the action and the automation instance.
 
 from __future__ import annotations
 
+import contextvars
 import datetime
 import logging
 import threading
+import time
 import traceback
 import uuid as uuid_module
 
@@ -63,12 +65,14 @@ logger = logging.getLogger("djangocms_automation.engine")
 
 __all__ = [
     "ActionPause",
+    "SchedulerLockLost",
     "build_plugin_map",
     "cancel_instance",
     "claim_action",
     "enqueue_action",
     "fail_action",
     "item_data",
+    "keep_scheduler_lock",
     "maybe_finish_instance",
     "notify_parent",
     "pause_action",
@@ -922,6 +926,7 @@ def revive_pending(timestamp: datetime.datetime | None = None) -> int:
     hold_until = timestamp + datetime.timedelta(seconds=float(getattr(settings, "AUTOMATION_LEASE_SECONDS", 300)))
     count = 0
     for action in list(actions):
+        keep_scheduler_lock()
         # Repeat the whole due predicate in the UPDATE, so the statement is a
         # compare-and-set rather than a blind write. Two schedulers that scanned
         # the same action both match on primary key and state; only one can
@@ -1019,6 +1024,7 @@ def recover_expired_leases(timestamp: datetime.datetime | None = None, limit: in
     # by automation content: a batch of stranded actions usually shares a few.
     plugin_maps: dict[int, dict] = {}
     for candidate in list(candidates):
+        keep_scheduler_lock()
         transitioned, reason = _recover_one(candidate.pk, timestamp, plugin_maps)
         if transitioned is None:
             continue
@@ -1122,6 +1128,7 @@ def reconcile_waiting_joins(limit: int = 500) -> int:
     )
     woken = 0
     for action in list(stuck):
+        keep_scheduler_lock()
         resumed = transition_action(
             action.pk,
             PENDING,
@@ -1202,6 +1209,7 @@ def reconcile_stalled_instances(timestamp: datetime.datetime | None = None, limi
 
     closed = 0
     for instance in list(stalled):
+        keep_scheduler_lock()
         # A run whose actions ended badly is failed, not completed.
         ended_badly = AutomationAction.objects.filter(
             automation_instance=instance, state__in=(FAILED, CANCELED)
@@ -1282,6 +1290,19 @@ def replay_action(action_id: int) -> AutomationAction | None:
     return replacement
 
 
+class SchedulerLockLost(Exception):
+    """The scheduler lock held by this tick now belongs to another scheduler.
+
+    Raised by :func:`keep_scheduler_lock`. The tick must stop: whatever it does
+    next would run alongside the scheduler that took over.
+    """
+
+
+# The lock the current tick runs under, so the scheduler's loops can keep it
+# alive without every function in the tick having to be handed it.
+_active_scheduler_lock: contextvars.ContextVar = contextvars.ContextVar("automation_scheduler_lock", default=None)
+
+
 class scheduler_lock:
     """Hold a named scheduler lock for the duration of a block.
 
@@ -1291,15 +1312,24 @@ class scheduler_lock:
         with scheduler_lock("runautomations") as held:
             if not held:
                 return
+
+    The lock is a lease of ``ttl_seconds``. Work inside the block that may run
+    longer calls :func:`keep_scheduler_lock` as it goes, which extends the
+    lease and raises :class:`SchedulerLockLost` if it was lost anyway.
     """
 
     def __init__(self, name: str = "runautomations", ttl_seconds: int = 300):
         self.name = name
         self.ttl_seconds = ttl_seconds
         self.token = None
+        self._renewed_at = 0.0
+        self._context_token = None
 
     def __enter__(self):
         self.token = SchedulerLock.acquire(self.name, self.ttl_seconds)
+        if self.token is not None:
+            self._renewed_at = time.monotonic()
+            self._context_token = _active_scheduler_lock.set(self)
         return self
 
     def __bool__(self) -> bool:
@@ -1307,8 +1337,39 @@ class scheduler_lock:
 
     def __exit__(self, exc_type, exc, tb):
         if self.token is not None:
+            _active_scheduler_lock.reset(self._context_token)
             SchedulerLock.release(self.name, self.token)
         return False
+
+    def keep_alive(self) -> None:
+        """Extend the lease once a third of it has been used.
+
+        :raises SchedulerLockLost: if another scheduler holds the lock now.
+        """
+        if self.token is None or time.monotonic() - self._renewed_at < self.ttl_seconds / 3:
+            return
+        if not SchedulerLock.renew(self.name, self.token, self.ttl_seconds):
+            logger.error("automation.scheduler.lock_lost", extra={"lock_name": self.name})
+            raise SchedulerLockLost(f"Scheduler lock {self.name!r} was taken over by another scheduler.")
+        self._renewed_at = time.monotonic()
+
+
+def keep_scheduler_lock() -> None:
+    """Keep the current tick's scheduler lock alive; a no-op outside one.
+
+    The scheduler's loops call this before each unit of work, so a tick that
+    runs longer than the lease does not let a second scheduler in beside it.
+    It writes to the database only once a third of the lease has passed.
+
+    Call it outside any transaction: an extension that is not committed is not
+    visible to the scheduler it is meant to keep out.
+
+    :raises SchedulerLockLost: if the lock was lost regardless, which takes a
+        single unit of work outlasting the whole lease.
+    """
+    lock = _active_scheduler_lock.get()
+    if lock is not None:
+        lock.keep_alive()
 
 
 def _add_months(value: datetime.datetime, months: int) -> datetime.datetime:
@@ -1428,6 +1489,9 @@ def fire_due_timers(timestamp: datetime.datetime | None = None, catch_up: int | 
         config = dict(trigger.config or {})
         fired_here = skipped = 0
         while fired_here < catch_up:
+            # Before every occurrence, not only every trigger: firing is what
+            # must never happen twice, and one trigger can fire several.
+            keep_scheduler_lock()
             due = _next_timer_fire(config, timestamp)
             if due is None:
                 break

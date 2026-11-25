@@ -16,6 +16,11 @@ One tick performs, in order:
 The whole tick is guarded by a database-backed lock, so the command can be
 installed on several hosts for availability without firing timers twice or
 double-enqueueing a recovered action.
+
+The lock is a lease of ``--lock-seconds``. A tick extends it as it works, so a
+tick that takes longer than the lease still keeps other schedulers out. If the
+lock is lost all the same, which takes one single step outlasting the whole
+lease, the tick stops rather than carry on beside the scheduler that took over.
 """
 
 from django.core.management.base import BaseCommand
@@ -69,7 +74,8 @@ class Command(BaseCommand):
             "--lock-seconds",
             type=int,
             default=300,
-            help="How long the scheduler lock is held before it is considered abandoned.",
+            help="Lease on the scheduler lock, extended while a tick is working. "
+            "A scheduler that dies stops extending it, and another takes over after this long.",
         )
         parser.add_argument(
             "--no-lock",
@@ -85,7 +91,15 @@ class Command(BaseCommand):
             if not lock:
                 self.stdout.write("Another scheduler holds the lock; skipping this tick.")
                 return
-            self._tick(**options)
+            try:
+                self._tick(**options)
+            except engine.SchedulerLockLost:
+                # Not a failure of the work itself: what was left is picked up
+                # by the scheduler that holds the lock now, or by the next tick.
+                self.stderr.write(
+                    "Lost the scheduler lock to another scheduler during this tick; stopped it early. "
+                    "A single step ran longer than --lock-seconds."
+                )
 
     def _tick(self, **options):
         recovered = reconciled = 0
@@ -95,6 +109,9 @@ class Command(BaseCommand):
             reconciled += engine.reconcile_stalled_instances()
         fired = 0 if options["no_timers"] else engine.fire_due_timers(catch_up=options["catch_up"])
         revived = engine.revive_pending()
+        # Retention can be slow, and each of its steps is one statement with no
+        # loop to renew from, so renew before each.
+        engine.keep_scheduler_lock()
 
         parts = [
             f"recovered {recovered} action(s)",
@@ -108,6 +125,7 @@ class Command(BaseCommand):
             parts.append(f"redacted {redacted} execution(s)")
 
         if options["cleanup"] is not None:
+            engine.keep_scheduler_lock()
             deleted, _details = AutomationInstance.delete_history(days=options["cleanup"])
             parts.append(f"deleted {deleted} row(s)")
 
