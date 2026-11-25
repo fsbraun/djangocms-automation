@@ -7,21 +7,48 @@ djangocms-automation
 [![codecov](https://codecov.io/gh/fsbraun/djangocms-automation/graph/badge.svg?token=bc8rTVLArv)](https://codecov.io/gh/fsbraun/djangocms-automation)
 [![License](https://img.shields.io/github/license/fsbraun/djangocms-automation)](https://github.com/fsbraun/djangocms-automation/blob/main/LICENSE)
 
-This package extends django CMS with the ability to model and edit automation workflows directly in the Frontend Editor (inline editing). Workflows are composed from CMS plugins (e.g., Triggers, Conditions/If‑Then‑Else, Actions, End) and can be arranged on the page via drag & drop like regular content.
+**Edit workflows the same way you edit pages.**
 
-Overview
+In djangocms-automation a workflow is built exactly like a django CMS page:
+open it in the frontend editor, add plugins, drag them into place and
+configure them right there. Anyone who can edit a page already knows how to
+edit an automation. There is no second tool to learn.
 
-- Frontend Editor: Edit workflows right on the page — no separate admin UI required.
-- Building blocks as plugins: Trigger, If/Then/Else, Action, and End are available as dedicated plugins.
-- Templates & assets: Project templates live under `templates/djangocms_automation/...` and static assets under `static/...`.
+That matters because this kind of logic (routing a contact form, qualifying a
+lead, sending a nightly digest, ingesting an order from a webhook) usually ends
+up as one-off Python that only a developer can change, or in a separate
+automation service with its own interface, logins and copy of your data. Here
+it stays in your Django project, and runs durably there.
 
-We call one unit of automation data an **item**, its named values **fields**, and
-a list of items a **batch**. A field can itself contain a list, such as an order's
-lines. See [Reading an automation](docs/source/explanation/reading-an-automation.rst)
-and the [glossary](docs/source/glossary.rst). Each instance processes one item;
-actions preserve its fields and save named results into explicit destinations.
-Batches and batch intake are deferred. Completed runs retain their frozen
-definition and execution trace for debugging, subject to retention.
+![An automation edited in the django CMS frontend editor](automations.jpg)
+
+- **The page editor is the workflow editor.** Triggers, conditions and actions
+  are CMS plugins, so the structure board, drag & drop and plugin forms work
+  as they do for content.
+- **Triggers.** Form submissions, timers, inbound webhooks (optionally
+  HMAC-signed), inbound mail, a manual *Run now…*, or your own code.
+- **Flow control.** If/Then/Else with a visual condition builder, bounded
+  loops, and parallel paths that join automatically.
+- **Actions.** Send email, create, update and query Django records (behind an
+  allowlist), pause for a person's approval, or write your own in Python.
+- **AI steps that stay in bounds.** *Ask a Model* calls any provider through
+  [LiteLLM](https://docs.litellm.ai/). Actions placed inside it become the
+  model's tools, each call is an inspectable step that can wait for human
+  approval, and token, tool-call and time limits fail the run instead of
+  returning a half-answer.
+- **Durable execution without a broker.** The queue is your database. Work
+  survives restarts and killed workers, failures retry with backoff, and
+  exhausted actions are dead-lettered and can be replayed from the admin.
+  Every run keeps its frozen definition and execution trace.
+
+**Documentation:** <https://djangocms-automation.readthedocs.io/> ·
+[Getting started](docs/source/tutorials/getting-started.rst) ·
+[Deployment](docs/source/howto/deployment.rst)
+
+**Status:** pre-alpha (0.1.0) and not yet on PyPI. It needs Python 3.12+,
+Django 6.0+ and django CMS 5.1+. Calling an external HTTP API from an
+automation is not built yet; see the notes under
+[What it looks like in practice](#what-it-looks-like-in-practice).
 
 Installation
 ------------
@@ -152,7 +179,7 @@ Everything above runs on `dummy/echo`, which answers locally. To use a real
 provider:
 
 ```bash
-pip install djangocms-automation[llm]
+pip install "djangocms-automation[llm] @ git+https://github.com/fsbraun/djangocms-automation.git"
 ```
 
 ```python
@@ -211,34 +238,28 @@ Flow control includes conditionals (If/Then/Else with a visual condition builder
 
 Include `path("automation/", include("djangocms_automation.urls"))` in your urlconf, then give an automation a *Webhook* trigger: any service can start it by POSTing JSON to the trigger's secret URL (`/automation/webhook/<token>/`), optionally authenticated with an HMAC signing secret. The *Mail* trigger builds on this for inbound email — point your mail provider's webhook at it and filter by recipient/subject/status. Custom webhook trigger types are a small `WebhookTrigger` subclass away.
 
-Quick start
------------
+Concepts
+--------
 
-- Create automations from the admin, view and edit them using django CMS' frontend editor.
-- Add the required building blocks (Trigger, If/Then/Else, Action, End) in the Frontend Editor and configure them.
+One unit of automation data is an **item**, its named values are **fields**,
+and a list of items is a **batch**. A field can itself contain a list, such as
+an order's lines. Each instance processes one item; actions preserve its fields
+and save named results into explicit destinations. Batches and batch intake are
+deferred. Completed runs retain their frozen definition and execution trace for
+debugging, subject to retention.
 
-![Automation workflow example](automations.jpg)
-
+See [Reading an automation](docs/source/explanation/reading-an-automation.rst)
+and the [glossary](docs/source/glossary.rst).
 
 Documentation
 -------------
 
-1. Create the docs virtual environment and install requirements:
+The full documentation is at <https://djangocms-automation.readthedocs.io/>.
+To build it locally:
 
-   ```bash
-   cd docs
-   make install
-   ```
-
-2. Build the HTML documentation (uses the venv's Sphinx):
-
-   ```bash
-   cd docs
-   make html
-   ```
-
-3. Open the built docs in your browser:
-
-   ```bash
-   open _build/html/index.html
-   ```
+```bash
+cd docs
+make install    # creates the docs virtual environment
+make html
+open _build/html/index.html
+```
