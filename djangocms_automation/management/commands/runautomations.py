@@ -4,6 +4,11 @@ Run periodically (e.g. every minute)::
 
     * * * * * cd /path/to/project && python manage.py runautomations
 
+Where a per-minute cron is not available, run it as a long-lived process
+instead::
+
+    python manage.py runautomations --loop 60
+
 One tick performs, in order:
 
 1. **Recovery** — actions whose worker died or which ran past their timeout are
@@ -15,7 +20,8 @@ One tick performs, in order:
 
 The whole tick is guarded by a database-backed lock, so the command can be
 installed on several hosts for availability without firing timers twice or
-double-enqueueing a recovered action.
+double-enqueueing a recovered action. The same lock makes a second ``--loop``
+process harmless.
 
 The lock is a lease of ``--lock-seconds``. A tick extends it as it works, so a
 tick that takes longer than the lease still keeps other schedulers out. If the
@@ -23,10 +29,22 @@ lock is lost all the same, which takes one single step outlasting the whole
 lease, the tick stops rather than carry on beside the scheduler that took over.
 """
 
-from django.core.management.base import BaseCommand
+import logging
+import math
+import signal
+import time
+
+from django.core.management.base import BaseCommand, CommandError
+from django.db import connections
 
 from djangocms_automation import engine
 from djangocms_automation.instances import AutomationInstance
+
+logger = logging.getLogger(__name__)
+
+# Upper bound on one sleep while waiting for the next tick, so a stop signal
+# is acted on within this long even though the sleep itself is not interrupted.
+SLEEP_STEP = 0.5
 
 
 class Command(BaseCommand):
@@ -83,7 +101,76 @@ class Command(BaseCommand):
             help="Run without taking the scheduler lock. Only safe for a single scheduler.",
         )
 
+        parser.add_argument(
+            "--loop",
+            type=float,
+            default=None,
+            metavar="SECONDS",
+            help="Keep running, starting a tick every SECONDS, until SIGTERM or SIGINT. "
+            "For hosts that cannot schedule a per-minute cron.",
+        )
+
     def handle(self, *args, **options):
+        interval = options["loop"]
+        if interval is None:
+            self._run_once(**options)
+            return
+        # "nan" and "inf" both parse as floats: the first would crash the wait
+        # between ticks, the second would never reach a second tick.
+        if not math.isfinite(interval) or interval <= 0:
+            raise CommandError("--loop needs a positive, finite number of seconds.")
+        self._loop(interval, **options)
+
+    def _loop(self, interval, **options):
+        self._stop = False
+        previous = self._install_stop_handlers()
+        self.stdout.write(f"Scheduler loop started: one tick every {interval:g} second(s).")
+        try:
+            while not self._stop:
+                # Measured from the start of the tick, so a slow tick shortens
+                # the wait that follows instead of pushing every later one back.
+                next_tick = time.monotonic() + interval
+                try:
+                    self._run_once(**options)
+                except Exception as exc:
+                    # One bad tick must not end the scheduler: timers and
+                    # retries would silently stop until someone restarted it.
+                    logger.exception("Automation tick failed")
+                    self.stderr.write(f"Automation tick failed: {exc!r}; continuing.")
+                finally:
+                    # Hold no connection across the wait. The server may drop an
+                    # idle one, and Django only finds out when the next tick's
+                    # first query fails, which would cost that whole tick. A
+                    # reconnect per tick is cheap at this cadence, and it is
+                    # what a cron-started process does anyway.
+                    connections.close_all()
+                while not self._stop:
+                    remaining = next_tick - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    time.sleep(min(remaining, SLEEP_STEP))
+        finally:
+            for signum, handler in previous.items():
+                signal.signal(signum, handler)
+        self.stdout.write("Scheduler loop stopped.")
+
+    def _install_stop_handlers(self):
+        """Make SIGTERM and SIGINT end the loop after the tick in progress."""
+
+        def request_stop(signum, frame):
+            self._stop = True
+
+        previous = {}
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            try:
+                previous[signum] = signal.signal(signum, request_stop)
+            except ValueError:
+                # Not the main thread, so signals cannot be handled here; the
+                # caller that started the thread is responsible for stopping it.
+                pass
+        return previous
+
+    def _run_once(self, **options):
         if options["no_lock"]:
             self._tick(**options)
             return

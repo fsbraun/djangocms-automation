@@ -98,7 +98,9 @@ python manage.py runworker                 # one or more; add more for throughpu
 
 `DatabaseBackend` is durable: enqueued work is a database row claimed under a
 lease, so it survives a restart and a killed worker's task is released and
-retried. Django's built-in `ImmediateBackend` executes inline (fine for tests,
+retried. Where the host cannot run a cron job every minute, run the scheduler
+as a third long-lived process instead: `python manage.py runautomations --loop 60`.
+Django's built-in `ImmediateBackend` executes inline (fine for tests,
 not for production) and `djangocms_automation.utils.ThreadBackend` runs tasks in
 an in-process thread pool that is lost on exit — development only.
 
