@@ -36,7 +36,7 @@ optional-dependencies.llm = [
   # Capped deliberately: litellm ships around 35 releases a month and has made
   # breaking changes inside 1.x. The upper bound is a decision to review the
   # wrapper's contract test before moving, not a claim that 1.110 breaks.
-  "litellm>=1.98,<1.111",
+  "litellm>=1.98,<1.112",
 ]
 # Rendering a model's Markdown in the admin. Both halves are required: the
 # renderer turns the text into HTML, and the sanitiser is what makes showing it
